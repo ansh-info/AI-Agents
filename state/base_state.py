@@ -6,6 +6,11 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 
+# Configure Pydantic model behavior
+class ConfigDict:
+    arbitrary_types_allowed = True
+
+
 class AgentStatus(Enum):
     """Status of the current agent operation"""
 
@@ -19,10 +24,13 @@ class SearchContext(BaseModel):
     """Context for search operations"""
 
     query: str = ""
-    results: Optional[pd.DataFrame] = None
+    results: Optional[Any] = None  # Changed from DataFrame to Any
     current_page: int = 1
     total_results: int = 0
     selected_paper_index: Optional[int] = None
+
+    class Config:
+        arbitrary_types_allowed = True  # Allow arbitrary types like DataFrame
 
 
 class ConversationMemory(BaseModel):
@@ -31,6 +39,9 @@ class ConversationMemory(BaseModel):
     messages: List[Dict[str, str]] = Field(default_factory=list)
     current_context: Optional[str] = None
     last_command: Optional[str] = None
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class AgentState(BaseModel):
@@ -49,6 +60,9 @@ class AgentState(BaseModel):
     # Workflow state
     current_step: str = "initial"
     next_steps: List[str] = Field(default_factory=list)
+
+    class Config:
+        arbitrary_types_allowed = True
 
     def update_status(self, new_status: AgentStatus, error: Optional[str] = None):
         """Update agent status and error message"""
@@ -129,19 +143,3 @@ class WorkflowManager:
     def get_state(self) -> AgentState:
         """Get current state"""
         return self.current_state
-
-
-# Example usage:
-if __name__ == "__main__":
-    # Initialize workflow manager
-    manager = WorkflowManager()
-
-    # Process a command
-    state = manager.process_command("Search for papers about LLMs")
-
-    # Check state
-    print(f"Status: {state.status}")
-    print(f"Current step: {state.current_step}")
-    print(
-        f"Last message: {state.memory.messages[-1] if state.memory.messages else None}"
-    )
