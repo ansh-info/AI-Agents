@@ -2,6 +2,7 @@ import os
 import sys
 from typing import Dict
 
+import pandas as pd
 import requests
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
@@ -31,8 +32,6 @@ def test_workflow():
 
     # Test 3: Search context
     print("\nTest 3: Search context")
-    import pandas as pd
-
     # Create sample search results
     sample_results = pd.DataFrame(
         {
