@@ -19,63 +19,68 @@ class WorkflowManager:
         """Setup the workflow graph with proper state transitions"""
         self.graph = StateGraph(AgentState)
 
-        # Add nodes for different states
+        # Define the nodes
         self.graph.add_node("start", self.handle_start)
+        self.graph.add_node("route", self.route_command)
         self.graph.add_node("process", self.process_command)
-        self.graph.add_node("success", self.handle_success)
-        self.graph.add_node("error", self.handle_error)
+        self.graph.add_node("finish", self.handle_finish)
 
-        # Add edges to define transitions
-        self.graph.add_edge("start", "process")
-        self.graph.add_edge("process", "success")
-        self.graph.add_edge("process", "error")
-        self.graph.add_edge("success", END)
-        self.graph.add_edge("error", END)
+        # Define the edges
+        self.graph.add_edge("start", "route")
+        self.graph.add_edge("route", "process")
+        self.graph.add_edge("process", "finish")
+        self.graph.add_edge("finish", END)
 
         # Set entry point
         self.graph.set_entry_point("start")
 
     def handle_start(self, state: AgentState) -> Dict[str, Any]:
-        """Initialize processing of a new command"""
+        """Initialize the state for processing"""
         state.update_status(AgentStatus.PROCESSING)
-        state.current_step = "processing"
+        state.current_step = "started"
+        return {"state": state, "next": "route"}
+
+    def route_command(self, state: AgentState) -> Dict[str, Any]:
+        """Route the command to appropriate handler"""
+        if not state.memory.messages:
+            state.update_status(AgentStatus.ERROR, "No command to process")
+            return {"state": state, "next": "finish"}
+
+        command = state.memory.messages[-1]["content"].lower()
+        state.memory.last_command = command
         return {"state": state, "next": "process"}
 
     def process_command(self, state: AgentState) -> Dict[str, Any]:
-        """Process the command and determine next step"""
+        """Process the command based on its type"""
         try:
-            # Get the last command from messages
-            if state.memory.messages:
-                last_message = state.memory.messages[-1]
-                command = last_message["content"]
+            command = state.memory.last_command
 
-                # Here you can add different command processing logic
-                if command.lower().startswith("search"):
-                    # Will be implemented later for search functionality
-                    state.current_step = "search_complete"
-                elif command.lower().startswith("help"):
-                    state.add_message("system", "Available commands: search, help")
-                else:
-                    state.add_message("system", f"Processed command: {command}")
+            if command.startswith("search"):
+                # Handle search command
+                state.add_message("system", "Search command received")
+                state.current_step = "search_initiated"
 
-                state.update_status(AgentStatus.SUCCESS)
-                return {"state": state, "next": "success"}
+            elif command == "help":
+                # Handle help command
+                state.add_message("system", "Available commands: search, help")
+                state.current_step = "help_displayed"
 
-            return {"state": state, "next": "success"}
+            else:
+                # Handle general command
+                state.add_message("system", f"Processed command: {command}")
+                state.current_step = "command_processed"
+
+            state.update_status(AgentStatus.SUCCESS)
+            return {"state": state, "next": "finish"}
 
         except Exception as e:
             state.update_status(AgentStatus.ERROR, str(e))
-            return {"state": state, "next": "error"}
+            return {"state": state, "next": "finish"}
 
-    def handle_success(self, state: AgentState) -> Dict[str, Any]:
-        """Handle successful command processing"""
-        if state.status != AgentStatus.SUCCESS:
+    def handle_finish(self, state: AgentState) -> Dict[str, Any]:
+        """Finalize the command processing"""
+        if state.status != AgentStatus.ERROR:
             state.update_status(AgentStatus.SUCCESS)
-        return {"state": state}
-
-    def handle_error(self, state: AgentState) -> Dict[str, Any]:
-        """Handle error states with proper error messages"""
-        print(f"Error in workflow: {state.error_message}")
         return {"state": state}
 
     def process_command_external(self, command: str) -> AgentState:
