@@ -35,8 +35,10 @@ class WorkflowManager:
         workflow.add_node("error", self.handle_error)
         workflow.add_node("finish", self.handle_finish)
 
-        # Define the edges
-        workflow.add_edge("start", self.route_next)
+        # Define the edges with conditional routing
+        workflow.add_edge(
+            "start", {"error": "error", "process": "process"}, self.route_next
+        )
         workflow.add_edge("process", "finish")
         workflow.add_edge("error", "finish")
         workflow.add_edge("finish", END)
