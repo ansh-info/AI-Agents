@@ -13,26 +13,30 @@ from state.agent_state import AgentState, AgentStatus
 class WorkflowManager:
     def __init__(self):
         self.current_state = AgentState()
-        self.setup_workflow()
+        self.graph = self.setup_workflow()
 
     def setup_workflow(self):
         """Setup the workflow graph with proper state transitions"""
-        self.graph = StateGraph(AgentState)
+        # Initialize workflow
+        workflow = StateGraph(AgentState)
 
         # Define the nodes
-        self.graph.add_node("start", self.handle_start)
-        self.graph.add_node("route", self.route_command)
-        self.graph.add_node("process", self.process_command)
-        self.graph.add_node("finish", self.handle_finish)
+        workflow.add_node("start", self.handle_start)
+        workflow.add_node("route", self.route_command)
+        workflow.add_node("process", self.process_command)
+        workflow.add_node("finish", self.handle_finish)
 
         # Define the edges
-        self.graph.add_edge("start", "route")
-        self.graph.add_edge("route", "process")
-        self.graph.add_edge("process", "finish")
-        self.graph.add_edge("finish", END)
+        workflow.add_edge("start", "route")
+        workflow.add_edge("route", "process")
+        workflow.add_edge("process", "finish")
+        workflow.add_edge("finish", END)
 
         # Set entry point
-        self.graph.set_entry_point("start")
+        workflow.set_entry_point("start")
+
+        # Compile the graph
+        return workflow.compile()
 
     def handle_start(self, state: AgentState) -> Dict[str, Any]:
         """Initialize the state for processing"""
@@ -89,11 +93,12 @@ class WorkflowManager:
             # Add the command to state memory
             self.current_state.add_message("user", command)
 
-            # Run the workflow
-            result = self.graph.run(self.current_state)
+            # Run the workflow with the current state
+            config = {"state": self.current_state}
+            result = self.graph.invoke(config)
 
             # Update current state
-            self.current_state = result
+            self.current_state = result["state"]
 
             return self.current_state
 
