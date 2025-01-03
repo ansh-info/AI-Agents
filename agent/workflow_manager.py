@@ -19,7 +19,11 @@ class WorkflowManager:
         self.current_state = AgentState()
         self.graph = self.setup_workflow()
 
-    # Removed route_next as we're using inline conditions
+    def conditional_router(self, state: Dict[str, AgentState]) -> str:
+        """Route based on state status"""
+        if state["state"].status == AgentStatus.ERROR:
+            return "error"
+        return "process"
 
     def setup_workflow(self):
         """Setup the workflow graph with proper state transitions"""
@@ -31,16 +35,9 @@ class WorkflowManager:
         workflow.add_node("error", self.handle_error)
         workflow.add_node("finish", self.handle_finish)
 
-        # Define conditional routing
-        def route(state: AgentState):
-            if state["state"].status == AgentStatus.ERROR:
-                return "error"
-            return "process"
-
-        # Define the edges with routing
-        workflow.add_edge("start", "process")
-        workflow.add_edge(
-            "start", "error", condition=lambda x: x["state"].status == AgentStatus.ERROR
+        # Define edges with conditional routing
+        workflow.add_conditional_edges(
+            "start", self.conditional_router, {"error": "error", "process": "process"}
         )
         workflow.add_edge("process", "finish")
         workflow.add_edge("error", "finish")
