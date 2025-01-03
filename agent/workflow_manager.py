@@ -23,7 +23,9 @@ class WorkflowManager:
         """Router function to determine next state"""
         if state.status == AgentStatus.ERROR:
             return "error"
-        return "process"
+        elif state.status == AgentStatus.PROCESSING:
+            return "process"
+        return "finish"
 
     def setup_workflow(self):
         """Setup the workflow graph with proper state transitions"""
@@ -35,10 +37,8 @@ class WorkflowManager:
         workflow.add_node("error", self.handle_error)
         workflow.add_node("finish", self.handle_finish)
 
-        # Define the edges with conditional routing
-        workflow.add_edge(
-            "start", {"error": "error", "process": "process"}, self.route_next
-        )
+        # Define the edges
+        workflow.add_edge("start", "process", self.route_next)
         workflow.add_edge("process", "finish")
         workflow.add_edge("error", "finish")
         workflow.add_edge("finish", END)
