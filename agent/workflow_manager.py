@@ -23,18 +23,19 @@ class WorkflowManager:
         """Setup the workflow graph with proper state transitions"""
         workflow = StateGraph(AgentState)
 
-        # Define nodes
+        # Define the nodes
         workflow.add_node("start", self.handle_start)
         workflow.add_node("process", self.process_command)
         workflow.add_node("error", self.handle_error)
         workflow.add_node("finish", self.handle_finish)
 
-        # Define edges with conditions
-        workflow.add_conditional_edges(
-            "start",
-            self.route_command,
-            {"process": self.is_valid_state, "error": self.is_error_state},
-        )
+        # Define the edges
+        def router(state: AgentState) -> str:
+            if state.status == AgentStatus.ERROR:
+                return "error"
+            return "process"
+
+        workflow.add_edge("start", router)
         workflow.add_edge("process", "finish")
         workflow.add_edge("error", "finish")
         workflow.add_edge("finish", END)
@@ -44,27 +45,22 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def is_valid_state(self, state: AgentState) -> bool:
-        """Check if state is valid for processing"""
-        return state.status != AgentStatus.ERROR
-
-    def is_error_state(self, state: AgentState) -> bool:
-        """Check if state is in error"""
-        return state.status == AgentStatus.ERROR
-
     def handle_start(self, state: AgentState) -> Dict[str, Any]:
         """Initialize the state for processing"""
-        state.status = AgentStatus.PROCESSING
-        state.current_step = "started"
-        return {"state": state}
+        try:
+            state.status = AgentStatus.PROCESSING
+            state.current_step = "started"
 
-    def route_command(self, state: AgentState) -> str:
-        """Route the command to appropriate handler"""
-        if not state.memory.messages:
+            # Validate command presence
+            if not state.memory.messages:
+                state.status = AgentStatus.ERROR
+                state.error_message = "No command to process"
+
+            return {"state": state}
+        except Exception as e:
             state.status = AgentStatus.ERROR
-            state.error_message = "No command to process"
-            return "error"
-        return "process"
+            state.error_message = str(e)
+            return {"state": state}
 
     def process_command(self, state: AgentState) -> Dict[str, Any]:
         """Process the command based on its type"""
@@ -95,8 +91,7 @@ class WorkflowManager:
 
     def handle_error(self, state: AgentState) -> Dict[str, Any]:
         """Handle error states"""
-        if state.status != AgentStatus.ERROR:
-            state.status = AgentStatus.ERROR
+        if state.error_message is None:
             state.error_message = "Unknown error occurred"
         return {"state": state}
 
