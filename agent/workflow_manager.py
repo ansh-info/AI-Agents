@@ -48,65 +48,79 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: AgentState) -> Dict[str, Any]:
+    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Initialize the state for processing"""
         try:
-            state.status = AgentStatus.PROCESSING
-            state.current_step = "started"
+            current_state = state["state"]
+            current_state.status = AgentStatus.PROCESSING
+            current_state.current_step = "started"
 
             # Validate command presence
-            if not state.memory.messages:
-                state.status = AgentStatus.ERROR
-                state.error_message = "No command to process"
+            if not current_state.memory.messages:
+                current_state.status = AgentStatus.ERROR
+                current_state.error_message = "No command to process"
 
-            return {"state": state}
+            return {"state": current_state}
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            return {"state": state}
+            current_state = state["state"]
+            current_state.status = AgentStatus.ERROR
+            current_state.error_message = str(e)
+            return {"state": current_state}
 
-    def process_command(self, state: AgentState) -> Dict[str, Any]:
+    def process_command(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Process the command based on its type"""
         try:
-            command = state.memory.messages[-1]["content"].lower()
-            state.memory.last_command = command
+            current_state = state["state"]
+            command = current_state.memory.messages[-1]["content"].lower()
+            current_state.memory.last_command = command
+            current_state.current_step = "processing"
 
             if command.startswith("search"):
-                state.add_message("system", "Search command received")
-                state.current_step = "search_initiated"
-                state.search_context.query = command[7:].strip()
+                current_state.add_message("system", "Search command received")
+                current_state.current_step = "search_initiated"
+                current_state.search_context.query = command[7:].strip()
+                current_state.status = AgentStatus.SUCCESS
 
             elif command == "help":
-                state.add_message("system", "Available commands: search, help")
-                state.current_step = "help_displayed"
+                current_state.add_message("system", "Available commands: search, help")
+                current_state.current_step = "help_displayed"
+                current_state.status = AgentStatus.SUCCESS
 
             else:
-                state.add_message("system", f"Processed command: {command}")
-                state.current_step = "command_processed"
+                current_state.add_message("system", f"Processed command: {command}")
+                current_state.current_step = "command_processed"
+                current_state.status = AgentStatus.SUCCESS
 
-            state.status = AgentStatus.SUCCESS
-            return {"state": state}
+            return {"state": current_state}
 
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            return {"state": state}
+            current_state = state["state"]
+            current_state.status = AgentStatus.ERROR
+            current_state.error_message = str(e)
+            return {"state": current_state}
 
-    def handle_error(self, state: AgentState) -> Dict[str, Any]:
+    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Handle error states"""
-        if state.error_message is None:
-            state.error_message = "Unknown error occurred"
-        return {"state": state}
+        current_state = state["state"]
+        if current_state.error_message is None:
+            current_state.error_message = "Unknown error occurred"
+        current_state.current_step = "error_handled"
+        return {"state": current_state}
 
-    def handle_finish(self, state: AgentState) -> Dict[str, Any]:
+    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Finalize the command processing"""
-        if state.status != AgentStatus.ERROR:
-            state.status = AgentStatus.SUCCESS
-        return {"state": state}
+        current_state = state["state"]
+        if current_state.status != AgentStatus.ERROR:
+            current_state.status = AgentStatus.SUCCESS
+        current_state.current_step = "finished"
+        return {"state": current_state}
 
     def process_command_external(self, command: str) -> AgentState:
         """External interface to process commands"""
         try:
+            # Reset state for new command
+            self.reset_state()
+
             # Add the command to state memory
             self.current_state.add_message("user", command)
 
