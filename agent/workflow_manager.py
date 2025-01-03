@@ -48,72 +48,105 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
+    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, Dict[str, Any]]:
         """Initialize the state for processing"""
-        try:
-            current_state = state["state"]
-            current_state.status = AgentStatus.PROCESSING
-            current_state.current_step = "started"
+        current_state = state["state"]
+        updates = {}
 
-            # Validate command presence
+        try:
+            updates["status"] = AgentStatus.PROCESSING
+            updates["current_step"] = "started"
+
             if not current_state.memory.messages:
-                current_state.status = AgentStatus.ERROR
-                current_state.error_message = "No command to process"
+                updates["status"] = AgentStatus.ERROR
+                updates["error_message"] = "No command to process"
 
-            return {"state": current_state}
+            # Create new state with updates
+            new_state = current_state.model_copy(update=updates)
+            return {"state": new_state}
+
         except Exception as e:
-            current_state = state["state"]
-            current_state.status = AgentStatus.ERROR
-            current_state.error_message = str(e)
-            return {"state": current_state}
+            updates["status"] = AgentStatus.ERROR
+            updates["error_message"] = str(e)
+            new_state = current_state.model_copy(update=updates)
+            return {"state": new_state}
 
-    def process_command(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
+    def process_command(
+        self, state: Dict[str, AgentState]
+    ) -> Dict[str, Dict[str, Any]]:
         """Process the command based on its type"""
+        current_state = state["state"]
+        updates = {}
+
         try:
-            current_state = state["state"]
             command = current_state.memory.messages[-1]["content"].lower()
-            current_state.memory.last_command = command
-            current_state.current_step = "processing"
+
+            # Common updates
+            updates["memory"] = current_state.memory.model_copy()
+            updates["memory"].last_command = command
+            updates["current_step"] = "processing"
 
             if command.startswith("search"):
-                current_state.add_message("system", "Search command received")
-                current_state.current_step = "search_initiated"
-                current_state.search_context.query = command[7:].strip()
-                current_state.status = AgentStatus.SUCCESS
+                updates["search_context"] = current_state.search_context.model_copy()
+                updates["search_context"].query = command[7:].strip()
+                updates["current_step"] = "search_initiated"
+                updates["status"] = AgentStatus.SUCCESS
+                new_memory = updates["memory"]
+                new_memory.messages = current_state.memory.messages + [
+                    {"role": "system", "content": "Search command received"}
+                ]
+                updates["memory"] = new_memory
 
             elif command == "help":
-                current_state.add_message("system", "Available commands: search, help")
-                current_state.current_step = "help_displayed"
-                current_state.status = AgentStatus.SUCCESS
+                updates["current_step"] = "help_displayed"
+                updates["status"] = AgentStatus.SUCCESS
+                new_memory = updates["memory"]
+                new_memory.messages = current_state.memory.messages + [
+                    {"role": "system", "content": "Available commands: search, help"}
+                ]
+                updates["memory"] = new_memory
 
             else:
-                current_state.add_message("system", f"Processed command: {command}")
-                current_state.current_step = "command_processed"
-                current_state.status = AgentStatus.SUCCESS
+                updates["current_step"] = "command_processed"
+                updates["status"] = AgentStatus.SUCCESS
+                new_memory = updates["memory"]
+                new_memory.messages = current_state.memory.messages + [
+                    {"role": "system", "content": f"Processed command: {command}"}
+                ]
+                updates["memory"] = new_memory
 
-            return {"state": current_state}
+            new_state = current_state.model_copy(update=updates)
+            return {"state": new_state}
 
         except Exception as e:
-            current_state = state["state"]
-            current_state.status = AgentStatus.ERROR
-            current_state.error_message = str(e)
-            return {"state": current_state}
+            updates["status"] = AgentStatus.ERROR
+            updates["error_message"] = str(e)
+            new_state = current_state.model_copy(update=updates)
+            return {"state": new_state}
 
-    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
+    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, Dict[str, Any]]:
         """Handle error states"""
         current_state = state["state"]
-        if current_state.error_message is None:
-            current_state.error_message = "Unknown error occurred"
-        current_state.current_step = "error_handled"
-        return {"state": current_state}
+        updates = {
+            "current_step": "error_handled",
+        }
 
-    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
+        if current_state.error_message is None:
+            updates["error_message"] = "Unknown error occurred"
+
+        new_state = current_state.model_copy(update=updates)
+        return {"state": new_state}
+
+    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, Dict[str, Any]]:
         """Finalize the command processing"""
         current_state = state["state"]
+        updates = {"current_step": "finished"}
+
         if current_state.status != AgentStatus.ERROR:
-            current_state.status = AgentStatus.SUCCESS
-        current_state.current_step = "finished"
-        return {"state": current_state}
+            updates["status"] = AgentStatus.SUCCESS
+
+        new_state = current_state.model_copy(update=updates)
+        return {"state": new_state}
 
     def process_command_external(self, command: str) -> AgentState:
         """External interface to process commands"""
@@ -122,7 +155,9 @@ class WorkflowManager:
             self.reset_state()
 
             # Add the command to state memory
-            self.current_state.add_message("user", command)
+            self.current_state.memory.messages.append(
+                {"role": "user", "content": command}
+            )
 
             # Run the workflow
             result = self.graph.invoke({"state": self.current_state})
