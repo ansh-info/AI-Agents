@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from typing import Any, Dict
@@ -22,15 +23,19 @@ class WorkflowManager:
         """Setup the workflow graph with proper state transitions"""
         workflow = StateGraph(AgentState)
 
-        # Define the nodes
+        # Define state transitions
+        def conditional_edge(state: AgentState):
+            if state.status == AgentStatus.ERROR:
+                return "finish"
+            return "process"
+
+        # Add nodes
         workflow.add_node("start", self.handle_start)
-        workflow.add_node("route", self.route_command)
         workflow.add_node("process", self.process_command)
         workflow.add_node("finish", self.handle_finish)
 
-        # Define the edges
-        workflow.add_edge("start", "route")
-        workflow.add_edge("route", "process")
+        # Add edges
+        workflow.add_edge("start", conditional_edge)
         workflow.add_edge("process", "finish")
         workflow.add_edge("finish", END)
 
@@ -39,83 +44,139 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: AgentState) -> Dict[str, Any]:
-        """Initialize the state for processing"""
-        new_state = deepcopy(state)
-        new_state.status = AgentStatus.PROCESSING
-        new_state.current_step = "started"
-        return {"state": new_state, "next": "route"}
+    def handle_start(self, state: AgentState) -> Dict:
+        """Initial state handling"""
+        state_dict = {
+            "status": AgentStatus.PROCESSING,
+            "current_step": "started",
+            "memory": {
+                "messages": state.memory.messages,
+                "current_context": state.memory.current_context,
+                "last_command": state.memory.last_command,
+            },
+            "search_context": {
+                "query": state.search_context.query,
+                "current_page": state.search_context.current_page,
+                "total_results": state.search_context.total_results,
+            },
+        }
+        return {"state": state_dict, "next": "process"}
 
-    def route_command(self, state: AgentState) -> Dict[str, Any]:
-        """Route the command to appropriate handler"""
-        new_state = deepcopy(state)
-
-        if not new_state.memory.messages:
-            new_state.status = AgentStatus.ERROR
-            new_state.error_message = "No command to process"
-            return {"state": new_state, "next": "finish"}
-
-        command = new_state.memory.messages[-1]["content"].lower()
-        new_state.memory.last_command = command
-        return {"state": new_state, "next": "process"}
-
-    def process_command(self, state: AgentState) -> Dict[str, Any]:
-        """Process the command based on its type"""
+    def process_command(self, state: Dict) -> Dict:
+        """Process the command"""
         try:
-            new_state = deepcopy(state)
-            command = new_state.memory.last_command
+            messages = state["memory"]["messages"]
+            if not messages:
+                return {
+                    "state": {
+                        "status": AgentStatus.ERROR,
+                        "error_message": "No command to process",
+                        "current_step": "error",
+                    }
+                }
+
+            command = messages[-1]["content"].lower()
+            response_message = None
 
             if command.startswith("search"):
-                new_state.add_message("system", "Search command received")
-                new_state.current_step = "search_initiated"
-                new_state.search_context.query = command[
-                    7:
-                ].strip()  # Remove "search " prefix
-
+                response_message = "Search command received"
+                current_step = "search_initiated"
+                query = command[7:].strip()
+                state["search_context"]["query"] = query
             elif command == "help":
-                new_state.add_message("system", "Available commands: search, help")
-                new_state.current_step = "help_displayed"
-
+                response_message = "Available commands: search, help"
+                current_step = "help_displayed"
             else:
-                new_state.add_message("system", f"Processed command: {command}")
-                new_state.current_step = "command_processed"
+                response_message = f"Processed command: {command}"
+                current_step = "command_processed"
 
-            new_state.status = AgentStatus.SUCCESS
-            return {"state": new_state, "next": "finish"}
+            if response_message:
+                messages.append({"role": "system", "content": response_message})
+
+            return {
+                "state": {
+                    "status": AgentStatus.SUCCESS,
+                    "current_step": current_step,
+                    "memory": {
+                        "messages": messages,
+                        "current_context": state["memory"]["current_context"],
+                        "last_command": command,
+                    },
+                    "search_context": state["search_context"],
+                }
+            }
 
         except Exception as e:
-            new_state = deepcopy(state)
-            new_state.status = AgentStatus.ERROR
-            new_state.error_message = str(e)
-            return {"state": new_state, "next": "finish"}
+            return {
+                "state": {
+                    "status": AgentStatus.ERROR,
+                    "error_message": str(e),
+                    "current_step": "error",
+                }
+            }
 
-    def handle_finish(self, state: AgentState) -> Dict[str, Any]:
-        """Finalize the command processing"""
-        new_state = deepcopy(state)
-        if new_state.status != AgentStatus.ERROR:
-            new_state.status = AgentStatus.SUCCESS
-        return {"state": new_state}
+    def handle_finish(self, state: Dict) -> Dict:
+        """Finalize processing"""
+        if "status" not in state:
+            state["status"] = AgentStatus.SUCCESS
+        return {"state": state}
 
     def process_command_external(self, command: str) -> AgentState:
-        """External interface to process commands"""
+        """External command processing interface"""
         try:
-            # Create new state for processing
-            new_state = deepcopy(self.current_state)
-            new_state.add_message("user", command)
+            # Prepare initial state
+            self.current_state.add_message("user", command)
 
-            # Run the workflow
-            config = {"state": new_state}
-            result = self.graph.invoke(config)
+            # Convert state to dict for graph processing
+            initial_state = {
+                "status": self.current_state.status,
+                "current_step": self.current_state.current_step,
+                "memory": {
+                    "messages": self.current_state.memory.messages,
+                    "current_context": self.current_state.memory.current_context,
+                    "last_command": self.current_state.memory.last_command,
+                },
+                "search_context": {
+                    "query": self.current_state.search_context.query,
+                    "current_page": self.current_state.search_context.current_page,
+                    "total_results": self.current_state.search_context.total_results,
+                },
+            }
 
-            # Update current state
-            self.current_state = result["state"]
+            # Run workflow
+            result = self.graph.invoke({"state": initial_state})
+
+            # Update current state from result
+            state_dict = result["state"]
+
+            # Create new AgentState instance
+            new_state = AgentState()
+            new_state.status = state_dict.get("status", AgentStatus.IDLE)
+            new_state.current_step = state_dict.get("current_step", "initial")
+            new_state.error_message = state_dict.get("error_message")
+
+            if "memory" in state_dict:
+                new_state.memory.messages = state_dict["memory"]["messages"]
+                new_state.memory.current_context = state_dict["memory"][
+                    "current_context"
+                ]
+                new_state.memory.last_command = state_dict["memory"]["last_command"]
+
+            if "search_context" in state_dict:
+                new_state.search_context.query = state_dict["search_context"]["query"]
+                new_state.search_context.current_page = state_dict["search_context"][
+                    "current_page"
+                ]
+                new_state.search_context.total_results = state_dict["search_context"][
+                    "total_results"
+                ]
+
+            self.current_state = new_state
             return self.current_state
 
         except Exception as e:
-            new_state = deepcopy(self.current_state)
-            new_state.status = AgentStatus.ERROR
-            new_state.error_message = str(e)
-            self.current_state = new_state
+            self.current_state.status = AgentStatus.ERROR
+            self.current_state.error_message = str(e)
             return self.current_state
 
     def get_state(self) -> AgentState:
@@ -123,5 +184,5 @@ class WorkflowManager:
         return self.current_state
 
     def reset_state(self):
-        """Reset the state to initial values"""
+        """Reset state"""
         self.current_state = AgentState()
