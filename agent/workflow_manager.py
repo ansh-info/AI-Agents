@@ -19,6 +19,12 @@ class WorkflowManager:
         self.current_state = AgentState()
         self.graph = self.setup_workflow()
 
+    def route_next(self, state: AgentState) -> str:
+        """Router function to determine next state"""
+        if state.status == AgentStatus.ERROR:
+            return "error"
+        return "process"
+
     def setup_workflow(self):
         """Setup the workflow graph with proper state transitions"""
         workflow = StateGraph(AgentState)
@@ -30,12 +36,7 @@ class WorkflowManager:
         workflow.add_node("finish", self.handle_finish)
 
         # Define the edges
-        def router(state: AgentState) -> str:
-            if state.status == AgentStatus.ERROR:
-                return "error"
-            return "process"
-
-        workflow.add_edge("start", router)
+        workflow.add_edge("start", self.route_next)
         workflow.add_edge("process", "finish")
         workflow.add_edge("error", "finish")
         workflow.add_edge("finish", END)
