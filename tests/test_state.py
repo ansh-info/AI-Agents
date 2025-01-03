@@ -10,44 +10,38 @@ from agent.workflow_manager import WorkflowManager
 from state.agent_state import AgentStatus
 
 
+def print_state_info(state, test_name):
+    """Helper function to print state information"""
+    print(f"\n=== {test_name} ===")
+    print(f"Status: {state.status}")
+    print(f"Current step: {state.current_step}")
+    print("Messages:")
+    for msg in state.memory.messages:
+        print(f"- {msg['role']}: {msg['content']}")
+    if state.error_message:
+        print(f"Error: {state.error_message}")
+
+
 def test_workflow():
     # Initialize workflow manager
     print("Initializing WorkflowManager...")
     manager = WorkflowManager()
 
-    # Test 1: Basic command processing
-    print("\nTest 1: Basic command processing")
+    # Test 1: Basic command
     state = manager.process_command_external("Hello")
-    print(f"Command Status: {state.status}")
-    print(f"Current step: {state.current_step}")
-    print(f"Messages: {state.memory.messages}")
+    print_state_info(state, "Test 1: Basic command")
 
     # Test 2: Help command
-    print("\nTest 2: Help command")
     state = manager.process_command_external("help")
-    print(f"Command Status: {state.status}")
-    print(f"Messages: {state.memory.messages}")
+    print_state_info(state, "Test 2: Help command")
 
-    # Test 3: Search command placeholder
-    print("\nTest 3: Search command")
+    # Test 3: Search command
     state = manager.process_command_external("search LLM papers")
-    print(f"Command Status: {state.status}")
-    print(f"Current step: {state.current_step}")
+    print_state_info(state, "Test 3: Search command")
 
-    # Test 4: Error handling
-    print("\nTest 4: Error handling")
-    manager.reset_state()  # Reset state for clean test
-    try:
-        raise Exception("Test error")
-    except Exception as e:
-        state = manager.get_state()
-        state.update_status(AgentStatus.ERROR, str(e))
-    print(f"Error Status: {state.status}")
-    print(f"Error Message: {state.error_message}")
-
-    # Test 5: Search context with data
-    print("\nTest 5: Search context with data")
-    manager.reset_state()  # Reset state for clean test
+    # Test 4: Search context with data
+    print("\n=== Test 4: Search context with data ===")
+    manager.reset_state()
     sample_results = pd.DataFrame(
         {
             "title": ["Paper 1", "Paper 2"],
@@ -58,7 +52,6 @@ def test_workflow():
 
     state = manager.get_state()
     state.update_search_results(sample_results, total_results=2)
-
     print(f"Search Status: {state.status}")
     if state.search_context.results is not None:
         print(f"Results shape: {state.search_context.results.shape}")
