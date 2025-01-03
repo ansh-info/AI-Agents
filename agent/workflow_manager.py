@@ -23,20 +23,20 @@ class WorkflowManager:
         """Setup the workflow graph with proper state transitions"""
         workflow = StateGraph(AgentState)
 
-        # Define state transitions
-        def conditional_edge(state: AgentState):
-            if state.status == AgentStatus.ERROR:
-                return "finish"
-            return "process"
-
-        # Add nodes
+        # Define nodes
         workflow.add_node("start", self.handle_start)
         workflow.add_node("process", self.process_command)
+        workflow.add_node("error", self.handle_error)
         workflow.add_node("finish", self.handle_finish)
 
-        # Add edges
-        workflow.add_edge("start", conditional_edge)
+        # Define edges with conditions
+        workflow.add_conditional_edges(
+            "start",
+            self.route_command,
+            {"process": self.is_valid_state, "error": self.is_error_state},
+        )
         workflow.add_edge("process", "finish")
+        workflow.add_edge("error", "finish")
         workflow.add_edge("finish", END)
 
         # Set entry point
@@ -44,134 +44,79 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: AgentState) -> Dict:
-        """Initial state handling"""
-        state_dict = {
-            "status": AgentStatus.PROCESSING,
-            "current_step": "started",
-            "memory": {
-                "messages": state.memory.messages,
-                "current_context": state.memory.current_context,
-                "last_command": state.memory.last_command,
-            },
-            "search_context": {
-                "query": state.search_context.query,
-                "current_page": state.search_context.current_page,
-                "total_results": state.search_context.total_results,
-            },
-        }
-        return {"state": state_dict, "next": "process"}
+    def is_valid_state(self, state: AgentState) -> bool:
+        """Check if state is valid for processing"""
+        return state.status != AgentStatus.ERROR
 
-    def process_command(self, state: Dict) -> Dict:
-        """Process the command"""
+    def is_error_state(self, state: AgentState) -> bool:
+        """Check if state is in error"""
+        return state.status == AgentStatus.ERROR
+
+    def handle_start(self, state: AgentState) -> Dict[str, Any]:
+        """Initialize the state for processing"""
+        state.status = AgentStatus.PROCESSING
+        state.current_step = "started"
+        return {"state": state}
+
+    def route_command(self, state: AgentState) -> str:
+        """Route the command to appropriate handler"""
+        if not state.memory.messages:
+            state.status = AgentStatus.ERROR
+            state.error_message = "No command to process"
+            return "error"
+        return "process"
+
+    def process_command(self, state: AgentState) -> Dict[str, Any]:
+        """Process the command based on its type"""
         try:
-            messages = state["memory"]["messages"]
-            if not messages:
-                return {
-                    "state": {
-                        "status": AgentStatus.ERROR,
-                        "error_message": "No command to process",
-                        "current_step": "error",
-                    }
-                }
-
-            command = messages[-1]["content"].lower()
-            response_message = None
+            command = state.memory.messages[-1]["content"].lower()
+            state.memory.last_command = command
 
             if command.startswith("search"):
-                response_message = "Search command received"
-                current_step = "search_initiated"
-                query = command[7:].strip()
-                state["search_context"]["query"] = query
+                state.add_message("system", "Search command received")
+                state.current_step = "search_initiated"
+                state.search_context.query = command[7:].strip()
+
             elif command == "help":
-                response_message = "Available commands: search, help"
-                current_step = "help_displayed"
+                state.add_message("system", "Available commands: search, help")
+                state.current_step = "help_displayed"
+
             else:
-                response_message = f"Processed command: {command}"
-                current_step = "command_processed"
+                state.add_message("system", f"Processed command: {command}")
+                state.current_step = "command_processed"
 
-            if response_message:
-                messages.append({"role": "system", "content": response_message})
-
-            return {
-                "state": {
-                    "status": AgentStatus.SUCCESS,
-                    "current_step": current_step,
-                    "memory": {
-                        "messages": messages,
-                        "current_context": state["memory"]["current_context"],
-                        "last_command": command,
-                    },
-                    "search_context": state["search_context"],
-                }
-            }
+            state.status = AgentStatus.SUCCESS
+            return {"state": state}
 
         except Exception as e:
-            return {
-                "state": {
-                    "status": AgentStatus.ERROR,
-                    "error_message": str(e),
-                    "current_step": "error",
-                }
-            }
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state}
 
-    def handle_finish(self, state: Dict) -> Dict:
-        """Finalize processing"""
-        if "status" not in state:
-            state["status"] = AgentStatus.SUCCESS
+    def handle_error(self, state: AgentState) -> Dict[str, Any]:
+        """Handle error states"""
+        if state.status != AgentStatus.ERROR:
+            state.status = AgentStatus.ERROR
+            state.error_message = "Unknown error occurred"
+        return {"state": state}
+
+    def handle_finish(self, state: AgentState) -> Dict[str, Any]:
+        """Finalize the command processing"""
+        if state.status != AgentStatus.ERROR:
+            state.status = AgentStatus.SUCCESS
         return {"state": state}
 
     def process_command_external(self, command: str) -> AgentState:
-        """External command processing interface"""
+        """External interface to process commands"""
         try:
-            # Prepare initial state
+            # Add the command to state memory
             self.current_state.add_message("user", command)
 
-            # Convert state to dict for graph processing
-            initial_state = {
-                "status": self.current_state.status,
-                "current_step": self.current_state.current_step,
-                "memory": {
-                    "messages": self.current_state.memory.messages,
-                    "current_context": self.current_state.memory.current_context,
-                    "last_command": self.current_state.memory.last_command,
-                },
-                "search_context": {
-                    "query": self.current_state.search_context.query,
-                    "current_page": self.current_state.search_context.current_page,
-                    "total_results": self.current_state.search_context.total_results,
-                },
-            }
+            # Run the workflow
+            result = self.graph.invoke({"state": self.current_state})
 
-            # Run workflow
-            result = self.graph.invoke({"state": initial_state})
-
-            # Update current state from result
-            state_dict = result["state"]
-
-            # Create new AgentState instance
-            new_state = AgentState()
-            new_state.status = state_dict.get("status", AgentStatus.IDLE)
-            new_state.current_step = state_dict.get("current_step", "initial")
-            new_state.error_message = state_dict.get("error_message")
-
-            if "memory" in state_dict:
-                new_state.memory.messages = state_dict["memory"]["messages"]
-                new_state.memory.current_context = state_dict["memory"][
-                    "current_context"
-                ]
-                new_state.memory.last_command = state_dict["memory"]["last_command"]
-
-            if "search_context" in state_dict:
-                new_state.search_context.query = state_dict["search_context"]["query"]
-                new_state.search_context.current_page = state_dict["search_context"][
-                    "current_page"
-                ]
-                new_state.search_context.total_results = state_dict["search_context"][
-                    "total_results"
-                ]
-
-            self.current_state = new_state
+            # Update current state
+            self.current_state = result["state"]
             return self.current_state
 
         except Exception as e:
@@ -184,5 +129,5 @@ class WorkflowManager:
         return self.current_state
 
     def reset_state(self):
-        """Reset state"""
+        """Reset the state to initial values"""
         self.current_state = AgentState()
