@@ -41,14 +41,18 @@ class WorkflowManager:
 
     def handle_start(self, state: Dict) -> Dict[str, Any]:
         """Initialize the state for processing"""
+        print("Debug: Entering handle_start")
         try:
+            print("Debug: Creating start updates")
             # Return updates dictionary
-            return {
+            updates = {
                 "status": AgentStatus.PROCESSING,
                 "current_step": "started",
                 "next_steps": ["process"],
                 "memory": state["state"].memory.model_copy(),
             }
+            print("Debug: Returning start updates")
+            return updates
         except Exception as e:
             return {
                 "status": AgentStatus.ERROR,
@@ -139,17 +143,24 @@ class WorkflowManager:
     def process_command_external(self, command: str) -> AgentState:
         """External interface to process commands"""
         try:
+            print(f"Debug: Processing command: {command}")
+
             # Reset state for new command
             self.reset_state()
+            print("Debug: State reset")
 
             # Add the command to state memory
             self.current_state.add_message("user", command)
+            print("Debug: Message added to state")
 
             # Run the workflow
+            print("Debug: About to invoke graph")
             result = self.graph.invoke({"state": self.current_state})
+            print("Debug: Graph invoked")
 
             # Update current state
             self.current_state = result["state"]
+            print("Debug: State updated")
             return self.current_state
 
         except Exception as e:
