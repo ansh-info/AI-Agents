@@ -1,9 +1,7 @@
 import json
 import os
 import sys
-from typing import Any, Dict
-
-from langgraph.graph import END, StateGraph
+from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 from copy import deepcopy
@@ -19,9 +17,10 @@ class WorkflowManager:
         self.current_state = AgentState()
         self.graph = self.setup_workflow()
 
-    def conditional_router(self, state: Dict) -> str:
+    def conditional_router(self, state: Dict[str, AgentState]) -> str:
         """Route based on state status"""
-        if state["status"] == AgentStatus.ERROR:
+        current_state = state["state"]
+        if current_state.status == AgentStatus.ERROR:
             return "error"
         return "process"
 
@@ -48,91 +47,87 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: Dict) -> Dict[str, Any]:
+    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
         """Initialize the state for processing"""
+        current_state = state["state"]
+
         try:
-            # Create new state modifications
-            return {
-                "status": AgentStatus.PROCESSING,
-                "current_step": "started",
-                "next_steps": ["process_command"],
-            }
+            current_state.status = AgentStatus.PROCESSING
+            current_state.current_step = "started"
+            current_state.next_steps = ["process_command"]
+
+            if not current_state.memory.messages:
+                current_state.status = AgentStatus.ERROR
+                current_state.error_message = "No command to process"
+
+            return {"state": current_state}
+
         except Exception as e:
-            return {
-                "status": AgentStatus.ERROR,
-                "error_message": str(e),
-                "current_step": "error",
-                "next_steps": ["handle_error"],
-            }
+            current_state.status = AgentStatus.ERROR
+            current_state.error_message = str(e)
+            current_state.current_step = "error"
+            return {"state": current_state}
 
-    def process_command(self, state: Dict) -> Dict[str, Any]:
+    def process_command(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
         """Process the command based on its type"""
-        try:
-            last_message = state["memory"].messages[-1]["content"].lower()
+        current_state = state["state"]
 
-            updates = {
-                "current_step": "processing",
-                "next_steps": ["finish"],
-                "memory": {
-                    "last_command": last_message,
-                    "messages": state["memory"].messages.copy(),
-                },
-            }
+        try:
+            last_message = current_state.memory.messages[-1]["content"].lower()
+            current_state.memory.last_command = last_message
+            current_state.current_step = "processing"
+            current_state.next_steps = ["finish"]
 
             if last_message.startswith("search"):
-                updates.update(
-                    {
-                        "status": AgentStatus.SUCCESS,
-                        "current_step": "search_initiated",
-                        "search_context": {"query": last_message[7:].strip()},
-                    }
-                )
-                updates["memory"]["messages"].append(
-                    {"role": "system", "content": "Search command received"}
-                )
+                current_state.status = AgentStatus.SUCCESS
+                current_state.current_step = "search_initiated"
+                current_state.search_context.query = last_message[7:].strip()
+                current_state.add_message("system", "Search command received")
 
             elif last_message == "help":
-                updates.update(
-                    {"status": AgentStatus.SUCCESS, "current_step": "help_displayed"}
-                )
-                updates["memory"]["messages"].append(
-                    {"role": "system", "content": "Available commands: search, help"}
-                )
+                current_state.status = AgentStatus.SUCCESS
+                current_state.current_step = "help_displayed"
+                current_state.add_message("system", "Available commands: search, help")
 
             else:
-                updates.update(
-                    {"status": AgentStatus.SUCCESS, "current_step": "command_processed"}
-                )
-                updates["memory"]["messages"].append(
-                    {"role": "system", "content": f"Processed command: {last_message}"}
+                current_state.status = AgentStatus.SUCCESS
+                current_state.current_step = "command_processed"
+                current_state.add_message(
+                    "system", f"Processed command: {last_message}"
                 )
 
-            return updates
+            return {"state": current_state}
 
         except Exception as e:
-            return {
-                "status": AgentStatus.ERROR,
-                "error_message": str(e),
-                "current_step": "error",
-                "next_steps": ["handle_error"],
-            }
+            current_state.status = AgentStatus.ERROR
+            current_state.error_message = str(e)
+            current_state.current_step = "error"
+            current_state.next_steps = ["handle_error"]
+            return {"state": current_state}
 
-    def handle_error(self, state: Dict) -> Dict[str, Any]:
+    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
         """Handle error states"""
-        return {
-            "current_step": "error_handled",
-            "next_steps": ["finish"],
-            "error_message": state.get("error_message", "Unknown error occurred"),
-            "status": AgentStatus.ERROR,
-        }
+        current_state = state["state"]
 
-    def handle_finish(self, state: Dict) -> Dict[str, Any]:
+        if not current_state.error_message:
+            current_state.error_message = "Unknown error occurred"
+
+        current_state.current_step = "error_handled"
+        current_state.next_steps = ["finish"]
+        current_state.status = AgentStatus.ERROR
+
+        return {"state": current_state}
+
+    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
         """Finalize the command processing"""
-        return {
-            "current_step": "finished",
-            "next_steps": [],
-            "status": state.get("status", AgentStatus.SUCCESS),
-        }
+        current_state = state["state"]
+
+        current_state.current_step = "finished"
+        current_state.next_steps = []
+        if current_state.status != AgentStatus.ERROR:
+            current_state.status = AgentStatus.SUCCESS
+
+        return {"state": current_state}
 
     def process_command_external(self, command: str) -> AgentState:
         """External interface to process commands"""
@@ -141,24 +136,12 @@ class WorkflowManager:
             self.reset_state()
 
             # Add the command to state memory
-            self.current_state.memory.messages.append(
-                {"role": "user", "content": command}
-            )
+            self.current_state.add_message("user", command)
 
             # Run the workflow
-            result = self.graph.invoke(
-                {
-                    "state": self.current_state,
-                    "status": self.current_state.status,
-                    "memory": self.current_state.memory,
-                    "current_step": self.current_state.current_step,
-                    "error_message": self.current_state.error_message,
-                    "search_context": self.current_state.search_context,
-                    "next_steps": self.current_state.next_steps,
-                }
-            )
+            result = self.graph.invoke({"state": self.current_state})
 
-            # Update current state based on result
+            # Update current state
             self.current_state = result["state"]
             return self.current_state
 
