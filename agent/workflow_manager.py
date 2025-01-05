@@ -55,8 +55,7 @@ class WorkflowManager:
                 ),
                 "search_context": SearchContext(),
             }
-
-            print(f"Debug: Start node returning updates")
+            print("Debug: Start node returning updates", updates["status"])
             return updates
 
         except Exception as e:
@@ -164,11 +163,21 @@ class WorkflowManager:
             print("Debug: Message added to state")
 
             print("Debug: About to invoke graph")
-            result = self.graph.invoke(self.current_state)
+            result_dict = self.graph.invoke(self.current_state)
             print("Debug: Graph invoked, getting result")
 
-            print("Debug: State updated")
-            return result
+            # Convert result dictionary back to AgentState
+            print("Debug: Converting result to AgentState")
+            final_state = AgentState(
+                status=result_dict["status"],
+                error_message=result_dict.get("error_message"),
+                search_context=result_dict.get("search_context", SearchContext()),
+                memory=result_dict.get("memory", ConversationMemory()),
+                current_step=result_dict.get("current_step", "finished"),
+                next_steps=result_dict.get("next_steps", []),
+            )
+            print("Debug: State converted")
+            return final_state
 
         except Exception as e:
             print(f"Debug: Error in process_command_external: {str(e)}")
