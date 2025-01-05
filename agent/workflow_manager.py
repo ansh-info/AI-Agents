@@ -1,9 +1,7 @@
 import json
 import os
 import sys
-from typing import Any, Dict
-
-from langgraph.graph import END, StateGraph
+from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 from copy import deepcopy
@@ -11,7 +9,8 @@ from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
 
-from state.agent_state import AgentState, AgentStatus
+from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
+                               SearchContext)
 
 
 class WorkflowManager:
@@ -19,28 +18,18 @@ class WorkflowManager:
         self.current_state = AgentState()
         self.graph = self.setup_workflow()
 
-    def conditional_router(self, state: Dict[str, AgentState]) -> str:
-        """Route based on state status"""
-        if state["state"].status == AgentStatus.ERROR:
-            return "error"
-        return "process"
-
     def setup_workflow(self):
         """Setup the workflow graph with proper state transitions"""
         workflow = StateGraph(AgentState)
 
         # Define the nodes
-        workflow.add_node("start", self.handle_start)
-        workflow.add_node("process", self.process_command)
-        workflow.add_node("error", self.handle_error)
-        workflow.add_node("finish", self.handle_finish)
+        workflow.add_node("start", self._handle_start)
+        workflow.add_node("process", self._process_command)
+        workflow.add_node("finish", self._handle_finish)
 
-        # Define edges with conditional routing
-        workflow.add_conditional_edges(
-            "start", self.conditional_router, {"error": "error", "process": "process"}
-        )
+        # Define edges
+        workflow.add_edge("start", "process")
         workflow.add_edge("process", "finish")
-        workflow.add_edge("error", "finish")
         workflow.add_edge("finish", END)
 
         # Set entry point
@@ -48,125 +37,150 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, Dict[str, Any]]:
+    def _handle_start(self, state: AgentState) -> Dict[str, Any]:
         """Initialize the state for processing"""
-        current_state = state["state"]
-        updates = {}
-
+        print("Debug: Entering handle_start")
         try:
-            updates["status"] = AgentStatus.PROCESSING
-            updates["current_step"] = "started"
+            command = (
+                state.memory.messages[-1]["content"] if state.memory.messages else ""
+            )
 
-            if not current_state.memory.messages:
-                updates["status"] = AgentStatus.ERROR
-                updates["error_message"] = "No command to process"
-
-            # Create new state with updates
-            new_state = current_state.model_copy(update=updates)
-            return {"state": new_state}
+            updates = {
+                "status": AgentStatus.PROCESSING,
+                "current_step": "processing",
+                "next_steps": ["process"],
+                "error_message": None,
+                "memory": ConversationMemory(
+                    messages=state.memory.messages.copy(), last_command=command
+                ),
+                "search_context": SearchContext(),
+            }
+            print("Debug: Start node returning updates", updates["status"])
+            return updates
 
         except Exception as e:
-            updates["status"] = AgentStatus.ERROR
-            updates["error_message"] = str(e)
-            new_state = current_state.model_copy(update=updates)
-            return {"state": new_state}
+            print(f"Debug: Error in handle_start: {str(e)}")
+            return {
+                "status": AgentStatus.ERROR,
+                "error_message": str(e),
+                "current_step": "error",
+                "next_steps": ["finish"],
+                "memory": ConversationMemory(),
+                "search_context": SearchContext(),
+            }
 
-    def process_command(
-        self, state: Dict[str, AgentState]
-    ) -> Dict[str, Dict[str, Any]]:
+    def _process_command(self, state: AgentState) -> Dict[str, Any]:
         """Process the command based on its type"""
-        current_state = state["state"]
-        updates = {}
-
+        print("Debug: Entering process_command")
         try:
-            command = current_state.memory.messages[-1]["content"].lower()
+            command = state.memory.messages[-1]["content"].lower()
 
-            # Common updates
-            updates["memory"] = current_state.memory.model_copy()
-            updates["memory"].last_command = command
-            updates["current_step"] = "processing"
+            # Create base memory and updates
+            new_memory = ConversationMemory(
+                messages=state.memory.messages.copy(), last_command=command
+            )
+
+            updates = {
+                "status": AgentStatus.SUCCESS,
+                "current_step": "processing",
+                "next_steps": ["finish"],
+                "error_message": None,
+                "memory": new_memory,
+                "search_context": state.search_context,
+            }
 
             if command.startswith("search"):
-                updates["search_context"] = current_state.search_context.model_copy()
-                updates["search_context"].query = command[7:].strip()
-                updates["current_step"] = "search_initiated"
-                updates["status"] = AgentStatus.SUCCESS
-                new_memory = updates["memory"]
-                new_memory.messages = current_state.memory.messages + [
+                new_memory.messages.append(
                     {"role": "system", "content": "Search command received"}
-                ]
-                updates["memory"] = new_memory
+                )
+                updates.update(
+                    {
+                        "current_step": "search_initiated",
+                        "search_context": SearchContext(query=command[7:].strip()),
+                    }
+                )
 
             elif command == "help":
-                updates["current_step"] = "help_displayed"
-                updates["status"] = AgentStatus.SUCCESS
-                new_memory = updates["memory"]
-                new_memory.messages = current_state.memory.messages + [
+                new_memory.messages.append(
                     {"role": "system", "content": "Available commands: search, help"}
-                ]
-                updates["memory"] = new_memory
+                )
+                updates["current_step"] = "help_displayed"
 
             else:
-                updates["current_step"] = "command_processed"
-                updates["status"] = AgentStatus.SUCCESS
-                new_memory = updates["memory"]
-                new_memory.messages = current_state.memory.messages + [
+                new_memory.messages.append(
                     {"role": "system", "content": f"Processed command: {command}"}
-                ]
-                updates["memory"] = new_memory
+                )
+                updates["current_step"] = "command_processed"
 
-            new_state = current_state.model_copy(update=updates)
-            return {"state": new_state}
+            print(f"Debug: Process command returning updates")
+            return updates
 
         except Exception as e:
-            updates["status"] = AgentStatus.ERROR
-            updates["error_message"] = str(e)
-            new_state = current_state.model_copy(update=updates)
-            return {"state": new_state}
+            print(f"Debug: Error in process_command: {str(e)}")
+            return {
+                "status": AgentStatus.ERROR,
+                "error_message": str(e),
+                "current_step": "error",
+                "next_steps": ["finish"],
+                "memory": ConversationMemory(),
+                "search_context": SearchContext(),
+            }
 
-    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, Dict[str, Any]]:
-        """Handle error states"""
-        current_state = state["state"]
-        updates = {
-            "current_step": "error_handled",
-        }
-
-        if current_state.error_message is None:
-            updates["error_message"] = "Unknown error occurred"
-
-        new_state = current_state.model_copy(update=updates)
-        return {"state": new_state}
-
-    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, Dict[str, Any]]:
+    def _handle_finish(self, state: AgentState) -> Dict[str, Any]:
         """Finalize the command processing"""
-        current_state = state["state"]
-        updates = {"current_step": "finished"}
-
-        if current_state.status != AgentStatus.ERROR:
-            updates["status"] = AgentStatus.SUCCESS
-
-        new_state = current_state.model_copy(update=updates)
-        return {"state": new_state}
+        print("Debug: Entering handle_finish")
+        try:
+            return {
+                "status": AgentStatus.SUCCESS,
+                "current_step": "finished",
+                "next_steps": [],
+                "error_message": None,
+                "memory": state.memory,
+                "search_context": state.search_context,
+            }
+        except Exception as e:
+            print(f"Debug: Error in handle_finish: {str(e)}")
+            return {
+                "status": AgentStatus.ERROR,
+                "error_message": str(e),
+                "current_step": "error",
+                "next_steps": [],
+                "memory": ConversationMemory(),
+                "search_context": SearchContext(),
+            }
 
     def process_command_external(self, command: str) -> AgentState:
         """External interface to process commands"""
         try:
+            print(f"Debug: Processing command: {command}")
+
             # Reset state for new command
             self.reset_state()
+            print("Debug: State reset")
 
             # Add the command to state memory
-            self.current_state.memory.messages.append(
-                {"role": "user", "content": command}
+            self.current_state.add_message("user", command)
+            print("Debug: Message added to state")
+
+            print("Debug: About to invoke graph")
+            result_dict = self.graph.invoke(self.current_state)
+            print("Debug: Graph invoked, getting result")
+
+            # Convert result dictionary back to AgentState
+            print("Debug: Converting result to AgentState")
+            final_state = AgentState(
+                status=result_dict["status"],
+                error_message=result_dict.get("error_message"),
+                search_context=result_dict.get("search_context", SearchContext()),
+                memory=result_dict.get("memory", ConversationMemory()),
+                current_step=result_dict.get("current_step", "finished"),
+                next_steps=result_dict.get("next_steps", []),
             )
-
-            # Run the workflow
-            result = self.graph.invoke({"state": self.current_state})
-
-            # Update current state
-            self.current_state = result["state"]
-            return self.current_state
+            print("Debug: State converted")
+            return final_state
 
         except Exception as e:
+            print(f"Debug: Error in process_command_external: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             return self.current_state
