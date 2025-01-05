@@ -20,6 +20,8 @@ def print_state_info(state, test_name):
         print(f"- {msg['role']}: {msg['content']}")
     if state.error_message:
         print(f"Error: {state.error_message}")
+    if state.next_steps:
+        print(f"Next steps: {state.next_steps}")
 
 
 def test_workflow():
@@ -32,10 +34,12 @@ def test_workflow():
     print_state_info(state, "Test 1: Basic command")
 
     # Test 2: Help command
+    manager.reset_state()  # Reset state before new command
     state = manager.process_command_external("help")
     print_state_info(state, "Test 2: Help command")
 
     # Test 3: Search command
+    manager.reset_state()  # Reset state before new command
     state = manager.process_command_external("search LLM papers")
     print_state_info(state, "Test 3: Search command")
 
