@@ -9,7 +9,8 @@ from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
 
-from state.agent_state import AgentState, AgentStatus
+from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
+                               SearchContext)
 
 
 class WorkflowManager:
@@ -47,87 +48,108 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
+    def handle_start(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Initialize the state for processing"""
         current_state = state["state"]
 
         try:
-            current_state.status = AgentStatus.PROCESSING
-            current_state.current_step = "started"
-            current_state.next_steps = ["process_command"]
-
             if not current_state.memory.messages:
-                current_state.status = AgentStatus.ERROR
-                current_state.error_message = "No command to process"
+                return {
+                    "status": AgentStatus.ERROR,
+                    "error_message": "No command to process",
+                    "current_step": "error",
+                }
 
-            return {"state": current_state}
+            return {
+                "status": AgentStatus.PROCESSING,
+                "current_step": "started",
+                "next_steps": ["process_command"],
+            }
 
         except Exception as e:
-            current_state.status = AgentStatus.ERROR
-            current_state.error_message = str(e)
-            current_state.current_step = "error"
-            return {"state": current_state}
+            return {
+                "status": AgentStatus.ERROR,
+                "error_message": str(e),
+                "current_step": "error",
+            }
 
-    def process_command(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
+    def process_command(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Process the command based on its type"""
         current_state = state["state"]
 
         try:
             last_message = current_state.memory.messages[-1]["content"].lower()
-            current_state.memory.last_command = last_message
-            current_state.current_step = "processing"
-            current_state.next_steps = ["finish"]
+            memory_update = ConversationMemory(
+                messages=current_state.memory.messages.copy(), last_command=last_message
+            )
 
             if last_message.startswith("search"):
-                current_state.status = AgentStatus.SUCCESS
-                current_state.current_step = "search_initiated"
-                current_state.search_context.query = last_message[7:].strip()
-                current_state.add_message("system", "Search command received")
+                memory_update.messages.append(
+                    {"role": "system", "content": "Search command received"}
+                )
+                search_context = SearchContext(query=last_message[7:].strip())
+
+                return {
+                    "status": AgentStatus.SUCCESS,
+                    "current_step": "search_initiated",
+                    "memory": memory_update,
+                    "search_context": search_context,
+                    "next_steps": ["finish"],
+                }
 
             elif last_message == "help":
-                current_state.status = AgentStatus.SUCCESS
-                current_state.current_step = "help_displayed"
-                current_state.add_message("system", "Available commands: search, help")
-
-            else:
-                current_state.status = AgentStatus.SUCCESS
-                current_state.current_step = "command_processed"
-                current_state.add_message(
-                    "system", f"Processed command: {last_message}"
+                memory_update.messages.append(
+                    {"role": "system", "content": "Available commands: search, help"}
                 )
 
-            return {"state": current_state}
+                return {
+                    "status": AgentStatus.SUCCESS,
+                    "current_step": "help_displayed",
+                    "memory": memory_update,
+                    "next_steps": ["finish"],
+                }
+
+            else:
+                memory_update.messages.append(
+                    {"role": "system", "content": f"Processed command: {last_message}"}
+                )
+
+                return {
+                    "status": AgentStatus.SUCCESS,
+                    "current_step": "command_processed",
+                    "memory": memory_update,
+                    "next_steps": ["finish"],
+                }
 
         except Exception as e:
-            current_state.status = AgentStatus.ERROR
-            current_state.error_message = str(e)
-            current_state.current_step = "error"
-            current_state.next_steps = ["handle_error"]
-            return {"state": current_state}
+            return {
+                "status": AgentStatus.ERROR,
+                "error_message": str(e),
+                "current_step": "error",
+                "next_steps": ["handle_error"],
+            }
 
-    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
+    def handle_error(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Handle error states"""
-        current_state = state["state"]
+        return {
+            "current_step": "error_handled",
+            "next_steps": ["finish"],
+            "status": AgentStatus.ERROR,
+            "error_message": state["state"].error_message or "Unknown error occurred",
+        }
 
-        if not current_state.error_message:
-            current_state.error_message = "Unknown error occurred"
-
-        current_state.current_step = "error_handled"
-        current_state.next_steps = ["finish"]
-        current_state.status = AgentStatus.ERROR
-
-        return {"state": current_state}
-
-    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, AgentState]:
+    def handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
         """Finalize the command processing"""
         current_state = state["state"]
-
-        current_state.current_step = "finished"
-        current_state.next_steps = []
-        if current_state.status != AgentStatus.ERROR:
-            current_state.status = AgentStatus.SUCCESS
-
-        return {"state": current_state}
+        return {
+            "current_step": "finished",
+            "next_steps": [],
+            "status": (
+                AgentStatus.SUCCESS
+                if current_state.status != AgentStatus.ERROR
+                else AgentStatus.ERROR
+            ),
+        }
 
     def process_command_external(self, command: str) -> AgentState:
         """External interface to process commands"""
