@@ -28,6 +28,13 @@ class ConversationMemory(BaseModel):
     current_context: Optional[str] = None
     last_command: Optional[str] = None
 
+    def model_copy(self, *args, **kwargs):
+        return ConversationMemory(
+            messages=self.messages.copy(),
+            current_context=self.current_context,
+            last_command=self.last_command,
+        )
+
     class Config:
         arbitrary_types_allowed = True
 
@@ -39,6 +46,16 @@ class AgentState(BaseModel):
     memory: ConversationMemory = Field(default_factory=ConversationMemory)
     current_step: str = "initial"
     next_steps: List[str] = Field(default_factory=list)
+
+    def add_message(self, role: str, content: str):
+        """Add a message to the conversation memory"""
+        self.memory.messages.append({"role": role, "content": content})
+
+    def update_search_results(self, results: pd.DataFrame, total_results: int):
+        """Update search results in the search context"""
+        self.search_context.results = results
+        self.search_context.total_results = total_results
+        self.status = AgentStatus.SUCCESS
 
     class Config:
         arbitrary_types_allowed = True
