@@ -37,15 +37,12 @@ class WorkflowManager:
 
         return workflow.compile()
 
-    def _handle_start(self, state: Dict) -> Dict[str, Any]:
+    def _handle_start(self, state: AgentState) -> Dict[str, Any]:
         """Initialize the state for processing"""
         print("Debug: Entering handle_start")
         try:
-            current_state = state["state"]
             command = (
-                current_state.memory.messages[-1]["content"]
-                if current_state.memory.messages
-                else ""
+                state.memory.messages[-1]["content"] if state.memory.messages else ""
             )
 
             updates = {
@@ -54,12 +51,12 @@ class WorkflowManager:
                 "next_steps": ["process"],
                 "error_message": None,
                 "memory": ConversationMemory(
-                    messages=current_state.memory.messages.copy(), last_command=command
+                    messages=state.memory.messages.copy(), last_command=command
                 ),
                 "search_context": SearchContext(),
             }
 
-            print(f"Debug: Start node returning updates: {updates}")
+            print(f"Debug: Start node returning updates")
             return updates
 
         except Exception as e:
@@ -73,16 +70,15 @@ class WorkflowManager:
                 "search_context": SearchContext(),
             }
 
-    def _process_command(self, state: Dict) -> Dict[str, Any]:
+    def _process_command(self, state: AgentState) -> Dict[str, Any]:
         """Process the command based on its type"""
         print("Debug: Entering process_command")
         try:
-            current_state = state["state"]
-            command = current_state.memory.messages[-1]["content"].lower()
+            command = state.memory.messages[-1]["content"].lower()
 
             # Create base memory and updates
             new_memory = ConversationMemory(
-                messages=current_state.memory.messages.copy(), last_command=command
+                messages=state.memory.messages.copy(), last_command=command
             )
 
             updates = {
@@ -91,7 +87,7 @@ class WorkflowManager:
                 "next_steps": ["finish"],
                 "error_message": None,
                 "memory": new_memory,
-                "search_context": current_state.search_context,
+                "search_context": state.search_context,
             }
 
             if command.startswith("search"):
@@ -117,7 +113,7 @@ class WorkflowManager:
                 )
                 updates["current_step"] = "command_processed"
 
-            print(f"Debug: Returning updates from process_command: {updates}")
+            print(f"Debug: Process command returning updates")
             return updates
 
         except Exception as e:
@@ -131,15 +127,7 @@ class WorkflowManager:
                 "search_context": SearchContext(),
             }
 
-        except Exception as e:
-            print(f"Debug: Error in process_command: {str(e)}")
-            return {
-                "status": AgentStatus.ERROR,
-                "error_message": str(e),
-                "current_step": "error",
-            }
-
-    def _handle_finish(self, state: Dict[str, AgentState]) -> Dict[str, Any]:
+    def _handle_finish(self, state: AgentState) -> Dict[str, Any]:
         """Finalize the command processing"""
         print("Debug: Entering handle_finish")
         try:
@@ -147,6 +135,9 @@ class WorkflowManager:
                 "status": AgentStatus.SUCCESS,
                 "current_step": "finished",
                 "next_steps": [],
+                "error_message": None,
+                "memory": state.memory,
+                "search_context": state.search_context,
             }
         except Exception as e:
             print(f"Debug: Error in handle_finish: {str(e)}")
@@ -154,6 +145,9 @@ class WorkflowManager:
                 "status": AgentStatus.ERROR,
                 "error_message": str(e),
                 "current_step": "error",
+                "next_steps": [],
+                "memory": ConversationMemory(),
+                "search_context": SearchContext(),
             }
 
     def process_command_external(self, command: str) -> AgentState:
@@ -169,26 +163,12 @@ class WorkflowManager:
             self.current_state.add_message("user", command)
             print("Debug: Message added to state")
 
-            # Prepare initial state updates
-            initial_updates = {
-                "state": self.current_state,
-                "status": AgentStatus.IDLE,
-                "current_step": "initial",
-                "next_steps": ["start"],
-                "error_message": None,
-                "memory": self.current_state.memory,
-                "search_context": self.current_state.search_context,
-            }
-
-            # Run the workflow
             print("Debug: About to invoke graph")
-            result = self.graph.invoke(initial_updates)
+            result = self.graph.invoke(self.current_state)
             print("Debug: Graph invoked, getting result")
 
-            # Update current state
-            self.current_state = result["state"]
             print("Debug: State updated")
-            return self.current_state
+            return result
 
         except Exception as e:
             print(f"Debug: Error in process_command_external: {str(e)}")
