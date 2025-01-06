@@ -34,46 +34,6 @@ def print_state_info(state: AgentState, title: str = "State Info"):
         print(f"\nSearch query: {state.search_context.query}")
 
 
-async def test_workflow_commands():
-    """Test various commands through the workflow"""
-    print_section("Testing Workflow Commands")
-
-    manager = EnhancedWorkflowManager(model_name=MODEL_NAME)
-
-    test_cases = [
-        ("help", "help_displayed", None),  # command, expected_step, expected_query
-        ("search papers about LLMs", "search_initiated", "papers about LLMs"),
-        ("search", "finished", None),  # Should prompt for query
-        ("tell me about agents", "command_processed", None),  # Invalid command
-    ]
-
-    try:
-        for command, expected_step, expected_query in test_cases:
-            print(f"\nTesting command: '{command}'")
-            state = await manager.process_command_async(command)
-            print_state_info(state)
-
-            # Verify command processing
-            assert (
-                state.status == AgentStatus.SUCCESS
-            ), f"Expected SUCCESS status for command: {command}"
-            if expected_step:
-                assert (
-                    state.current_step == expected_step
-                ), f"Expected step {expected_step} but got {state.current_step}"
-            if expected_query:
-                assert (
-                    state.search_context.query == expected_query
-                ), f"Expected query '{expected_query}' but got '{state.search_context.query}'"
-            assert len(state.memory.messages) >= 1
-
-        print("\n✓ Workflow command tests passed")
-        return True
-    except Exception as e:
-        print(f"\n✗ Workflow command test failed: {str(e)}")
-        return False
-
-
 async def verify_ollama_connection():
     """Verify connection to Ollama service"""
     print_section("Verifying Ollama Connection")
@@ -97,6 +57,62 @@ async def verify_ollama_connection():
     except Exception as e:
         print(f"✗ Connection test failed: {str(e)}")
         return False
+
+
+async def test_workflow_commands():
+    """Test various commands through the workflow"""
+    print_section("Testing Workflow Commands")
+
+    manager = EnhancedWorkflowManager(model_name=MODEL_NAME)
+
+    test_cases = [
+        ("help", "help_displayed", None),
+        ("search papers about LLMs", "search_initiated", "papers about llms"),
+        ("search", "invalid_search", None),
+        ("tell me about agents", "command_processed", None),
+    ]
+
+    success = True
+    for command, expected_step, expected_query in test_cases:
+        try:
+            print(f"\nTesting command: '{command}'")
+            state = await manager.process_command_async(command)
+            print_state_info(state)
+
+            # Verify command processing
+            assert (
+                state.status == AgentStatus.SUCCESS
+            ), f"Expected SUCCESS status for command: {command}"
+            assert (
+                state.current_step == expected_step
+            ), f"Expected step '{expected_step}' but got '{state.current_step}' for command: {command}"
+
+            if expected_query:
+                assert (
+                    state.search_context.query == expected_query
+                ), f"Expected query '{expected_query}' but got '{state.search_context.query}'"
+            elif command.startswith("search "):
+                assert state.memory.messages[-1]["content"].startswith(
+                    "Initiating search for:"
+                ), "Search command should update memory with search confirmation"
+
+            # Verify messages
+            assert (
+                len(state.memory.messages) >= 2
+            ), "Should have user command and system response"
+            assert state.memory.messages[0]["role"] == "user"
+            assert state.memory.messages[-1]["role"] == "system"
+
+        except AssertionError as e:
+            print(f"✗ Test failed for command '{command}': {str(e)}")
+            success = False
+        except Exception as e:
+            print(f"✗ Unexpected error for command '{command}': {str(e)}")
+            success = False
+
+    if success:
+        print("\n✓ Workflow command tests passed")
+    return success
 
 
 async def main():
