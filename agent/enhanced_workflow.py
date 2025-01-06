@@ -13,26 +13,17 @@ from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
 
 
 class EnhancedWorkflowManager:
-    def __init__(self):
+    def __init__(self, model_name: str = "llama3.2:1b"):
         self.current_state = AgentState()
-        self.graph = self.setup_workflow()
         self.llm_client = OllamaClient()
+        self.model_name = model_name
+        self.graph = self.setup_workflow()
 
-    async def _get_llm_response(self, prompt: str, system_prompt: str = None) -> str:
-        """Get response from LLM"""
-        try:
-            response = await self.llm_client.generate(
-                prompt=prompt, system_prompt=system_prompt
-            )
-            return self.llm_client.extract_response(response)
-        except Exception as e:
-            raise Exception(f"LLM error: {str(e)}")
-
-    def setup_workflow(self):
+    def setup_workflow(self) -> StateGraph:
         """Setup the workflow graph with LLM capabilities"""
         workflow = StateGraph(AgentState)
 
-        # Define nodes with LLM processing
+        # Define nodes
         workflow.add_node("start", self._handle_start)
         workflow.add_node("understand", self._understand_command)
         workflow.add_node("process", self._process_command)
@@ -46,6 +37,24 @@ class EnhancedWorkflowManager:
 
         workflow.set_entry_point("start")
         return workflow.compile()
+
+    async def _get_llm_response(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Get response from LLM"""
+        try:
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                model=self.model_name,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+            )
+            return response
+        except Exception as e:
+            raise Exception(f"LLM error: {str(e)}")
 
     def _handle_start(self, state: AgentState) -> Dict[str, Any]:
         """Initialize the state for processing"""
@@ -68,20 +77,21 @@ class EnhancedWorkflowManager:
             return self._create_error_state(str(e))
 
     async def _understand_command(self, state: AgentState) -> Dict[str, Any]:
-        """Use LLM to understand and classify the command"""
+        """Use LLM to understand the command"""
         try:
             command = state.memory.messages[-1]["content"]
 
-            # Get LLM to understand command
+            # Classify command using LLM
             system_prompt = """
-            Classify the user command into one of these categories:
-            - SEARCH: Search for academic papers
-            - HELP: Request for help
-            - INVALID: Invalid or unknown command
-            Return only the category.
+            Analyze the user command and classify it into one of these categories:
+            - SEARCH: Commands about searching or finding papers
+            - HELP: Requests for help or information about commands
+            - INVALID: Invalid or unknown commands
+            Return ONLY the category name, nothing else.
             """
 
             classification = await self._get_llm_response(command, system_prompt)
+            classification = classification.strip().upper()
 
             new_memory = ConversationMemory(
                 messages=state.memory.messages.copy(),
@@ -100,7 +110,7 @@ class EnhancedWorkflowManager:
         except Exception as e:
             return self._create_error_state(str(e))
 
-    def _process_command(self, state: AgentState) -> Dict[str, Any]:
+    async def _process_command(self, state: AgentState) -> Dict[str, Any]:
         """Process the command based on LLM classification"""
         try:
             command = state.memory.messages[-1]["content"].lower()
@@ -122,23 +132,37 @@ class EnhancedWorkflowManager:
             }
 
             if classification == "SEARCH":
-                new_memory.messages.append(
-                    {"role": "system", "content": "Initiating paper search"}
-                )
-                updates.update(
-                    {
-                        "current_step": "search_initiated",
-                        "search_context": SearchContext(query=command[7:].strip()),
-                    }
-                )
+                # Extract search query
+                search_prompt = """
+                Extract the search query from this command. Return ONLY the search terms,
+                nothing else. If there's no clear search query, return 'INVALID'.
+                """
+                query = await self._get_llm_response(command, search_prompt)
+                query = query.strip()
+
+                if query and query.upper() != "INVALID":
+                    new_memory.messages.append(
+                        {"role": "system", "content": f"Searching for: {query}"}
+                    )
+                    updates.update(
+                        {
+                            "current_step": "search_initiated",
+                            "search_context": SearchContext(query=query),
+                        }
+                    )
+                else:
+                    new_memory.messages.append(
+                        {"role": "system", "content": "Invalid search query"}
+                    )
+
             elif classification == "HELP":
-                new_memory.messages.append(
-                    {
-                        "role": "system",
-                        "content": "Available commands: search <query>, help",
-                    }
+                help_text = await self._get_llm_response(
+                    "Generate a help message for the available commands",
+                    "You are a helpful assistant explaining search commands. Keep it concise.",
                 )
+                new_memory.messages.append({"role": "system", "content": help_text})
                 updates["current_step"] = "help_displayed"
+
             else:
                 new_memory.messages.append(
                     {"role": "system", "content": f"Unknown command: {command}"}
@@ -146,6 +170,7 @@ class EnhancedWorkflowManager:
                 updates["current_step"] = "command_processed"
 
             return updates
+
         except Exception as e:
             return self._create_error_state(str(e))
 
@@ -181,19 +206,14 @@ class EnhancedWorkflowManager:
 
             # Reset state for new command
             self.reset_state()
-            print("Debug: State reset")
 
-            # Add the command to state memory
+            # Add command to state memory
             self.current_state.add_message("user", command)
-            print("Debug: Message added to state")
 
             # Process through workflow
-            print("Debug: About to invoke graph")
             result_dict = await self.graph.ainvoke(self.current_state)
-            print("Debug: Graph invoked, getting result")
 
             # Convert result dictionary back to AgentState
-            print("Debug: Converting result to AgentState")
             final_state = AgentState(
                 status=result_dict["status"],
                 error_message=result_dict.get("error_message"),
@@ -202,7 +222,6 @@ class EnhancedWorkflowManager:
                 current_step=result_dict.get("current_step", "finished"),
                 next_steps=result_dict.get("next_steps", []),
             )
-            print("Debug: State converted")
             return final_state
 
         except Exception as e:
