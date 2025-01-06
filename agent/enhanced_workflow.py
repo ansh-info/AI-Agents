@@ -82,13 +82,12 @@ class EnhancedWorkflowManager:
             command = state.memory.messages[-1]["content"]
 
             # Classify command using LLM
-            system_prompt = """
-            Analyze the user command and classify it into one of these categories:
-            - SEARCH: Commands about searching or finding papers
-            - HELP: Requests for help or information about commands
-            - INVALID: Invalid or unknown commands
-            Return ONLY the category name, nothing else.
-            """
+            system_prompt = """You are a command classifier. Analyze the command and respond with exactly one word from: SEARCH, HELP, or INVALID.
+            Rules:
+            - SEARCH: If command contains 'search' or asks to find/look for papers
+            - HELP: If command is 'help' or asks for assistance/commands
+            - INVALID: For any other command
+            Respond with ONLY the classification word."""
 
             classification = await self._get_llm_response(command, system_prompt)
             classification = classification.strip().upper()
@@ -132,17 +131,12 @@ class EnhancedWorkflowManager:
             }
 
             if classification == "SEARCH":
-                # Extract search query
-                search_prompt = """
-                Extract the search query from this command. Return ONLY the search terms,
-                nothing else. If there's no clear search query, return 'INVALID'.
-                """
-                query = await self._get_llm_response(command, search_prompt)
-                query = query.strip()
+                # Extract search query - remove 'search' from the beginning if present
+                query = command.lower().replace("search", "", 1).strip()
 
-                if query and query.upper() != "INVALID":
+                if query:
                     new_memory.messages.append(
-                        {"role": "system", "content": f"Searching for: {query}"}
+                        {"role": "system", "content": f"Initiating search for: {query}"}
                     )
                     updates.update(
                         {
@@ -152,14 +146,21 @@ class EnhancedWorkflowManager:
                     )
                 else:
                     new_memory.messages.append(
-                        {"role": "system", "content": "Invalid search query"}
+                        {
+                            "role": "system",
+                            "content": "Please provide a search query. Example: 'search LLM papers'",
+                        }
                     )
 
             elif classification == "HELP":
-                help_text = await self._get_llm_response(
-                    "Generate a help message for the available commands",
-                    "You are a helpful assistant explaining search commands. Keep it concise.",
-                )
+                help_text = """Available commands:
+1. search <query>: Search for academic papers (e.g., 'search LLM papers')
+2. help: Show this help message
+
+Example usage:
+- search papers about machine learning
+- search recent LLM papers
+- help"""
                 new_memory.messages.append({"role": "system", "content": help_text})
                 updates["current_step"] = "help_displayed"
 
