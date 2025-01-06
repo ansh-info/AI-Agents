@@ -6,10 +6,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
 import asyncio
 
-import pytest
-
 from agent.enhanced_workflow import EnhancedWorkflowManager
-from clients.ollama_client import OllamaClient, sync_generate
+from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
 
 # Configuration
@@ -43,20 +41,30 @@ async def test_workflow_commands():
     manager = EnhancedWorkflowManager(model_name=MODEL_NAME)
 
     test_cases = [
-        "help",
-        "search papers about LLMs",
-        "search",  # Invalid search
-        "invalid command",
+        ("help", "help_displayed", None),  # command, expected_step, expected_query
+        ("search papers about LLMs", "search_initiated", "papers about LLMs"),
+        ("search", "finished", None),  # Should prompt for query
+        ("tell me about agents", "command_processed", None),  # Invalid command
     ]
 
     try:
-        for command in test_cases:
+        for command, expected_step, expected_query in test_cases:
             print(f"\nTesting command: '{command}'")
             state = await manager.process_command_async(command)
             print_state_info(state)
 
-            # Basic assertions
-            assert state.status in [AgentStatus.SUCCESS, AgentStatus.ERROR]
+            # Verify command processing
+            assert (
+                state.status == AgentStatus.SUCCESS
+            ), f"Expected SUCCESS status for command: {command}"
+            if expected_step:
+                assert (
+                    state.current_step == expected_step
+                ), f"Expected step {expected_step} but got {state.current_step}"
+            if expected_query:
+                assert (
+                    state.search_context.query == expected_query
+                ), f"Expected query '{expected_query}' but got '{state.search_context.query}'"
             assert len(state.memory.messages) >= 1
 
         print("\n✓ Workflow command tests passed")
