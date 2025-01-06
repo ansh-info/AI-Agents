@@ -121,10 +121,9 @@ class EnhancedWorkflowManager:
                 current_context=classification,
             )
 
-            updates = {
+            # Base state updates
+            base_updates = {
                 "status": AgentStatus.SUCCESS,
-                "current_step": "processing",
-                "next_steps": ["finish"],
                 "error_message": None,
                 "memory": new_memory,
                 "search_context": state.search_context,
@@ -138,12 +137,12 @@ class EnhancedWorkflowManager:
                     new_memory.messages.append(
                         {"role": "system", "content": f"Initiating search for: {query}"}
                     )
-                    updates.update(
-                        {
-                            "current_step": "search_initiated",
-                            "search_context": SearchContext(query=query),
-                        }
-                    )
+                    return {
+                        **base_updates,
+                        "current_step": "search_initiated",
+                        "next_steps": ["finish"],
+                        "search_context": SearchContext(query=query),
+                    }
                 else:
                     new_memory.messages.append(
                         {
@@ -151,6 +150,11 @@ class EnhancedWorkflowManager:
                             "content": "Please provide a search query. Example: 'search LLM papers'",
                         }
                     )
+                    return {
+                        **base_updates,
+                        "current_step": "invalid_search",
+                        "next_steps": ["finish"],
+                    }
 
             elif classification == "HELP":
                 help_text = """Available commands:
@@ -162,15 +166,21 @@ Example usage:
 - search recent LLM papers
 - help"""
                 new_memory.messages.append({"role": "system", "content": help_text})
-                updates["current_step"] = "help_displayed"
+                return {
+                    **base_updates,
+                    "current_step": "help_displayed",
+                    "next_steps": ["finish"],
+                }
 
             else:
                 new_memory.messages.append(
                     {"role": "system", "content": f"Unknown command: {command}"}
                 )
-                updates["current_step"] = "command_processed"
-
-            return updates
+                return {
+                    **base_updates,
+                    "current_step": "command_processed",
+                    "next_steps": ["finish"],
+                }
 
         except Exception as e:
             return self._create_error_state(str(e))
