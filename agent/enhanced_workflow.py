@@ -174,8 +174,8 @@ class EnhancedWorkflowManager:
             "search_context": SearchContext(),
         }
 
-    def process_command_external(self, command: str) -> AgentState:
-        """External interface to process commands"""
+    async def process_command_async(self, command: str) -> AgentState:
+        """Async interface to process commands"""
         try:
             print(f"Debug: Processing command: {command}")
 
@@ -187,8 +187,9 @@ class EnhancedWorkflowManager:
             self.current_state.add_message("user", command)
             print("Debug: Message added to state")
 
+            # Process through workflow
             print("Debug: About to invoke graph")
-            result_dict = self.graph.invoke(self.current_state)
+            result_dict = await self.graph.ainvoke(self.current_state)
             print("Debug: Graph invoked, getting result")
 
             # Convert result dictionary back to AgentState
@@ -205,10 +206,14 @@ class EnhancedWorkflowManager:
             return final_state
 
         except Exception as e:
-            print(f"Debug: Error in process_command_external: {str(e)}")
+            print(f"Debug: Error in process_command_async: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             return self.current_state
+
+    def process_command_external(self, command: str) -> AgentState:
+        """Synchronous interface to process commands"""
+        return asyncio.run(self.process_command_async(command))
 
     def get_state(self) -> AgentState:
         """Get current state"""
