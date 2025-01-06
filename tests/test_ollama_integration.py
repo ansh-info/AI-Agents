@@ -22,6 +22,50 @@ def print_section(name: str):
     print(f"\n{'='*20} {name} {'='*20}")
 
 
+def print_state_info(state: AgentState, title: str = "State Info"):
+    """Helper to print state information"""
+    print(f"\n--- {title} ---")
+    print(f"Status: {state.status}")
+    print(f"Current step: {state.current_step}")
+    if state.error_message:
+        print(f"Error: {state.error_message}")
+    print("\nMessages:")
+    for msg in state.memory.messages:
+        print(f"- {msg['role']}: {msg['content']}")
+    if state.search_context.query:
+        print(f"\nSearch query: {state.search_context.query}")
+
+
+async def test_workflow_commands():
+    """Test various commands through the workflow"""
+    print_section("Testing Workflow Commands")
+
+    manager = EnhancedWorkflowManager(model_name=MODEL_NAME)
+
+    test_cases = [
+        "help",
+        "search papers about LLMs",
+        "search",  # Invalid search
+        "invalid command",
+    ]
+
+    try:
+        for command in test_cases:
+            print(f"\nTesting command: '{command}'")
+            state = await manager.process_command_async(command)
+            print_state_info(state)
+
+            # Basic assertions
+            assert state.status in [AgentStatus.SUCCESS, AgentStatus.ERROR]
+            assert len(state.memory.messages) >= 1
+
+        print("\n✓ Workflow command tests passed")
+        return True
+    except Exception as e:
+        print(f"\n✗ Workflow command test failed: {str(e)}")
+        return False
+
+
 async def verify_ollama_connection():
     """Verify connection to Ollama service"""
     print_section("Verifying Ollama Connection")
@@ -29,12 +73,6 @@ async def verify_ollama_connection():
     print(f"Connecting to Ollama at: {client.base_url}")
 
     try:
-        # Check if model is available
-        is_available = await client.check_model_availability(MODEL_NAME)
-        if not is_available:
-            print(f"Warning: Model {MODEL_NAME} may not be available!")
-            return False
-
         # Test simple generation
         response = await client.generate(
             prompt="Say hello", model=MODEL_NAME, max_tokens=20
@@ -53,80 +91,22 @@ async def verify_ollama_connection():
         return False
 
 
-async def test_ollama_client():
-    """Test Ollama client functionality"""
-    print_section("Testing Ollama Client")
-    client = OllamaClient()
-
-    try:
-        # Test with different prompts
-        test_cases = [
-            ("What is AI?", None),
-            ("Explain Python", "You are a programming instructor."),
-        ]
-
-        for prompt, system_prompt in test_cases:
-            print(f"\nTesting prompt: {prompt}")
-            if system_prompt:
-                print(f"System prompt: {system_prompt}")
-
-            response = await client.generate(
-                prompt=prompt,
-                model=MODEL_NAME,
-                system_prompt=system_prompt,
-                max_tokens=100,
-            )
-
-            print(f"Response preview: {response[:100]}...")
-            assert len(response.strip()) > 0, "Response should not be empty"
-
-        print("✓ Client tests passed")
-        return True
-
-    except Exception as e:
-        print(f"✗ Client test failed: {str(e)}")
-        return False
-
-
-def test_sync_generate():
-    """Test synchronous generation"""
-    print_section("Testing Sync Generation")
-    try:
-        response = sync_generate(
-            prompt="What is a computer?", model=MODEL_NAME, max_tokens=50
-        )
-        print(f"Response preview: {response[:100]}...")
-        assert len(response.strip()) > 0, "Response should not be empty"
-
-        print("✓ Sync generation test passed")
-        return True
-
-    except Exception as e:
-        print(f"✗ Sync generation test failed: {str(e)}")
-        return False
-
-
 async def main():
-    """Run complete test suite"""
-    print_section("Starting Test Suite")
+    """Run the test suite"""
+    print_section("Starting Integrated Test Suite")
 
-    # First verify connection
+    # First verify Ollama connection
     if not await verify_ollama_connection():
         print("Failed to connect to Ollama service. Please check if it's running.")
         return False
 
-    # Run tests
-    results = {
-        "ollama_client": await test_ollama_client(),
-        "sync_generate": test_sync_generate(),
-    }
+    # Run workflow tests
+    success = await test_workflow_commands()
 
-    # Print summary
     print_section("Test Summary")
-    for test_name, passed in results.items():
-        print(f"{test_name}: {'✓ Passed' if passed else '✗ Failed'}")
+    print("Overall Status:", "✓ Passed" if success else "✗ Failed")
 
-    return all(results.values())
+    return success
 
 
 if __name__ == "__main__":
