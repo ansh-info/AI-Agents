@@ -17,7 +17,7 @@ class OllamaClient:
         model: str = "llama3.2:1b",
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> str:
         """
         Generate response from Ollama API
 
@@ -28,7 +28,7 @@ class OllamaClient:
             max_tokens: Maximum tokens to generate
 
         Returns:
-            Dict containing the response
+            str: Complete generated response
         """
         payload = {
             "model": model,
@@ -41,6 +41,7 @@ class OllamaClient:
             payload["max_tokens"] = max_tokens
 
         try:
+            full_response = []
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.generate_endpoint, json=payload, timeout=30
@@ -49,18 +50,23 @@ class OllamaClient:
                         error_text = await response.text()
                         raise Exception(f"Ollama API error: {error_text}")
 
-                    return await response.json()
+                    # Handle streaming response
+                    async for line in response.content:
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            if "response" in data:
+                                full_response.append(data["response"])
+                            if data.get("done", False):
+                                break
+                        except json.JSONDecodeError:
+                            continue
+
+            return "".join(full_response)
 
         except Exception as e:
             raise Exception(f"Failed to generate response: {str(e)}")
-
-    @staticmethod
-    def extract_response(api_response: Dict[str, Any]) -> str:
-        """Extract the response text from API response"""
-        try:
-            return api_response.get("response", "")
-        except Exception as e:
-            raise Exception(f"Failed to extract response: {str(e)}")
 
 
 # Helper function for synchronous calls
@@ -79,13 +85,12 @@ def sync_generate(
 
     async def _generate():
         client = OllamaClient()
-        response = await client.generate(
+        return await client.generate(
             prompt=prompt,
             model=model,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
         )
-        return client.extract_response(response)
 
     return asyncio.run(_generate())
 
