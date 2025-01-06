@@ -23,9 +23,8 @@ async def test_ollama_client_basic():
         response = await client.generate(
             prompt="What is artificial intelligence?", model="llama3.2:1b"
         )
-        print(
-            f"Basic generation test response: {client.extract_response(response)[:100]}..."
-        )
+        print(f"Basic generation test response: {response[:100]}...")
+        assert len(response) > 0, "Response should not be empty"
 
         # Test with system prompt
         response = await client.generate(
@@ -33,9 +32,8 @@ async def test_ollama_client_basic():
             model="llama3.2:1b",
             system_prompt="You are a computer science professor.",
         )
-        print(
-            f"System prompt test response: {client.extract_response(response)[:100]}..."
-        )
+        print(f"System prompt test response: {response[:100]}...")
+        assert len(response) > 0, "Response should not be empty"
 
         print("✓ Basic Ollama client tests passed")
         return True
@@ -53,6 +51,7 @@ def test_sync_generate():
             system_prompt="You are a helpful AI assistant.",
         )
         print(f"Sync generation response: {response[:100]}...")
+        assert len(response) > 0, "Response should not be empty"
         print("✓ Sync generation test passed")
         return True
     except Exception as e:
@@ -108,26 +107,23 @@ async def test_enhanced_workflow():
         return False
 
 
-async def main():
-    """Run all tests"""
-    print("\n=== Starting Ollama Integration Tests ===")
-
-    # Test results
-    results = {
-        "ollama_client": await test_ollama_client_basic(),
-        "sync_generate": test_sync_generate(),
-        "enhanced_workflow": await test_enhanced_workflow(),
-    }
-
-    # Print summary
-    print("\n=== Test Summary ===")
-    for test_name, passed in results.items():
-        print(f"{test_name}: {'✓ Passed' if passed else '✗ Failed'}")
-
-    # Return overall success
-    return all(results.values())
+async def run_single_test():
+    """Run a single test to verify Ollama connection"""
+    print("\n=== Running Single Ollama Test ===")
+    client = OllamaClient()
+    try:
+        response = await client.generate(prompt="Say hello", model="llama3.2:1b")
+        print(f"Response: {response}")
+        return True
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return False
 
 
 if __name__ == "__main__":
-    success = asyncio.run(main())
+    print("\n=== Starting Single Ollama Test ===")
+    success = asyncio.run(run_single_test())
+    if success:
+        print("\n=== Running Full Test Suite ===")
+        success = asyncio.run(main())
     exit(0 if success else 1)
