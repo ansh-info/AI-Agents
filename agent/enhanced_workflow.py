@@ -63,9 +63,13 @@ class EnhancedWorkflowManager:
             state.memory.current_context = "PAGINATION"
             state.current_step = "prev_page"
         elif command_lower == "clear":
+            # Store the command before reset
+            command_msg = {"role": "user", "content": command}
             self.reset_state()
-            state.memory.current_context = "CLEAR"
-            state.current_step = "cleared"
+            # Restore the command after reset
+            self.current_state.memory.messages.append(command_msg)
+            self.current_state.memory.current_context = "CLEAR"
+            self.current_state.current_step = "cleared"
         else:
             state.memory.current_context = "INVALID"
             state.current_step = "command_processed"
