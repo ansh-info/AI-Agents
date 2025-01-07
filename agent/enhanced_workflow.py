@@ -28,10 +28,7 @@ class EnhancedWorkflowManager:
         try:
             print(f"Debug: Processing command: {command}")
 
-            # Reset state for new command
-            self.reset_state()
-
-            # Add command to state
+            # Add command to state without resetting
             self.current_state.add_message("user", command)
 
             # Process command through steps
@@ -57,12 +54,18 @@ class EnhancedWorkflowManager:
         elif command_lower.startswith("search"):
             state.memory.current_context = "SEARCH"
             state.current_step = "search_initiated"
+            # Reset search context for new search
+            state.search_context = SearchContext()
         elif command_lower.startswith("next"):
             state.memory.current_context = "PAGINATION"
             state.current_step = "next_page"
         elif command_lower.startswith("prev"):
             state.memory.current_context = "PAGINATION"
             state.current_step = "prev_page"
+        elif command_lower == "clear":
+            self.reset_state()
+            state.memory.current_context = "CLEAR"
+            state.current_step = "cleared"
         else:
             state.memory.current_context = "INVALID"
             state.current_step = "command_processed"
@@ -77,13 +80,15 @@ class EnhancedWorkflowManager:
 1. search <query>: Search for academic papers (e.g., 'search LLM papers')
 2. next: Show next page of search results
 3. prev: Show previous page of search results
-4. help: Show this help message
+4. clear: Clear current search and state
+5. help: Show this help message
 
 Example usage:
 - search papers about machine learning
 - search recent LLM papers
 - next
 - prev
+- clear
 - help"""
             state.add_message("system", help_text)
             state.current_step = "help_displayed"
@@ -93,6 +98,10 @@ Example usage:
 
         elif command_type == "PAGINATION":
             await self._handle_pagination(state, command)
+
+        elif command_type == "CLEAR":
+            state.add_message("system", "Search state cleared.")
+            state.current_step = "cleared"
 
         else:
             state.add_message(
@@ -125,25 +134,12 @@ Example usage:
             state.search_context.query = query
             state.search_context.current_page = 1
             state.search_context.total_results = results.total
+            state.search_context.results = results.papers
 
             # Format results message
-            result_message = f"Found {results.total} papers. Showing results 1-{len(results.papers)}:\n\n"
-            for i, paper in enumerate(results.papers, 1):
-                authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
-                if len(paper.authors) > 3:
-                    authors += " et al."
-
-                result_message += f"{i}. {paper.title} ({paper.year})\n"
-                result_message += f"   Authors: {authors}\n"
-                if paper.abstract:
-                    result_message += f"   Abstract: {paper.abstract[:200]}...\n"
-                result_message += f"   Citations: {paper.citationCount}\n\n"
-
+            result_message = await self._format_search_results(results)
             state.add_message("system", result_message)
             state.current_step = "search_completed"
-
-            # Store results in state for pagination
-            state.search_context.results = results.papers
 
         except Exception as e:
             state.add_message("system", f"Error performing search: {str(e)}")
@@ -158,7 +154,7 @@ Example usage:
             )
             return
 
-        current_page = state.search_context.current_page
+        current_page = state.search_context.current_page or 1
         if command.startswith("next"):
             offset = current_page * self.search_limit
             if offset >= state.search_context.total_results:
@@ -177,32 +173,35 @@ Example usage:
                 query=state.search_context.query, offset=offset, limit=self.search_limit
             )
 
-            start_idx = offset + 1
-            end_idx = offset + len(results.papers)
-
-            result_message = (
-                f"Showing results {start_idx}-{end_idx} of {results.total}:\n\n"
-            )
-            for i, paper in enumerate(results.papers, start_idx):
-                authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
-                if len(paper.authors) > 3:
-                    authors += " et al."
-
-                result_message += f"{i}. {paper.title} ({paper.year})\n"
-                result_message += f"   Authors: {authors}\n"
-                if paper.abstract:
-                    result_message += f"   Abstract: {paper.abstract[:200]}...\n"
-                result_message += f"   Citations: {paper.citationCount}\n\n"
-
-            state.add_message("system", result_message)
             state.search_context.current_page = new_page
             state.search_context.results = results.papers
+
+            result_message = await self._format_search_results(results)
+            state.add_message("system", result_message)
             state.current_step = "pagination_completed"
 
         except Exception as e:
             state.add_message("system", f"Error fetching results: {str(e)}")
             state.current_step = "pagination_error"
             state.status = AgentStatus.ERROR
+
+    async def _format_search_results(self, results: SearchResults) -> str:
+        """Format search results for display"""
+        start_idx = (results.offset or 0) + 1
+        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1}:\n\n"
+
+        for i, paper in enumerate(results.papers, start_idx):
+            authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
+            if len(paper.authors) > 3:
+                authors += " et al."
+
+            result_message += f"{i}. {paper.title} ({paper.year})\n"
+            result_message += f"   Authors: {authors}\n"
+            if paper.abstract:
+                result_message += f"   Abstract: {paper.abstract[:200]}...\n"
+            result_message += f"   Citations: {paper.citationCount}\n\n"
+
+        return result_message
 
     def process_command_external(self, command: str) -> AgentState:
         """Synchronous interface for command processing"""
