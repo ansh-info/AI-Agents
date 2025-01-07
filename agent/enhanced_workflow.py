@@ -63,10 +63,8 @@ class EnhancedWorkflowManager:
             state.memory.current_context = "PAGINATION"
             state.current_step = "prev_page"
         elif command_lower == "clear":
-            # Store the command before reset
             command_msg = {"role": "user", "content": command}
             self.reset_state()
-            # Restore the command after reset
             self.current_state.memory.messages.append(command_msg)
             self.current_state.memory.current_context = "CLEAR"
             self.current_state.current_step = "cleared"
@@ -81,15 +79,19 @@ class EnhancedWorkflowManager:
 
         if command_type == "HELP":
             help_text = """Available commands:
-1. search <query>: Search for academic papers (e.g., 'search LLM papers')
+1. search <query> [filters]: Search for academic papers with optional filters:
+   - year:YYYY or year:YYYY-YYYY (e.g., year:2023 or year:2020-2023)
+   - citations>N (e.g., citations>1000)
+   - sort:citations or sort:year
 2. next: Show next page of search results
 3. prev: Show previous page of search results
 4. clear: Clear current search and state
 5. help: Show this help message
 
 Example usage:
-- search papers about machine learning
-- search recent LLM papers
+- search transformers year:2023
+- search llm citations>1000
+- search neural networks year:2020-2023 sort:citations
 - next
 - prev
 - clear
@@ -116,35 +118,111 @@ Example usage:
 
         state.status = AgentStatus.SUCCESS
 
+    async def _parse_search_command(self, command: str) -> dict:
+        """Parse search command with filters
+        Example inputs:
+        - search transformers year:2023
+        - search llm citations>1000
+        - search neural networks year:2020-2023 citations>500
+        """
+        # Remove 'search' from the start
+        query_text = command.replace("search", "", 1).strip()
+
+        filters = {
+            "query": "",
+            "year": None,
+            "year_range": None,
+            "min_citations": None,
+            "sort_by": None,
+            "sort_order": "desc",
+        }
+
+        parts = query_text.split()
+        main_query = []
+
+        for part in parts:
+            if ":" in part:
+                key, value = part.split(":", 1)
+                if key == "year":
+                    if "-" in value:
+                        start, end = value.split("-")
+                        filters["year_range"] = (int(start), int(end))
+                    else:
+                        filters["year"] = int(value)
+            elif ">" in part and "citations" in part:
+                filters["min_citations"] = int(part.split(">")[1])
+            elif part.startswith("sort:"):
+                filters["sort_by"] = part.split(":")[1]
+            else:
+                main_query.append(part)
+
+        filters["query"] = " ".join(main_query)
+        return filters
+
     async def _handle_search(self, state: AgentState, command: str) -> None:
-        """Handle search command and fetch results"""
+        """Handle search command with filters"""
         if command == "search":
             state.add_message(
-                "system", "Please provide a search query. Example: 'search LLM papers'"
+                "system",
+                "Please provide a search query. Example: 'search LLM papers year:2023 citations>1000'",
             )
             state.current_step = "invalid_search"
             return
 
-        # Extract query by removing 'search' prefix
-        query = command.replace("search", "", 1).strip()
-
         try:
-            # Perform search
-            results = await self.s2_client.search_papers(
-                query=query, limit=self.search_limit, offset=0
-            )
+            # Parse command with filters
+            filters = await self._parse_search_command(command)
 
-            # Update state with results
-            state.search_context.query = query
+            # Prepare API parameters
+            params = {
+                "query": filters["query"],
+                "limit": self.search_limit,
+                "offset": 0,
+            }
+
+            if filters["year"]:
+                params["year"] = filters["year"]
+            elif filters["year_range"]:
+                start, end = filters["year_range"]
+                params["query"] += f" year>={start} year<={end}"
+
+            # Perform search
+            results = await self.s2_client.search_papers(**params)
+
+            # Post-process results for citation filter
+            if filters["min_citations"]:
+                results.papers = [
+                    paper
+                    for paper in results.papers
+                    if paper.citationCount
+                    and paper.citationCount >= filters["min_citations"]
+                ]
+
+            # Sort results if requested
+            if filters["sort_by"]:
+                reverse = filters["sort_order"] == "desc"
+                if filters["sort_by"] == "citations":
+                    results.papers.sort(
+                        key=lambda x: x.citationCount or 0, reverse=reverse
+                    )
+                elif filters["sort_by"] == "year":
+                    results.papers.sort(key=lambda x: x.year or 0, reverse=reverse)
+
+            # Update state
+            state.search_context.query = filters["query"]
             state.search_context.current_page = 1
-            state.search_context.total_results = results.total
+            state.search_context.total_results = len(results.papers)
             state.search_context.results = results.papers
 
-            # Format results message
+            # Format and send results
             result_message = await self._format_search_results(results)
             state.add_message("system", result_message)
             state.current_step = "search_completed"
 
+        except ValueError as e:
+            state.add_message("system", f"Invalid search parameters: {str(e)}")
+            state.current_step = "search_error"
+            state.status = AgentStatus.ERROR
         except Exception as e:
             state.add_message("system", f"Error performing search: {str(e)}")
             state.current_step = "search_error"
@@ -191,8 +269,11 @@ Example usage:
 
     async def _format_search_results(self, results: SearchResults) -> str:
         """Format search results for display"""
+        total_pages = (results.total + self.search_limit - 1) // self.search_limit
+        current_page = (results.offset or 0) // self.search_limit + 1
+
         start_idx = (results.offset or 0) + 1
-        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1}:\n\n"
+        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1} (Page {current_page} of {total_pages}):\n\n"
 
         for i, paper in enumerate(results.papers, start_idx):
             authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
