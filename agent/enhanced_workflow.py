@@ -8,6 +8,8 @@ from langgraph.graph import END, StateGraph
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
 from clients.ollama_client import OllamaClient
+from clients.semantic_scholar_client import (SearchResults,
+                                             SemanticScholarClient)
 from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
                                SearchContext)
 
@@ -17,7 +19,9 @@ class EnhancedWorkflowManager:
         """Initialize workflow manager"""
         self.current_state = AgentState()
         self.llm_client = OllamaClient()
+        self.s2_client = SemanticScholarClient()
         self.model_name = model_name
+        self.search_limit = 10  # Default number of results per page
 
     async def process_command_async(self, command: str) -> AgentState:
         """Process command and update state asynchronously"""
@@ -45,8 +49,6 @@ class EnhancedWorkflowManager:
     async def _understand_command(self, state: AgentState) -> None:
         """Understand and classify the command"""
         command = state.memory.messages[-1]["content"]
-
-        # Simple rule-based classification instead of using LLM
         command_lower = command.lower().strip()
 
         if command_lower == "help":
@@ -55,6 +57,12 @@ class EnhancedWorkflowManager:
         elif command_lower.startswith("search"):
             state.memory.current_context = "SEARCH"
             state.current_step = "search_initiated"
+        elif command_lower.startswith("next"):
+            state.memory.current_context = "PAGINATION"
+            state.current_step = "next_page"
+        elif command_lower.startswith("prev"):
+            state.memory.current_context = "PAGINATION"
+            state.current_step = "prev_page"
         else:
             state.memory.current_context = "INVALID"
             state.current_step = "command_processed"
@@ -67,34 +75,134 @@ class EnhancedWorkflowManager:
         if command_type == "HELP":
             help_text = """Available commands:
 1. search <query>: Search for academic papers (e.g., 'search LLM papers')
-2. help: Show this help message
+2. next: Show next page of search results
+3. prev: Show previous page of search results
+4. help: Show this help message
 
 Example usage:
 - search papers about machine learning
 - search recent LLM papers
+- next
+- prev
 - help"""
             state.add_message("system", help_text)
             state.current_step = "help_displayed"
 
         elif command_type == "SEARCH":
-            if command == "search":
-                state.add_message(
-                    "system",
-                    "Please provide a search query. Example: 'search LLM papers'",
-                )
-                state.current_step = "invalid_search"
-            else:
-                # Extract query by removing 'search' prefix
-                query = command.replace("search", "", 1).strip()
-                state.add_message("system", f"Initiating search for: {query}")
-                state.search_context.query = query
-                state.current_step = "search_initiated"
+            await self._handle_search(state, command)
+
+        elif command_type == "PAGINATION":
+            await self._handle_pagination(state, command)
 
         else:
-            state.add_message("system", f"Unknown command: {command}")
+            state.add_message(
+                "system",
+                f"Unknown command: {command}. Type 'help' for available commands.",
+            )
             state.current_step = "command_processed"
 
         state.status = AgentStatus.SUCCESS
+
+    async def _handle_search(self, state: AgentState, command: str) -> None:
+        """Handle search command and fetch results"""
+        if command == "search":
+            state.add_message(
+                "system", "Please provide a search query. Example: 'search LLM papers'"
+            )
+            state.current_step = "invalid_search"
+            return
+
+        # Extract query by removing 'search' prefix
+        query = command.replace("search", "", 1).strip()
+
+        try:
+            # Perform search
+            results = await self.s2_client.search_papers(
+                query=query, limit=self.search_limit, offset=0
+            )
+
+            # Update state with results
+            state.search_context.query = query
+            state.search_context.current_page = 1
+            state.search_context.total_results = results.total
+
+            # Format results message
+            result_message = f"Found {results.total} papers. Showing results 1-{len(results.papers)}:\n\n"
+            for i, paper in enumerate(results.papers, 1):
+                authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
+                if len(paper.authors) > 3:
+                    authors += " et al."
+
+                result_message += f"{i}. {paper.title} ({paper.year})\n"
+                result_message += f"   Authors: {authors}\n"
+                if paper.abstract:
+                    result_message += f"   Abstract: {paper.abstract[:200]}...\n"
+                result_message += f"   Citations: {paper.citationCount}\n\n"
+
+            state.add_message("system", result_message)
+            state.current_step = "search_completed"
+
+            # Store results in state for pagination
+            state.search_context.results = results.papers
+
+        except Exception as e:
+            state.add_message("system", f"Error performing search: {str(e)}")
+            state.current_step = "search_error"
+            state.status = AgentStatus.ERROR
+
+    async def _handle_pagination(self, state: AgentState, command: str) -> None:
+        """Handle pagination commands (next/prev)"""
+        if not state.search_context.query:
+            state.add_message(
+                "system", "No active search. Please perform a search first."
+            )
+            return
+
+        current_page = state.search_context.current_page
+        if command.startswith("next"):
+            offset = current_page * self.search_limit
+            if offset >= state.search_context.total_results:
+                state.add_message("system", "No more results available.")
+                return
+            new_page = current_page + 1
+        else:  # prev
+            if current_page <= 1:
+                state.add_message("system", "Already on the first page.")
+                return
+            offset = (current_page - 2) * self.search_limit
+            new_page = current_page - 1
+
+        try:
+            results = await self.s2_client.search_papers(
+                query=state.search_context.query, offset=offset, limit=self.search_limit
+            )
+
+            start_idx = offset + 1
+            end_idx = offset + len(results.papers)
+
+            result_message = (
+                f"Showing results {start_idx}-{end_idx} of {results.total}:\n\n"
+            )
+            for i, paper in enumerate(results.papers, start_idx):
+                authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
+                if len(paper.authors) > 3:
+                    authors += " et al."
+
+                result_message += f"{i}. {paper.title} ({paper.year})\n"
+                result_message += f"   Authors: {authors}\n"
+                if paper.abstract:
+                    result_message += f"   Abstract: {paper.abstract[:200]}...\n"
+                result_message += f"   Citations: {paper.citationCount}\n\n"
+
+            state.add_message("system", result_message)
+            state.search_context.current_page = new_page
+            state.search_context.results = results.papers
+            state.current_step = "pagination_completed"
+
+        except Exception as e:
+            state.add_message("system", f"Error fetching results: {str(e)}")
+            state.current_step = "pagination_error"
+            state.status = AgentStatus.ERROR
 
     def process_command_external(self, command: str) -> AgentState:
         """Synchronous interface for command processing"""
