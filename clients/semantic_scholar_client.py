@@ -58,17 +58,32 @@ class SemanticScholarClient:
         limit: int = 10,
         fields: Optional[List[str]] = None,
         year: Optional[int] = None,
+        max_results: Optional[int] = None,
     ) -> SearchResults:
         """
-        Search for papers using the Semantic Scholar API
+        Search for papers with enhanced pagination control
 
+        Args:
+            query: Search query string
+            offset: Starting offset for pagination
+            limit: Maximum number of results per page (max 100)
+            fields: List of fields to include in response
+            year: Filter by publication year
+            max_results: Maximum total results to return across all pages
+
+        Returns:
+            SearchResults object containing papers and metadata
+        """
+        """
+        Search for papers using the Semantic Scholar API
+        
         Args:
             query: Search query string
             offset: Starting offset for pagination
             limit: Maximum number of results to return (max 100)
             fields: List of fields to include in response
             year: Filter by publication year
-
+            
         Returns:
             SearchResults object containing papers and metadata
         """
@@ -85,10 +100,18 @@ class SemanticScholarClient:
                 "url",
             ]
 
+        # Calculate effective limit based on max_results
+        effective_limit = limit
+        if max_results is not None:
+            remaining = max_results - offset
+            if remaining <= 0:
+                return SearchResults(total=0, offset=offset, papers=[])
+            effective_limit = min(limit, remaining)
+
         params = {
             "query": query,
             "offset": offset,
-            "limit": min(limit, 100),  # API limit is 100
+            "limit": min(effective_limit, 100),  # API limit is 100
             "fields": ",".join(fields),
         }
 
