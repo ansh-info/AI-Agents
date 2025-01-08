@@ -14,18 +14,23 @@ class EnhancedOllamaClient:
 
     async def enhance_search_query(self, query: str) -> str:
         """Use LLM to enhance the search query"""
-        prompt = f"""Enhance this academic search query: "{query}"
-        Add relevant academic terms and remove non-essential words.
-        IMPORTANT: Return ONLY the enhanced query text, without any explanation or formatting.
-        Example input: "ai in medicine"
-        Example output: artificial intelligence medical diagnosis healthcare machine learning
-        Your enhanced query:"""
+        prompt = f"""You are a research paper search specialist. Enhance this search query: "{query}"
+        Add 2-3 relevant academic terms and remove non-essential words.
+        Keep the query focused and concise. Return only the enhanced query.
+        Do NOT add medical terms unless the query is specifically about medicine.
+        
+        Example input: "ai in education"
+        Example output: artificial intelligence educational technology machine learning pedagogy
+        
+        Your enhanced query (max 10 words):"""
 
         try:
             enhanced_query = await self.client.generate(
-                prompt=prompt, model=self.model_name, max_tokens=100
+                prompt=prompt, model=self.model_name, max_tokens=50
             )
-            return enhanced_query.strip()
+            # Clean up the query
+            cleaned_query = enhanced_query.strip().replace("\n", " ").strip('"')
+            return cleaned_query if cleaned_query else query
         except Exception as e:
             print(f"Query enhancement failed: {str(e)}")
             return query  # Fallback to original query
