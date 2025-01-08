@@ -22,12 +22,35 @@ class StreamlitApp:
         if "current_page" not in st.session_state:
             st.session_state.current_page = 1
 
-    async def process_search(self, query: str):
+    async def process_search(
+        self, query: str, year: str = None, citations: str = None, sort_by: str = None
+    ):
         """Process search query and update state"""
-        state = await self.manager.process_command_async(f"search {query}")
+        # Build the search command with filters
+        search_command = f"search {query}"
+        if year:
+            search_command += f" year:{year}"
+        if citations:
+            search_command += f" citations>{citations}"
+        if sort_by and sort_by != "Relevance":
+            search_command += f" sort:{sort_by.lower()}"
+
+        # Log the search command for debugging
+        st.write(f"Debug: Executing command: {search_command}")
+
+        state = await self.manager.process_command_async(search_command)
+
+        # Log the state for debugging
+        st.write(f"Debug: Search status: {state.status}")
+        if state.error_message:
+            st.error(f"Search error: {state.error_message}")
+
         if state.status == AgentStatus.SUCCESS:
             st.session_state.current_results = state
-            st.session_state.search_history.append(query)
+            if query not in st.session_state.search_history:
+                st.session_state.search_history.append(query)
+            st.session_state.current_page = 1
+        return state
 
     async def handle_pagination(self, direction: str):
         """Handle pagination commands"""
@@ -44,17 +67,11 @@ class StreamlitApp:
         """Render search interface"""
         st.title("Talk2Competitors - Academic Paper Search")
 
-        # Search box
-        col1, col2 = st.columns([4, 1])
-        with col1:
+        # Search box and filters in a form
+        with st.form(key="search_form"):
             query = st.text_input("Search papers:", key="search_input")
-        with col2:
-            if st.button("Search"):
-                if query:
-                    asyncio.run(self.process_search(query))
 
-        # Filters
-        with st.expander("Advanced Filters"):
+            # Filters
             col1, col2, col3 = st.columns(3)
             with col1:
                 year = st.text_input("Year (e.g., 2023):")
@@ -63,58 +80,78 @@ class StreamlitApp:
             with col3:
                 sort_by = st.selectbox("Sort by:", ["Relevance", "Citations", "Year"])
 
+            # Submit button
+            submit_button = st.form_submit_button(label="Search")
+
+            if submit_button and query:
+                with st.spinner("Searching..."):
+                    try:
+                        state = asyncio.run(
+                            self.process_search(query, year, citations, sort_by)
+                        )
+                        if state.status == AgentStatus.ERROR:
+                            st.error(f"Search failed: {state.error_message}")
+                    except Exception as e:
+                        st.error(f"An error occurred: {str(e)}")
+
     def render_results(self):
         """Render search results"""
         if st.session_state.current_results:
             state = st.session_state.current_results
 
             # Show search stats
-            st.subheader(f"Found {state.search_context.total_results} papers")
+            if state.search_context.total_results > 0:
+                st.subheader(f"Found {state.search_context.total_results} papers")
 
-            # Display papers
-            if state.search_context.results:
-                for paper in state.search_context.results:
-                    with st.container():
-                        st.markdown(f"### {paper.title}")
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            authors = ", ".join(
-                                a.get("name", "") for a in paper.authors[:3]
-                            )
-                            if len(paper.authors) > 3:
-                                authors += " et al."
-                            st.write(f"**Authors:** {authors}")
-                            if paper.abstract:
-                                with st.expander("Abstract"):
-                                    st.write(paper.abstract)
-                        with col2:
-                            st.write(f"**Year:** {paper.year}")
-                            st.write(f"**Citations:** {paper.citationCount}")
-                        st.divider()
+                # Display papers
+                if state.search_context.results:
+                    for paper in state.search_context.results:
+                        with st.container():
+                            st.markdown(f"### {paper.title}")
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                authors = ", ".join(
+                                    a.get("name", "") for a in paper.authors[:3]
+                                )
+                                if len(paper.authors) > 3:
+                                    authors += " et al."
+                                st.write(f"**Authors:** {authors}")
+                                if paper.abstract:
+                                    with st.expander("Abstract"):
+                                        st.write(paper.abstract)
+                            with col2:
+                                st.write(f"**Year:** {paper.year}")
+                                st.write(f"**Citations:** {paper.citationCount}")
+                            st.divider()
 
-                # Pagination
-                col1, col2, col3 = st.columns([2, 2, 2])
-                with col1:
-                    if st.session_state.current_page > 1:
-                        if st.button("← Previous"):
-                            asyncio.run(self.handle_pagination("prev"))
-                with col3:
-                    if (
-                        len(state.search_context.results) == 10
-                    ):  # Assuming 10 results per page
-                        if st.button("Next →"):
-                            asyncio.run(self.handle_pagination("next"))
-                with col2:
-                    st.write(f"Page {st.session_state.current_page}")
+                    # Pagination
+                    col1, col2, col3 = st.columns([2, 2, 2])
+                    with col1:
+                        if st.session_state.current_page > 1:
+                            if st.button("← Previous"):
+                                asyncio.run(self.handle_pagination("prev"))
+                    with col3:
+                        if (
+                            len(state.search_context.results) >= 10
+                        ):  # Full page of results
+                            if st.button("Next →"):
+                                asyncio.run(self.handle_pagination("next"))
+                    with col2:
+                        st.write(f"Page {st.session_state.current_page}")
+            else:
+                st.info(
+                    "No papers found matching your criteria. Try adjusting your search terms."
+                )
 
     def render_history(self):
         """Render search history"""
         if st.session_state.search_history:
             with st.sidebar:
-                st.subheader("Search History")
+                st.subheader("Recent Searches")
                 for query in reversed(st.session_state.search_history[-5:]):
                     if st.button(f"🔄 {query}", key=f"history_{query}"):
-                        asyncio.run(self.process_search(query))
+                        with st.spinner("Searching..."):
+                            asyncio.run(self.process_search(query))
 
     def run(self):
         """Run the Streamlit app"""
@@ -124,6 +161,13 @@ class StreamlitApp:
         self.render_history()
 
 
-if __name__ == "__main__":
+def main():
+    st.set_page_config(
+        page_title="Talk2Competitors - Paper Search", page_icon="📚", layout="wide"
+    )
     app = StreamlitApp()
     app.run()
+
+
+if __name__ == "__main__":
+    main()
