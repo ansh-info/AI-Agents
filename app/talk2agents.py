@@ -22,12 +22,35 @@ class StreamlitApp:
         if "current_page" not in st.session_state:
             st.session_state.current_page = 1
 
+    def clean_search_query(self, query: str) -> str:
+        """Clean and format the search query"""
+        # Remove question words and common phrases
+        remove_phrases = [
+            "can you",
+            "find me",
+            "papers on",
+            "papers about",
+            "search for",
+            "look for",
+            "tell me about",
+        ]
+        cleaned_query = query.lower()
+        for phrase in remove_phrases:
+            cleaned_query = cleaned_query.replace(phrase, "")
+
+        # Remove extra whitespace and trim
+        cleaned_query = " ".join(cleaned_query.split())
+        return cleaned_query
+
     async def process_search(
         self, query: str, year: str = None, citations: str = None, sort_by: str = None
     ):
         """Process search query and update state"""
+        # Clean the query
+        cleaned_query = self.clean_search_query(query)
+
         # Build the search command with filters
-        search_command = f"search {query}"
+        search_command = f"search {cleaned_query}"
         if year:
             search_command += f" year:{year}"
         if citations:
@@ -36,9 +59,17 @@ class StreamlitApp:
             search_command += f" sort:{sort_by.lower()}"
 
         # Log the search command for debugging
+        st.write(f"Debug: Original query: {query}")
+        st.write(f"Debug: Cleaned query: {cleaned_query}")
         st.write(f"Debug: Executing command: {search_command}")
 
         state = await self.manager.process_command_async(search_command)
+
+        # Log the search results for debugging
+        if state.search_context and state.search_context.results:
+            st.write(f"Debug: Number of results: {len(state.search_context.results)}")
+        else:
+            st.write("Debug: No results found in search_context")
 
         # Log the state for debugging
         st.write(f"Debug: Search status: {state.status}")
