@@ -14,12 +14,12 @@ class EnhancedOllamaClient:
 
     async def enhance_search_query(self, query: str) -> str:
         """Use LLM to enhance the search query"""
-        prompt = f"""Given the user query: "{query}"
-        Enhance it for academic paper search by:
-        1. Identifying key concepts
-        2. Adding relevant academic terms
-        3. Removing non-essential words
-        Return only the enhanced query without explanation."""
+        prompt = f"""Enhance this academic search query: "{query}"
+        Add relevant academic terms and remove non-essential words.
+        IMPORTANT: Return ONLY the enhanced query text, without any explanation or formatting.
+        Example input: "ai in medicine"
+        Example output: artificial intelligence medical diagnosis healthcare machine learning
+        Your enhanced query:"""
 
         try:
             enhanced_query = await self.client.generate(
@@ -88,10 +88,14 @@ class EnhancedOllamaClient:
 
     async def suggest_related_queries(self, query: str) -> List[str]:
         """Generate related search queries"""
-        prompt = f"""Given the research query: "{query}"
-        Suggest 3 related academic search queries.
-        Return just the queries, one per line.
-        Make them specific and academic."""
+        prompt = f"""For the academic query: "{query}"
+        Generate 3 related academic search queries.
+        IMPORTANT: Return ONLY the queries, one per line, no numbering or explanations.
+        Example:
+        deep learning vision architectures
+        neural networks computer vision applications
+        convolutional networks image recognition
+        Your suggestions:"""
 
         try:
             suggestions = await self.client.generate(
