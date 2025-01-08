@@ -64,6 +64,26 @@ class EnhancedOllamaClient:
             print(f"Summarization failed: {str(e)}")
             return ""  # Skip summary on error
 
+    async def analyze_paper_question(self, paper_context: str, question: str) -> str:
+        """Answer specific questions about a paper"""
+        prompt = f"""Based on the following paper information:
+        {paper_context}
+        
+        Please answer this question: {question}
+        
+        Provide a clear and concise answer based only on the information available in the paper context.
+        If the information needed isn't available in the context, say so.
+        """
+
+        try:
+            response = await self.client.generate(
+                prompt=prompt, model=self.model_name, max_tokens=300
+            )
+            return response.strip()
+        except Exception as e:
+            print(f"Paper question analysis failed: {str(e)}")
+            return "I encountered an error while analyzing the paper. Please try again."
+
     async def analyze_paper(self, paper: PaperMetadata) -> str:
         """Generate detailed analysis of a single paper"""
         paper_text = f"""Title: {paper.title}
