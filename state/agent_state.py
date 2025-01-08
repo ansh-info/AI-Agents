@@ -18,6 +18,7 @@ class SearchContext(BaseModel):
     current_page: int = 1
     total_results: int = 0
     selected_paper_index: Optional[int] = None
+    current_filters: Dict[str, Any] = Field(default_factory=dict)  # Added this field
 
     class Config:
         arbitrary_types_allowed = True

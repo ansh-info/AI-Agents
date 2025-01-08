@@ -9,17 +9,15 @@ from agent.enhanced_workflow import EnhancedWorkflowManager
 
 
 async def run_demo():
-    # Initialize the workflow manager
     manager = EnhancedWorkflowManager()
 
     commands = [
         "help",
-        "search large language models",
-        "next",  # Should show next page
-        "next",  # Should show another page
-        "prev",  # Should go back
-        "clear",  # Clear the search
-        "search transformers",  # New search
+        "search large language models year:2023",  # Test year filter
+        "next",  # Test pagination
+        "search transformers citations>5000",  # Test citation filter
+        "search gpt-4 sort:citations",  # Test sorting
+        "clear",  # Test clear
         "help",  # Show help again
     ]
 
@@ -29,7 +27,10 @@ async def run_demo():
         state = await manager.process_command_async(command)
 
         print("\nResponse:")
-        for message in state.memory.messages[-1:]:  # Only show last message
+        if state.error_message:
+            print(f"Error: {state.error_message}")
+
+        for message in state.memory.messages[-1:]:
             if message["role"] == "system":
                 print(message["content"])
 
@@ -38,6 +39,8 @@ async def run_demo():
             print(f"Query: {state.search_context.query}")
             print(f"Current page: {state.search_context.current_page}")
             print(f"Total results: {state.search_context.total_results}")
+            if state.search_context.current_filters:
+                print("Applied filters:", state.search_context.current_filters)
 
 
 if __name__ == "__main__":

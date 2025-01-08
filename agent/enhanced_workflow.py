@@ -7,7 +7,7 @@ from langgraph.graph import END, StateGraph
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
-from clients.ollama_client import OllamaClient
+from clients.ollama_enhanced import EnhancedOllamaClient
 from clients.semantic_scholar_client import (SearchResults,
                                              SemanticScholarClient)
 from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
@@ -18,10 +18,10 @@ class EnhancedWorkflowManager:
     def __init__(self, model_name: str = "llama3.2:1b"):
         """Initialize workflow manager"""
         self.current_state = AgentState()
-        self.llm_client = OllamaClient()
+        self.llm_client = EnhancedOllamaClient(model_name)  # Using enhanced client
         self.s2_client = SemanticScholarClient()
         self.model_name = model_name
-        self.search_limit = 10  # Default number of results per page
+        self.search_limit = 10
 
     async def process_command_async(self, command: str) -> AgentState:
         """Process command and update state asynchronously"""
@@ -63,10 +63,8 @@ class EnhancedWorkflowManager:
             state.memory.current_context = "PAGINATION"
             state.current_step = "prev_page"
         elif command_lower == "clear":
-            # Store the command before reset
             command_msg = {"role": "user", "content": command}
             self.reset_state()
-            # Restore the command after reset
             self.current_state.memory.messages.append(command_msg)
             self.current_state.memory.current_context = "CLEAR"
             self.current_state.current_step = "cleared"
@@ -81,15 +79,19 @@ class EnhancedWorkflowManager:
 
         if command_type == "HELP":
             help_text = """Available commands:
-1. search <query>: Search for academic papers (e.g., 'search LLM papers')
+1. search <query> [filters]: Search for academic papers with optional filters:
+   - year:YYYY or year:YYYY-YYYY (e.g., year:2023 or year:2020-2023)
+   - citations>N (e.g., citations>1000)
+   - sort:citations or sort:year
 2. next: Show next page of search results
 3. prev: Show previous page of search results
 4. clear: Clear current search and state
 5. help: Show this help message
 
 Example usage:
-- search papers about machine learning
-- search recent LLM papers
+- search transformers year:2023
+- search llm citations>1000
+- search neural networks year:2020-2023 sort:citations
 - next
 - prev
 - clear
@@ -116,83 +118,109 @@ Example usage:
 
         state.status = AgentStatus.SUCCESS
 
-    async def _parse_search_command(self, command: str) -> dict:
-        """Parse search command with filters
-        Example inputs:
-        - search transformers year:2023
-        - search llm citations>1000
-        - search neural networks year:2020-2023 citations>500
-        """
-        # Remove 'search' from the start
-        query_text = command.replace("search", "", 1).strip()
-
-        filters = {
-            "query": "",
-            "year": None,
-            "year_range": None,
-            "min_citations": None,
-            "sort_by": None,
-            "sort_order": "desc",
-        }
-
-        parts = query_text.split()
-        main_query = []
-
-        for part in parts:
-            if ":" in part:
-                key, value = part.split(":", 1)
-                if key == "year":
-                    if "-" in value:
-                        start, end = value.split("-")
-                        filters["year_range"] = (int(start), int(end))
-                    else:
-                        filters["year"] = int(value)
-            elif ">" in part and "citations" in part:
-                filters["min_citations"] = int(part.split(">")[1])
-            elif part.startswith("sort:"):
-                filters["sort_by"] = part.split(":")[1]
-            else:
-                main_query.append(part)
-
-        filters["query"] = " ".join(main_query)
-        return filters
-
     async def _handle_search(self, state: AgentState, command: str) -> None:
-        """Handle search command and fetch results"""
+        """Handle search command with enhanced LLM capabilities"""
         if command == "search":
             state.add_message(
-                "system", "Please provide a search query. Example: 'search LLM papers'"
+                "system",
+                "Please provide a search query. Example: 'search LLM papers year:2023 citations>1000'",
             )
             state.current_step = "invalid_search"
             return
 
-        # Extract query by removing 'search' prefix
-        query = command.replace("search", "", 1).strip()
-
         try:
-            # Perform search
-            results = await self.s2_client.search_papers(
-                query=query, limit=self.search_limit, offset=0
+            # Parse command with filters
+            filters = await self._parse_search_command(command)
+
+            # Enhance the query using LLM
+            enhanced_query = await self.llm_client.enhance_search_query(
+                filters["query"]
+            )
+            filters["query"] = enhanced_query
+
+            # Get suggested related queries
+            related_queries = await self.llm_client.suggest_related_queries(
+                filters["query"]
             )
 
-            # Update state with results
-            state.search_context.query = query
+            # Prepare API parameters
+            params = {
+                "query": filters["query"],
+                "limit": self.search_limit,
+                "offset": 0,
+            }
+
+            if filters["year"]:
+                params["year"] = filters["year"]
+            elif filters["year_range"]:
+                start, end = filters["year_range"]
+                params["query"] += f" year>={start} year<={end}"
+
+            # Perform search
+            results = await self.s2_client.search_papers(**params)
+
+            # Post-process results for citation filter
+            if filters["min_citations"]:
+                results.papers = [
+                    paper
+                    for paper in results.papers
+                    if paper.citationCount
+                    and paper.citationCount >= filters["min_citations"]
+                ]
+
+            # Sort results if requested
+            if filters["sort_by"]:
+                reverse = filters["sort_order"] == "desc"
+                if filters["sort_by"] == "citations":
+                    results.papers.sort(
+                        key=lambda x: x.citationCount or 0, reverse=reverse
+                    )
+                elif filters["sort_by"] == "year":
+                    results.papers.sort(key=lambda x: x.year or 0, reverse=reverse)
+
+            # Generate result summary using LLM
+            summary = await self.llm_client.summarize_results(results.papers)
+
+            # Update state
+            state.search_context.query = filters["query"]
             state.search_context.current_page = 1
             state.search_context.total_results = results.total
             state.search_context.results = results.papers
+            state.search_context.current_filters = filters
 
-            # Format results message
+            # Format results
             result_message = await self._format_search_results(results)
+
+            # Only add summary and suggestions if we have results
+            if results.papers:
+                # Generate result summary using LLM
+                summary = await self.llm_client.summarize_results(results.papers)
+                if summary:
+                    result_message += f"\n{summary}\n"
+
+                # Get suggested related queries
+                related_queries = await self.llm_client.suggest_related_queries(
+                    filters["query"]
+                )
+                if related_queries:
+                    result_message += "\nRelated search queries you might try:\n"
+                    for i, rq in enumerate(related_queries[:3], 1):
+                        result_message += f"{i}. {rq}\n"
+
             state.add_message("system", result_message)
             state.current_step = "search_completed"
 
+        except ValueError as e:
+            state.add_message("system", f"Invalid search parameters: {str(e)}")
+            state.current_step = "search_error"
+            state.status = AgentStatus.ERROR
         except Exception as e:
             state.add_message("system", f"Error performing search: {str(e)}")
             state.current_step = "search_error"
             state.status = AgentStatus.ERROR
 
     async def _handle_pagination(self, state: AgentState, command: str) -> None:
-        """Handle pagination commands (next/prev)"""
+        """Handle pagination commands with enhanced features"""
         if not state.search_context.query:
             state.add_message(
                 "system", "No active search. Please perform a search first."
@@ -214,10 +242,9 @@ Example usage:
             new_page = current_page - 1
 
         try:
-            # Get stored filters
+            # Get stored filters and apply them
             filters = getattr(state.search_context, "current_filters", {})
 
-            # Prepare API parameters
             params = {
                 "query": state.search_context.query,
                 "limit": self.search_limit,
@@ -266,8 +293,16 @@ Example usage:
 
     async def _format_search_results(self, results: SearchResults) -> str:
         """Format search results for display"""
+        if not results.papers:
+            return f"Found {results.total} papers, but no matches with current filters.\n\n"
+
+        total_pages = (results.total + self.search_limit - 1) // self.search_limit
+        current_page = (results.offset or 0) // self.search_limit + 1
+
         start_idx = (results.offset or 0) + 1
-        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1}:\n\n"
+        end_idx = start_idx + len(results.papers) - 1
+
+        result_message = f"Found {results.total} papers. Showing results {start_idx}-{end_idx} (Page {current_page} of {total_pages}):\n\n"
 
         for i, paper in enumerate(results.papers, start_idx):
             authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
@@ -281,6 +316,42 @@ Example usage:
             result_message += f"   Citations: {paper.citationCount}\n\n"
 
         return result_message
+
+    async def _parse_search_command(self, command: str) -> dict:
+        """Parse search command with filters"""
+        # Remove 'search' from the start
+        query_text = command.replace("search", "", 1).strip()
+
+        filters = {
+            "query": "",
+            "year": None,
+            "year_range": None,
+            "min_citations": None,
+            "sort_by": None,
+            "sort_order": "desc",
+        }
+
+        parts = query_text.split()
+        main_query = []
+
+        for part in parts:
+            if ":" in part:
+                key, value = part.split(":", 1)
+                if key == "year":
+                    if "-" in value:
+                        start, end = value.split("-")
+                        filters["year_range"] = (int(start), int(end))
+                    else:
+                        filters["year"] = int(value)
+            elif ">" in part and "citations" in part:
+                filters["min_citations"] = int(part.split(">")[1])
+            elif part.startswith("sort:"):
+                filters["sort_by"] = part.split(":")[1]
+            else:
+                main_query.append(part)
+
+        filters["query"] = " ".join(main_query)
+        return filters
 
     def process_command_external(self, command: str) -> AgentState:
         """Synchronous interface for command processing"""
