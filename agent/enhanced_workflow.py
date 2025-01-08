@@ -81,7 +81,10 @@ class EnhancedWorkflowManager:
 
         if command_type == "HELP":
             help_text = """Available commands:
-1. search <query>: Search for academic papers (e.g., 'search LLM papers')
+1. search <query> [filters]: Search for academic papers with optional filters:
+   - year:YYYY or year:YYYY-YYYY (e.g., year:2023 or year:2020-2023)
+   - citations>N (e.g., citations>1000)
+   - sort:citations or sort:year
 2. next: Show next page of search results
 3. prev: Show previous page of search results
 4. clear: Clear current search and state
@@ -267,7 +270,9 @@ Example usage:
     async def _format_search_results(self, results: SearchResults) -> str:
         """Format search results for display"""
         start_idx = (results.offset or 0) + 1
-        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1}:\n\n"
+        total_pages = (results.total + self.search_limit - 1) // self.search_limit
+        current_page = (results.offset or 0) // self.search_limit + 1
+        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1} (Page {current_page} of {total_pages}):\n\n"
 
         for i, paper in enumerate(results.papers, start_idx):
             authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
