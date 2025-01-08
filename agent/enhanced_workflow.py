@@ -188,14 +188,24 @@ Example usage:
             state.search_context.results = results.papers
             state.search_context.current_filters = filters
 
-            # Format and send results
+            # Format results
             result_message = await self._format_search_results(results)
-            if summary:
-                result_message += f"\n{summary}\n"
-            if related_queries:
-                result_message += "\nRelated search queries you might try:\n"
-                for i, rq in enumerate(related_queries[:3], 1):
-                    result_message += f"{i}. {rq}\n"
+
+            # Only add summary and suggestions if we have results
+            if results.papers:
+                # Generate result summary using LLM
+                summary = await self.llm_client.summarize_results(results.papers)
+                if summary:
+                    result_message += f"\n{summary}\n"
+
+                # Get suggested related queries
+                related_queries = await self.llm_client.suggest_related_queries(
+                    filters["query"]
+                )
+                if related_queries:
+                    result_message += "\nRelated search queries you might try:\n"
+                    for i, rq in enumerate(related_queries[:3], 1):
+                        result_message += f"{i}. {rq}\n"
 
             state.add_message("system", result_message)
             state.current_step = "search_completed"
@@ -283,11 +293,16 @@ Example usage:
 
     async def _format_search_results(self, results: SearchResults) -> str:
         """Format search results for display"""
+        if not results.papers:
+            return f"Found {results.total} papers, but no matches with current filters.\n\n"
+
         total_pages = (results.total + self.search_limit - 1) // self.search_limit
         current_page = (results.offset or 0) // self.search_limit + 1
 
         start_idx = (results.offset or 0) + 1
-        result_message = f"Found {results.total} papers. Showing results {start_idx}-{start_idx + len(results.papers) - 1} (Page {current_page} of {total_pages}):\n\n"
+        end_idx = start_idx + len(results.papers) - 1
+
+        result_message = f"Found {results.total} papers. Showing results {start_idx}-{end_idx} (Page {current_page} of {total_pages}):\n\n"
 
         for i, paper in enumerate(results.papers, start_idx):
             authors = ", ".join(a.get("name", "") for a in paper.authors[:3])
