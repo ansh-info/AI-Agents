@@ -107,31 +107,48 @@ class StreamlitApp:
 
     async def process_search(self, query: str, year: str = None, citations: str = None):
         """Process search query and update state"""
+        # Create a placeholder for status messages
+        status_placeholder = st.empty()
+
+        # Show initial status
+        status_placeholder.info("🔍 Processing search query...")
+
         cleaned_query = self.clean_search_query(query)
+        status_placeholder.info(f"🧹 Cleaned query: '{cleaned_query}'")
 
         # Prepare filters
         filters = {}
+        filter_text = []
         if year:
             try:
                 filters["year"] = int(year)
+                filter_text.append(f"Year: {year}")
             except ValueError:
-                st.error("Invalid year format")
+                st.error("❌ Invalid year format")
                 return
         if citations:
             try:
                 filters["citations"] = int(citations)
+                filter_text.append(f"Min Citations: {citations}")
             except ValueError:
-                st.error("Invalid citations format")
+                st.error("❌ Invalid citations format")
                 return
 
-        # Execute search
+        if filter_text:
+            status_placeholder.info(f"⚙️ Applying filters: {', '.join(filter_text)}")
+
+        # Execute search with progress updates
+        status_placeholder.info("🤖 Enhancing query using AI...")
         results, error = await self.agent.search_papers(cleaned_query, filters)
 
         if error:
-            st.error(f"Search failed: {error}")
+            status_placeholder.error(f"❌ Search failed: {error}")
             return
 
         if results:
+            # Update status with success message
+            status_placeholder.success(f"✅ Found {results.total} papers!")
+
             st.session_state.current_results = results
             if query not in st.session_state.search_history:
                 st.session_state.search_history.append(query)
@@ -139,6 +156,10 @@ class StreamlitApp:
             # Store papers in context
             for paper in results.papers:
                 st.session_state.paper_context[paper.paperId] = paper
+
+            # Clear status after a short delay
+            await asyncio.sleep(2)
+            status_placeholder.empty()
 
     async def process_paper_question(self, paper_id: str, question: str):
         """Process a question about a specific paper"""
@@ -161,23 +182,49 @@ class StreamlitApp:
         """Render search interface"""
         st.title("Academic Paper Search Assistant")
 
+        # Initialize searching state if not exists
+        if "is_searching" not in st.session_state:
+            st.session_state.is_searching = False
+
         with st.form(key="search_form"):
-            query = st.text_input("Search papers:", key="search_input")
+            query = st.text_input(
+                "Search papers:",
+                key="search_input",
+                placeholder="Enter search terms (e.g., 'machine learning')",
+            )
 
             col1, col2 = st.columns(2)
             with col1:
-                year = st.text_input("Year (e.g., 2023):")
+                year = st.text_input("Year (e.g., 2023):", placeholder="YYYY")
             with col2:
-                citations = st.text_input("Min Citations:")
+                citations = st.text_input("Min Citations:", placeholder="e.g., 100")
 
-            submit_button = st.form_submit_button(label="Search")
+            submit_button = st.form_submit_button(
+                label=(
+                    "🔍 Search"
+                    if not st.session_state.is_searching
+                    else "⌛ Searching..."
+                ),
+                disabled=st.session_state.is_searching,
+            )
 
             if submit_button and query:
-                with st.spinner("Searching..."):
-                    try:
-                        asyncio.run(self.process_search(query, year, citations))
-                    except Exception as e:
-                        st.error(f"An error occurred: {str(e)}")
+                try:
+                    st.session_state.is_searching = True
+                    st.rerun()  # Rerun to update button state
+                except Exception as e:
+                    st.error(f"⚠️ An error occurred: {str(e)}")
+                    st.session_state.is_searching = False
+
+        # Process search after form (to avoid streamlit form limitations)
+        if st.session_state.is_searching and query:
+            try:
+                asyncio.run(self.process_search(query, year, citations))
+            except Exception as e:
+                st.error(f"⚠️ An error occurred: {str(e)}")
+            finally:
+                st.session_state.is_searching = False
+                st.rerun()  # Rerun to update button state
 
     def render_paper_details(self, paper):
         """Render detailed paper view with chat interface"""
