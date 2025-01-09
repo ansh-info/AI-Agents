@@ -19,7 +19,9 @@ class EnhancedWorkflowManager:
     def __init__(self, model_name: str = "llama3.2:1b"):
         """Initialize workflow manager"""
         self.current_state = AgentState()
-        self.llm_client = OllamaClient(model_name)
+        self.llm_client = OllamaClient(
+            model_name=model_name
+        )  # Pass model_name correctly
         self.s2_client = SemanticScholarClient()
         self.model_name = model_name
         self.search_limit = 10
