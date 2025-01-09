@@ -15,12 +15,24 @@ class PaperMetadata(BaseModel):
     year: Optional[int] = None
     authors: List[Dict[str, str]] = []
     venue: Optional[str] = None
-    citationCount: Optional[int] = None
-    referenceCount: Optional[int] = None
+    citations: Optional[int] = None  # Changed from citationCount for consistency
+    references: Optional[int] = None  # Changed from referenceCount for consistency
     url: Optional[str] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    @classmethod
+    def from_api_response(cls, data: Dict[str, Any]) -> "PaperMetadata":
+        """Create PaperMetadata from API response"""
+        return cls(
+            paperId=data.get("paperId", ""),
+            title=data.get("title", ""),
+            abstract=data.get("abstract"),
+            year=data.get("year"),
+            authors=data.get("authors", []),
+            venue=data.get("venue"),
+            citations=data.get("citationCount"),  # Map from API response
+            references=data.get("referenceCount"),  # Map from API response
+            url=data.get("url"),
+        )
 
 
 class SearchResults(BaseModel):
@@ -33,18 +45,9 @@ class SearchResults(BaseModel):
 
 
 class SemanticScholarClient:
-    """
-    Client for interacting with Semantic Scholar Academic Graph API
-    Documentation: https://api.semanticscholar.org/api-docs/
-    """
+    """Client for Semantic Scholar Academic Graph API"""
 
     def __init__(self, api_key: Optional[str] = None):
-        """
-        Initialize Semantic Scholar client
-
-        Args:
-            api_key: Optional API key for higher rate limits
-        """
         self.base_url = "https://api.semanticscholar.org/graph/v1"
         self.api_key = api_key or os.getenv("SEMANTIC_SCHOLAR_API_KEY")
         self.headers = {"Accept": "application/json"}
@@ -58,35 +61,8 @@ class SemanticScholarClient:
         limit: int = 10,
         fields: Optional[List[str]] = None,
         year: Optional[int] = None,
-        max_results: Optional[int] = None,
     ) -> SearchResults:
-        """
-        Search for papers with enhanced pagination control
-
-        Args:
-            query: Search query string
-            offset: Starting offset for pagination
-            limit: Maximum number of results per page (max 100)
-            fields: List of fields to include in response
-            year: Filter by publication year
-            max_results: Maximum total results to return across all pages
-
-        Returns:
-            SearchResults object containing papers and metadata
-        """
-        """
-        Search for papers using the Semantic Scholar API
-        
-        Args:
-            query: Search query string
-            offset: Starting offset for pagination
-            limit: Maximum number of results to return (max 100)
-            fields: List of fields to include in response
-            year: Filter by publication year
-            
-        Returns:
-            SearchResults object containing papers and metadata
-        """
+        """Search for papers with enhanced error handling and debugging"""
         if fields is None:
             fields = [
                 "paperId",
@@ -100,45 +76,67 @@ class SemanticScholarClient:
                 "url",
             ]
 
-        # Calculate effective limit based on max_results
-        effective_limit = limit
-        if max_results is not None:
-            remaining = max_results - offset
-            if remaining <= 0:
-                return SearchResults(total=0, offset=offset, papers=[])
-            effective_limit = min(limit, remaining)
-
         params = {
             "query": query,
             "offset": offset,
-            "limit": min(effective_limit, 100),  # API limit is 100
+            "limit": min(limit, 100),
             "fields": ",".join(fields),
         }
 
         if year:
             params["year"] = str(year)
 
-        async with aiohttp.ClientSession(headers=self.headers) as session:
-            async with session.get(
-                f"{self.base_url}/paper/search", params=params
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(
-                        f"Semantic Scholar API error ({response.status}): {error_text}"
+        # Debug information
+        debug_info = {
+            "url": f"{self.base_url}/paper/search",
+            "params": params,
+            "headers": {k: v for k, v in self.headers.items() if k != "x-api-key"},
+        }
+        print(f"Making API request to Semantic Scholar:\n{debug_info}")
+
+        try:
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                async with session.get(
+                    f"{self.base_url}/paper/search", params=params, timeout=30
+                ) as response:
+                    response_text = await response.text()
+                    print(f"API Response Status: {response.status}")
+                    print(f"API Response Headers: {dict(response.headers)}")
+                    print(
+                        f"API Response Text: {response_text[:500]}..."
+                    )  # First 500 chars
+
+                    if response.status != 200:
+                        raise Exception(
+                            f"Semantic Scholar API error ({response.status}): {response_text}"
+                        )
+
+                    data = await response.json()
+
+                    # Transform API response into our models
+                    papers = [
+                        PaperMetadata.from_api_response(paper)
+                        for paper in data.get("data", [])
+                    ]
+
+                    result = SearchResults(
+                        total=data.get("total", 0),
+                        offset=data.get("offset", 0),
+                        next=data.get("next"),
+                        papers=papers,
                     )
 
-                data = await response.json()
+                    print(f"Successfully processed {len(papers)} papers")
+                    return result
 
-                # Transform API response into our models
-                papers = [PaperMetadata(**paper) for paper in data.get("data", [])]
-
-                return SearchResults(
-                    total=data.get("total", 0),
-                    offset=data.get("offset", 0),
-                    next=data.get("next"),
-                    papers=papers,
-                )
+        except asyncio.TimeoutError:
+            raise Exception("Request to Semantic Scholar API timed out")
+        except aiohttp.ClientError as e:
+            raise Exception(
+                f"Network error while connecting to Semantic Scholar API: {str(e)}"
+            )
+        except Exception as e:
+            raise Exception(f"Error processing Semantic Scholar API request: {str(e)}")
 
     async def get_paper_details(
         self, paper_id: str, fields: Optional[List[str]] = None
