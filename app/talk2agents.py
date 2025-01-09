@@ -100,8 +100,8 @@ class DashboardApp:
                         f"""
                         <div class='paper-card'>
                             <h3>{i}. {paper.title}</h3>
-                            <p>👥 Authors: {', '.join(author['name'] for author in paper.authors)}</p>
-                            <p>📅 Year: {paper.year} | 📊 Citations: {paper.citations}</p>
+                            <p>👥 Authors: {', '.join(author.name for author in paper.authors)}</p>
+                            <p>📅 Year: {paper.year} | 📊 Citations: {paper.citations or 0}</p>
                         </div>
                         """,
                         unsafe_allow_html=True,
