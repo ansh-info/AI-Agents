@@ -1,5 +1,6 @@
+from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -10,6 +11,21 @@ class AgentStatus(Enum):
     PROCESSING = "processing"
     SUCCESS = "success"
     ERROR = "error"
+
+
+class PaperContext(BaseModel):
+    """Enhanced model for tracking paper details in conversation"""
+
+    paper_id: str = Field(alias="paperId")
+    title: str = Field(default="Untitled Paper")
+    authors: List[Dict[str, str]] = Field(default_factory=list)
+    year: Optional[int] = None
+    citations: Optional[int] = None
+    abstract: Optional[str] = None
+    url: Optional[str] = None
+    last_referenced: Optional[datetime] = Field(default_factory=datetime.now)
+    reference_count: int = 0
+    discussed_aspects: Set[str] = Field(default_factory=set)
 
 
 class SearchContext(BaseModel):
