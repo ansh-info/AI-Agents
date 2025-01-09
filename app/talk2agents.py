@@ -24,34 +24,53 @@ class DashboardApp:
             initial_sidebar_state="expanded",
         )
 
-        # Initialize debug state
         if "debug_messages" not in st.session_state:
             st.session_state.debug_messages = []
 
-        # Custom CSS
-        st.markdown(
-            """
-        <style>
-        .debug-message { 
-            padding: 10px;
-            margin: 5px 0;
-            border-radius: 5px;
-            background-color: #f0f2f6;
-        }
-        .debug-message.api { background-color: #e3f2fd; }
-        .debug-message.error { background-color: #ffebee; }
-        .debug-message.info { background-color: #f0f2f6; }
-        </style>
-        """,
-            unsafe_allow_html=True,
-        )
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-        # Header
+        # Custom CSS for chat interface
         st.markdown(
             """
-            <h1 style='text-align: center; color: #1e88e5; margin-bottom: 1rem;'>
-                📚 Academic Research Assistant
-            </h1>
+            <style>
+            .stApp {
+                max-width: 1200px;
+                margin: 0 auto;
+            }
+            .element-container {
+                width: 100%;
+            }
+            .stChatInputContainer {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                padding: 1rem 2rem;
+                background: white;
+                border-top: 1px solid #ddd;
+                z-index: 100;
+            }
+            .chat-messages {
+                margin-bottom: 100px; /* Space for fixed input */
+                padding: 20px;
+            }
+            .paper-card {
+                background-color: #f8f9fa;
+                padding: 1rem;
+                border-radius: 10px;
+                margin-bottom: 1rem;
+                border: 1px solid #e9ecef;
+            }
+            .debug-message { 
+                padding: 10px;
+                margin: 5px 0;
+                border-radius: 5px;
+            }
+            .debug-message.api { background-color: #e3f2fd; }
+            .debug-message.error { background-color: #ffebee; }
+            .debug-message.info { background-color: #f0f2f6; }
+            </style>
             """,
             unsafe_allow_html=True,
         )
@@ -64,35 +83,17 @@ class DashboardApp:
         """Render debug panel in sidebar"""
         with st.sidebar:
             st.markdown("### 🔍 Debug Panel")
-
-            # Add clear button
             if st.button("Clear Debug Log"):
                 st.session_state.debug_messages = []
-
-            # Show debug messages
             for msg in st.session_state.debug_messages:
                 st.markdown(
-                    f"""<div class="debug-message {msg['type']}">
-                        {msg['message']}
-                    </div>""",
+                    f"""<div class="debug-message {msg['type']}">{msg['message']}</div>""",
                     unsafe_allow_html=True,
                 )
 
     def render_papers(self, state: AgentState):
         """Render paper results"""
         if state.search_context.results and state.search_context.total_results > 0:
-            st.markdown(
-                f"""
-                <div style='text-align: center; padding: 1rem; 
-                background-color: #e3f2fd; border-radius: 10px; margin-bottom: 2rem;'>
-                    <h3 style='color: #1e88e5; margin: 0;'>
-                        Found {state.search_context.total_results} papers
-                    </h3>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
             for i, paper in enumerate(state.search_context.results, 1):
                 with st.container():
                     st.markdown(
@@ -105,39 +106,39 @@ class DashboardApp:
                         """,
                         unsafe_allow_html=True,
                     )
-
                     if paper.abstract:
                         with st.expander("Show Abstract"):
                             st.write(paper.abstract)
-
-    def render_chat_message(self, message: dict):
-        """Render a chat message"""
-        if message.get("content"):
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
 
     def run(self):
         """Run the dashboard application"""
         self.setup_page()
         self.render_debug_panel()
 
-        # Main content area
-        with st.container():
-            # Chat interface
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
+        # Main chat container with bottom padding for fixed input
+        chat_container = st.container()
+
+        with chat_container:
+            st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
 
             # Display chat history
             for message in st.session_state.messages:
-                self.render_chat_message(message)
+                with st.chat_message(message["role"]):
+                    st.write(message["content"])
+                    # If this is a system message with search results, show papers
+                    if message["role"] == "system" and "Found" in message.get(
+                        "content", ""
+                    ):
+                        if hasattr(message, "papers"):
+                            self.render_papers(message["papers"])
 
-            # Chat input
-            if prompt := st.chat_input(
-                "Chat with me or ask me to search for papers..."
-            ):
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Fixed chat input at bottom
+        with st.container():
+            if prompt := st.chat_input("Message Academic Research Assistant..."):
                 # Add user message
                 st.session_state.messages.append({"role": "user", "content": prompt})
-                self.render_chat_message({"role": "user", "content": prompt})
 
                 # Debug log
                 self.add_debug_message(f"User Input: {prompt}", "info")
@@ -145,9 +146,7 @@ class DashboardApp:
                 # Process command
                 with st.spinner("Thinking..."):
                     try:
-                        # Debug log before processing
                         self.add_debug_message("Processing command...", "info")
-
                         state = asyncio.run(self.manager.process_command_async(prompt))
 
                         # Debug log after processing
@@ -155,14 +154,11 @@ class DashboardApp:
                             f"Command processed with status: {state.status}", "info"
                         )
 
-                        # Get the response message
+                        # Get and show response
                         response_message = state.memory.messages[-1]
-
-                        # Add to session state and display
                         st.session_state.messages.append(response_message)
-                        self.render_chat_message(response_message)
 
-                        # If this was a successful search, display papers
+                        # If search was successful, attach papers to message
                         if (
                             state.status == AgentStatus.SUCCESS
                             and state.search_context.results
@@ -171,7 +167,7 @@ class DashboardApp:
                                 f"Found {len(state.search_context.results)} papers",
                                 "api",
                             )
-                            self.render_papers(state)
+                            response_message["papers"] = state
 
                     except Exception as e:
                         error_msg = {
@@ -179,8 +175,10 @@ class DashboardApp:
                             "content": f"I apologize, but I encountered an error: {str(e)}",
                         }
                         st.session_state.messages.append(error_msg)
-                        self.render_chat_message(error_msg)
                         self.add_debug_message(f"Error: {str(e)}", "error")
+
+                # Rerun to update the UI
+                st.rerun()
 
 
 def main():
