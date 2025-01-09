@@ -123,16 +123,21 @@ class EnhancedWorkflowManager:
             self.current_state.error_message = error_msg
 
     async def _enhance_query(self, query: str) -> str:
-        """Enhance search query using LLM"""
-        prompt = f"""Enhance this academic search query: "{query}"
-        Remove conversational phrases and add relevant academic terms.
-        Keep it focused and return only the enhanced search terms."""
+        """Clean and enhance search query"""
+        # Remove common search phrases
+        clean_phrases = [
+            "can you find me",
+            "find me",
+            "search for",
+            "papers on",
+            "papers about",
+        ]
+        cleaned_query = query.lower()
+        for phrase in clean_phrases:
+            cleaned_query = cleaned_query.replace(phrase, "")
 
-        try:
-            enhanced = await self.llm_client.generate(prompt=prompt, max_tokens=50)
-            return enhanced.strip() or query
-        except Exception:
-            return query.replace("search", "").replace("find", "").strip()
+        # Clean and return
+        return cleaned_query.strip()
 
     def reset_state(self):
         """Reset state to initial values"""
