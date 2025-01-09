@@ -12,16 +12,14 @@ from clients.ollama_enhanced import EnhancedOllamaClient
 from clients.semantic_scholar_client import (SearchResults,
                                              SemanticScholarClient)
 from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
-                               SearchContext)
+                               PaperContext, SearchContext)
 
 
 class EnhancedWorkflowManager:
     def __init__(self, model_name: str = "llama3.2:1b"):
         """Initialize workflow manager"""
         self.current_state = AgentState()
-        self.llm_client = OllamaClient(
-            model_name=model_name
-        )  # Pass model_name correctly
+        self.llm_client = OllamaClient(model_name=model_name)
         self.s2_client = SemanticScholarClient()
         self.model_name = model_name
         self.search_limit = 10
@@ -78,65 +76,67 @@ class EnhancedWorkflowManager:
     async def _handle_search(self, command: str):
         """Handle search command with proper error handling"""
         try:
-            # Clean and enhance query
-            query = await self._enhance_query(command)
+            # Clean query
+            query = self._clean_search_query(command)
 
-            # Perform search with retry logic
-            max_retries = 3
-            retry_delay = 2  # seconds
-
-            for attempt in range(max_retries):
-                try:
-                    results = await self.s2_client.search_papers(
-                        query=query, limit=self.search_limit  # Enforce limit
-                    )
-                    break
-                except Exception as e:
-                    if "429" in str(e) and attempt < max_retries - 1:
-                        await asyncio.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                        continue
-                    raise e
-
-            # Update state with results
-            self.current_state.update_search_results(results.papers, results.total)
-
-            # Format response
-            response = f"Found {results.total} papers. Here are the top {min(len(results.papers), self.search_limit)} most relevant ones:\n\n"
-            for i, paper in enumerate(results.papers[: self.search_limit], 1):
-                response += (
-                    f"{i}. {paper.title} ({paper.year}) - {paper.citations} citations\n"
+            # Perform search
+            try:
+                results = await self.s2_client.search_papers(
+                    query=query, limit=self.search_limit
                 )
-            response += "\nYou can ask about any paper by its number or title, or ask me any other questions."
 
-            self.current_state.add_message("system", response)
+                # Convert Semantic Scholar papers to PaperContext
+                paper_contexts = []
+                for paper in results.papers:
+                    paper_context = PaperContext(
+                        paper_id=paper.paperId,
+                        title=paper.title,
+                        authors=[{"name": author.name} for author in paper.authors],
+                        year=paper.year,
+                        citations=paper.citations,
+                        abstract=paper.abstract,
+                        url=paper.url,
+                    )
+                    paper_contexts.append(paper_context)
+
+                # Update state
+                self.current_state.status = AgentStatus.SUCCESS
+                self.current_state.search_context.results = paper_contexts
+                self.current_state.search_context.total_results = results.total
+
+                # Format response
+                response = f"Found {results.total} papers. Here are the top {len(paper_contexts)} most relevant ones:\n\n"
+                for i, paper in enumerate(paper_contexts, 1):
+                    response += f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations\n"
+                response += "\nYou can ask about any paper by its number or title, or ask me any other questions."
+
+                self.current_state.add_message("system", response)
+
+            except Exception as e:
+                raise Exception(f"Search failed: {str(e)}")
 
         except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg:
-                response = "I apologize, but I'm currently rate-limited by the academic search API. Please try again in a few moments."
-            else:
-                response = f"I apologize, but I encountered an error while searching: {error_msg}"
-
-            self.current_state.add_message("system", response)
             self.current_state.status = AgentStatus.ERROR
-            self.current_state.error_message = error_msg
+            self.current_state.error_message = str(e)
+            self.current_state.add_message(
+                "system",
+                f"I apologize, but I encountered an error while searching: {str(e)}",
+            )
 
-    async def _enhance_query(self, query: str) -> str:
-        """Clean and enhance search query"""
-        # Remove common search phrases
+    def _clean_search_query(self, query: str) -> str:
+        """Clean the search query"""
         clean_phrases = [
             "can you find me",
             "find me",
             "search for",
             "papers on",
             "papers about",
+            "paper on",
+            "paper about",
         ]
         cleaned_query = query.lower()
         for phrase in clean_phrases:
             cleaned_query = cleaned_query.replace(phrase, "")
-
-        # Clean and return
         return cleaned_query.strip()
 
     def reset_state(self):
