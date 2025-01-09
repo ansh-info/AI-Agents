@@ -18,30 +18,29 @@ class DashboardApp:
     def setup_page(self):
         """Setup page configuration and styling"""
         st.set_page_config(
-            page_title="Academic Paper Search", page_icon="📚", layout="wide"
+            page_title="Academic Paper Search",
+            page_icon="📚",
+            layout="wide",
+            initial_sidebar_state="expanded",
         )
+
+        # Initialize debug state
+        if "debug_messages" not in st.session_state:
+            st.session_state.debug_messages = []
 
         # Custom CSS
         st.markdown(
             """
         <style>
-        .stApp {
-            max-width: 1200px;
-            margin: 0 auto;
+        .debug-message { 
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            background-color: #f0f2f6;
         }
-        .paper-card {
-            background-color: #f8f9fa;
-            padding: 1rem;
-            border-radius: 10px;
-            margin-bottom: 1rem;
-            border: 1px solid #e9ecef;
-        }
-        .chat-container {
-            margin-top: 2rem;
-            padding: 1rem;
-            border-radius: 10px;
-            background-color: #ffffff;
-        }
+        .debug-message.api { background-color: #e3f2fd; }
+        .debug-message.error { background-color: #ffebee; }
+        .debug-message.info { background-color: #f0f2f6; }
         </style>
         """,
             unsafe_allow_html=True,
@@ -53,17 +52,35 @@ class DashboardApp:
             <h1 style='text-align: center; color: #1e88e5; margin-bottom: 1rem;'>
                 📚 Academic Research Assistant
             </h1>
-            <p style='text-align: center; color: #666; margin-bottom: 2rem;'>
-                Chat with me about research or ask me to find academic papers!
-            </p>
-        """,
+            """,
             unsafe_allow_html=True,
         )
+
+    def add_debug_message(self, message: str, msg_type: str = "info"):
+        """Add a debug message to the session state"""
+        st.session_state.debug_messages.append({"message": message, "type": msg_type})
+
+    def render_debug_panel(self):
+        """Render debug panel in sidebar"""
+        with st.sidebar:
+            st.markdown("### 🔍 Debug Panel")
+
+            # Add clear button
+            if st.button("Clear Debug Log"):
+                st.session_state.debug_messages = []
+
+            # Show debug messages
+            for msg in st.session_state.debug_messages:
+                st.markdown(
+                    f"""<div class="debug-message {msg['type']}">
+                        {msg['message']}
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
 
     def render_papers(self, state: AgentState):
         """Render paper results"""
         if state.search_context.results and state.search_context.total_results > 0:
-            # Results header
             st.markdown(
                 f"""
                 <div style='text-align: center; padding: 1rem; 
@@ -72,11 +89,10 @@ class DashboardApp:
                         Found {state.search_context.total_results} papers
                     </h3>
                 </div>
-            """,
+                """,
                 unsafe_allow_html=True,
             )
 
-            # Display papers
             for i, paper in enumerate(state.search_context.results, 1):
                 with st.container():
                     st.markdown(
@@ -86,18 +102,13 @@ class DashboardApp:
                             <p>👥 Authors: {', '.join(author['name'] for author in paper.authors)}</p>
                             <p>📅 Year: {paper.year} | 📊 Citations: {paper.citations}</p>
                         </div>
-                    """,
+                        """,
                         unsafe_allow_html=True,
                     )
 
                     if paper.abstract:
                         with st.expander("Show Abstract"):
                             st.write(paper.abstract)
-
-    def initialize_session_state(self):
-        """Initialize session state for conversation history"""
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
 
     def render_chat_message(self, message: dict):
         """Render a chat message"""
@@ -108,49 +119,68 @@ class DashboardApp:
     def run(self):
         """Run the dashboard application"""
         self.setup_page()
-        self.initialize_session_state()
+        self.render_debug_panel()
 
-        # Chat interface
-        st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
+        # Main content area
+        with st.container():
+            # Chat interface
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
 
-        # Display chat history from session state
-        for message in st.session_state.messages:
-            self.render_chat_message(message)
+            # Display chat history
+            for message in st.session_state.messages:
+                self.render_chat_message(message)
 
-        # Chat input
-        if prompt := st.chat_input("Chat with me or ask me to search for papers..."):
-            # Add user message to session state
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            self.render_chat_message({"role": "user", "content": prompt})
+            # Chat input
+            if prompt := st.chat_input(
+                "Chat with me or ask me to search for papers..."
+            ):
+                # Add user message
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                self.render_chat_message({"role": "user", "content": prompt})
 
-            # Process command
-            with st.spinner("Thinking..."):
-                try:
-                    state = asyncio.run(self.manager.process_command_async(prompt))
+                # Debug log
+                self.add_debug_message(f"User Input: {prompt}", "info")
 
-                    # Get the response message
-                    response_message = state.memory.messages[-1]
+                # Process command
+                with st.spinner("Thinking..."):
+                    try:
+                        # Debug log before processing
+                        self.add_debug_message("Processing command...", "info")
 
-                    # Add to session state and display
-                    st.session_state.messages.append(response_message)
-                    self.render_chat_message(response_message)
+                        state = asyncio.run(self.manager.process_command_async(prompt))
 
-                    # If this was a successful search, display papers
-                    if (
-                        state.status == AgentStatus.SUCCESS
-                        and state.search_context.results
-                    ):
-                        self.render_papers(state)
+                        # Debug log after processing
+                        self.add_debug_message(
+                            f"Command processed with status: {state.status}", "info"
+                        )
 
-                except Exception as e:
-                    error_msg = {
-                        "role": "system",
-                        "content": f"I apologize, but I encountered an error: {str(e)}",
-                    }
-                    st.session_state.messages.append(error_msg)
-                    self.render_chat_message(error_msg)
+                        # Get the response message
+                        response_message = state.memory.messages[-1]
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                        # Add to session state and display
+                        st.session_state.messages.append(response_message)
+                        self.render_chat_message(response_message)
+
+                        # If this was a successful search, display papers
+                        if (
+                            state.status == AgentStatus.SUCCESS
+                            and state.search_context.results
+                        ):
+                            self.add_debug_message(
+                                f"Found {len(state.search_context.results)} papers",
+                                "api",
+                            )
+                            self.render_papers(state)
+
+                    except Exception as e:
+                        error_msg = {
+                            "role": "system",
+                            "content": f"I apologize, but I encountered an error: {str(e)}",
+                        }
+                        st.session_state.messages.append(error_msg)
+                        self.render_chat_message(error_msg)
+                        self.add_debug_message(f"Error: {str(e)}", "error")
 
 
 def main():
