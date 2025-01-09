@@ -180,51 +180,83 @@ class StreamlitApp:
 
     def render_search_interface(self):
         """Render search interface"""
-        st.title("Academic Paper Search Assistant")
+        # Custom CSS
+        st.markdown(
+            """
+        <style>
+        .stApp {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .search-container {
+            background-color: #f8f9fa;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        </style>
+        """,
+            unsafe_allow_html=True,
+        )
 
-        # Initialize searching state if not exists
-        if "is_searching" not in st.session_state:
-            st.session_state.is_searching = False
+        # Header
+        st.markdown(
+            """
+            <h1 style='text-align: center; color: #1e88e5; margin-bottom: 1rem;'>
+                📚 Academic Paper Search Assistant
+            </h1>
+            <p style='text-align: center; color: #666; margin-bottom: 2rem;'>
+                Search through academic papers, explore research, and ask questions about papers
+            </p>
+        """,
+            unsafe_allow_html=True,
+        )
 
+        # Debug section for showing backend processes
+        if "debug_messages" not in st.session_state:
+            st.session_state.debug_messages = []
+
+        # Search interface
+        st.markdown('<div class="search-container">', unsafe_allow_html=True)
         with st.form(key="search_form"):
             query = st.text_input(
-                "Search papers:",
+                "🔍 Search papers:",
                 key="search_input",
-                placeholder="Enter search terms (e.g., 'machine learning')",
+                placeholder="Enter your research query (e.g., 'machine learning in healthcare')",
             )
 
-            col1, col2 = st.columns(2)
-            with col1:
-                year = st.text_input("Year (e.g., 2023):", placeholder="YYYY")
-            with col2:
-                citations = st.text_input("Min Citations:", placeholder="e.g., 100")
+            cols = st.columns([2, 2, 1])
+            with cols[0]:
+                year = st.text_input("📅 Year:", placeholder="e.g., 2023")
+            with cols[1]:
+                citations = st.text_input("📊 Min Citations:", placeholder="e.g., 100")
+            with cols[2]:
+                search_button = st.form_submit_button(
+                    "🔍 Search", use_container_width=True, type="primary"
+                )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            submit_button = st.form_submit_button(
-                label=(
-                    "🔍 Search"
-                    if not st.session_state.is_searching
-                    else "⌛ Searching..."
-                ),
-                disabled=st.session_state.is_searching,
-            )
+        # Process search
+        if search_button and query:
+            # Create tabs for Results and Debug Output
+            results_tab, debug_tab = st.tabs(["📊 Search Results", "🔧 Debug Output"])
 
-            if submit_button and query:
-                try:
-                    st.session_state.is_searching = True
-                    st.rerun()  # Rerun to update button state
-                except Exception as e:
-                    st.error(f"⚠️ An error occurred: {str(e)}")
-                    st.session_state.is_searching = False
+            with debug_tab:
+                st.markdown("### 🔍 Search Process")
+                debug_container = st.empty()
 
-        # Process search after form (to avoid streamlit form limitations)
-        if st.session_state.is_searching and query:
-            try:
-                asyncio.run(self.process_search(query, year, citations))
-            except Exception as e:
-                st.error(f"⚠️ An error occurred: {str(e)}")
-            finally:
-                st.session_state.is_searching = False
-                st.rerun()  # Rerun to update button state
+            with results_tab:
+                with st.spinner("🔍 Searching..."):
+                    try:
+                        asyncio.run(self.process_search(query, year, citations))
+                    except Exception as e:
+                        st.error(f"⚠️ Search failed: {str(e)}")
+
+            # Update debug output in the debug tab
+            with debug_container:
+                for msg in st.session_state.debug_messages:
+                    st.write(msg)
 
     def render_paper_details(self, paper):
         """Render detailed paper view with chat interface"""
@@ -282,7 +314,17 @@ class StreamlitApp:
             results = st.session_state.current_results
 
             if results.papers:
-                st.subheader(f"Found {results.total} papers")
+                st.markdown(
+                    f"""
+                    <div style='text-align: center; padding: 1rem; background-color: #e3f2fd; 
+                    border-radius: 10px; margin-bottom: 2rem;'>
+                        <h2 style='color: #1e88e5; margin: 0;'>
+                            📚 Found {results.total} papers
+                        </h2>
+                    </div>
+                """,
+                    unsafe_allow_html=True,
+                )
 
                 if st.session_state.selected_paper:
                     # Show selected paper
@@ -295,27 +337,42 @@ class StreamlitApp:
                     # Show search results
                     for paper in results.papers:
                         with st.container():
+                            st.markdown(
+                                f"""
+                                <div style='background-color: white; padding: 1.5rem; 
+                                border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+                                margin-bottom: 1rem;'>
+                                    <h3 style='color: #1e88e5; margin-top: 0;'>{paper.title}</h3>
+                                </div>
+                            """,
+                                unsafe_allow_html=True,
+                            )
+
                             col1, col2 = st.columns([4, 1])
                             with col1:
-                                st.markdown(f"### {paper.title}")
+                                authors = ", ".join(
+                                    a.get("name", "") for a in paper.authors[:3]
+                                )
+                                if len(paper.authors) > 3:
+                                    authors += " et al."
+                                st.write(f"👥 **Authors:** {authors}")
+                                st.write(
+                                    f"📅 **Year:** {paper.year} | 📊 **Citations:** {paper.citationCount}"
+                                )
+                                if paper.abstract:
+                                    with st.expander("📖 Show Abstract"):
+                                        st.write(paper.abstract)
                             with col2:
-                                if st.button("Select", key=f"select_{paper.paperId}"):
+                                if st.button(
+                                    "🔍 View Details",
+                                    key=f"select_{paper.paperId}",
+                                    use_container_width=True,
+                                ):
                                     st.session_state.selected_paper = paper.paperId
                                     st.rerun()
-
-                            st.write(
-                                f"**Authors:** {', '.join(a.get('name', '') for a in paper.authors[:3])}"
-                            )
-                            st.write(
-                                f"**Year:** {paper.year} | **Citations:** {paper.citationCount}"
-                            )
-                            if paper.abstract:
-                                with st.expander("Abstract"):
-                                    st.write(paper.abstract)
-                            st.divider()
             else:
-                st.info(
-                    "No papers found matching your criteria. Try adjusting your search terms."
+                st.warning(
+                    "🔍 No papers found matching your criteria. Try adjusting your search terms."
                 )
 
     def render_history(self):
