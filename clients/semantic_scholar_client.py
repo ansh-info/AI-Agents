@@ -3,7 +3,14 @@ import os
 from typing import Any, Dict, List, Optional
 
 import aiohttp
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class Author(BaseModel):
+    """Model for author information"""
+
+    authorId: Optional[str] = None
+    name: str
 
 
 class PaperMetadata(BaseModel):
@@ -13,24 +20,27 @@ class PaperMetadata(BaseModel):
     title: str
     abstract: Optional[str] = None
     year: Optional[int] = None
-    authors: List[Dict[str, str]] = []
+    authors: List[Author] = Field(default_factory=list)
     venue: Optional[str] = None
-    citations: Optional[int] = None  # Changed from citationCount for consistency
-    references: Optional[int] = None  # Changed from referenceCount for consistency
+    citations: Optional[int] = None
+    references: Optional[int] = None
     url: Optional[str] = None
 
     @classmethod
     def from_api_response(cls, data: Dict[str, Any]) -> "PaperMetadata":
         """Create PaperMetadata from API response"""
+        # Convert API author format to our Author model
+        authors = [Author(**author) for author in data.get("authors", [])]
+
         return cls(
             paperId=data.get("paperId", ""),
             title=data.get("title", ""),
             abstract=data.get("abstract"),
             year=data.get("year"),
-            authors=data.get("authors", []),
+            authors=authors,
             venue=data.get("venue"),
             citations=data.get("citationCount"),  # Map from API response
-            references=data.get("referenceCount"),  # Map from API response
+            references=data.get("referenceCount"),
             url=data.get("url"),
         )
 
@@ -41,7 +51,7 @@ class SearchResults(BaseModel):
     total: int
     offset: int
     next: Optional[int] = None
-    papers: List[PaperMetadata] = []
+    papers: List[PaperMetadata] = Field(default_factory=list)
 
 
 class SemanticScholarClient:
@@ -86,13 +96,9 @@ class SemanticScholarClient:
         if year:
             params["year"] = str(year)
 
-        # Debug information
-        debug_info = {
-            "url": f"{self.base_url}/paper/search",
-            "params": params,
-            "headers": {k: v for k, v in self.headers.items() if k != "x-api-key"},
-        }
-        print(f"Making API request to Semantic Scholar:\n{debug_info}")
+        print(
+            f"Making API request to Semantic Scholar:\n{{'url': '{self.base_url}/paper/search', 'params': {params}}}"
+        )
 
         try:
             async with aiohttp.ClientSession(headers=self.headers) as session:
@@ -101,10 +107,6 @@ class SemanticScholarClient:
                 ) as response:
                     response_text = await response.text()
                     print(f"API Response Status: {response.status}")
-                    print(f"API Response Headers: {dict(response.headers)}")
-                    print(
-                        f"API Response Text: {response_text[:500]}..."
-                    )  # First 500 chars
 
                     if response.status != 200:
                         raise Exception(
