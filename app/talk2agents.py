@@ -51,10 +51,10 @@ class DashboardApp:
         st.markdown(
             """
             <h1 style='text-align: center; color: #1e88e5; margin-bottom: 1rem;'>
-                📚 Academic Paper Assistant
+                📚 Academic Research Assistant
             </h1>
             <p style='text-align: center; color: #666; margin-bottom: 2rem;'>
-                Search for academic papers and ask questions about them
+                Chat with me about research or ask me to find academic papers!
             </p>
         """,
             unsafe_allow_html=True,
@@ -94,9 +94,13 @@ class DashboardApp:
                         with st.expander("Show Abstract"):
                             st.write(paper.abstract)
 
+    def initialize_session_state(self):
+        """Initialize session state for conversation history"""
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
     def render_chat_message(self, message: dict):
         """Render a chat message"""
-        # Only render if the message has content
         if message.get("content"):
             with st.chat_message(message["role"]):
                 st.write(message["content"])
@@ -104,36 +108,47 @@ class DashboardApp:
     def run(self):
         """Run the dashboard application"""
         self.setup_page()
-
-        # Get current state
-        state = self.manager.get_state()
+        self.initialize_session_state()
 
         # Chat interface
         st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
 
-        # Display chat history
-        for message in state.memory.messages[
-            :-1
-        ]:  # Display all except the last message
+        # Display chat history from session state
+        for message in st.session_state.messages:
             self.render_chat_message(message)
 
         # Chat input
-        if prompt := st.chat_input("Ask about papers or search for research..."):
+        if prompt := st.chat_input("Chat with me or ask me to search for papers..."):
+            # Add user message to session state
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            self.render_chat_message({"role": "user", "content": prompt})
+
             # Process command
             with st.spinner("Thinking..."):
                 try:
                     state = asyncio.run(self.manager.process_command_async(prompt))
 
-                    # Display only the last message (response)
-                    last_message = state.memory.messages[-1]
-                    self.render_chat_message(last_message)
+                    # Get the response message
+                    response_message = state.memory.messages[-1]
 
-                    # If this was a search, display papers
-                    if "Found" in last_message["content"]:
+                    # Add to session state and display
+                    st.session_state.messages.append(response_message)
+                    self.render_chat_message(response_message)
+
+                    # If this was a successful search, display papers
+                    if (
+                        state.status == AgentStatus.SUCCESS
+                        and state.search_context.results
+                    ):
                         self.render_papers(state)
 
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    error_msg = {
+                        "role": "system",
+                        "content": f"I apologize, but I encountered an error: {str(e)}",
+                    }
+                    st.session_state.messages.append(error_msg)
+                    self.render_chat_message(error_msg)
 
         st.markdown("</div>", unsafe_allow_html=True)
 
