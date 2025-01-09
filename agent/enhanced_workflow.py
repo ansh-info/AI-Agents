@@ -30,7 +30,14 @@ class EnhancedWorkflowManager:
             # Add command to state
             self.current_state.add_message("user", command)
 
-            # Check if it's a search command
+            # First check if it's a question about a specific paper
+            if self.current_state.search_context.results:
+                paper_ref = self._get_paper_reference(command)
+                if paper_ref is not None:
+                    await self._handle_paper_question(paper_ref, command)
+                    return self.current_state
+
+            # If not a paper question, check if it's a search command
             if self._is_search_command(command.lower()):
                 await self._handle_search(command)
             else:
@@ -43,6 +50,57 @@ class EnhancedWorkflowManager:
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             return self.current_state
+
+    def _get_paper_reference(self, command: str) -> Optional[PaperContext]:
+        """Extract paper reference from command"""
+        command_lower = command.lower()
+
+        # Check for numeric references
+        if "paper" in command_lower or "the" in command_lower:
+            words = command_lower.split()
+            for i, word in enumerate(words):
+                if word in ["paper", "the"] and i > 0:
+                    try:
+                        num = int(words[i - 1])
+                        if 1 <= num <= len(self.current_state.search_context.results):
+                            return self.current_state.search_context.results[num - 1]
+                    except (ValueError, IndexError):
+                        pass
+
+        # Check for ordinal references
+        ordinals = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+        for ordinal, num in ordinals.items():
+            if ordinal in command_lower and num <= len(
+                self.current_state.search_context.results
+            ):
+                return self.current_state.search_context.results[num - 1]
+
+        return None
+
+    async def _handle_paper_question(self, paper: PaperContext, question: str):
+        """Handle questions about a specific paper"""
+        # Create context about the paper
+        paper_context = (
+            f"Title: {paper.title}\n"
+            f"Authors: {', '.join(a['name'] for a in paper.authors)}\n"
+            f"Year: {paper.year or 'Not specified'}\n"
+            f"Citations: {paper.citations or 0}\n"
+        )
+        if paper.abstract:
+            paper_context += f"Abstract: {paper.abstract}\n"
+
+        prompt = f"""Based on this paper:
+{paper_context}
+
+Please answer this question: {question}
+
+If the question is asking for details not provided in the context, focus on what information is available and mention if specific details are not provided."""
+
+        response = await self.llm_client.generate(prompt=prompt, max_tokens=300)
+
+        self.current_state.memory.focused_paper = paper
+        self.current_state.add_message("system", response.strip())
+        self.current_state.status = AgentStatus.SUCCESS
 
     def _is_search_command(self, command: str) -> bool:
         """Check if the command is a search request"""
@@ -108,7 +166,9 @@ class EnhancedWorkflowManager:
                 response = f"Found {results.total} papers. Here are the top {len(paper_contexts)} most relevant ones:\n\n"
                 for i, paper in enumerate(paper_contexts, 1):
                     response += f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations\n"
-                response += "\nYou can ask about any paper by its number or title, or ask me any other questions."
+                response += (
+                    "\nYou can ask me about any of these papers by number or title."
+                )
 
                 self.current_state.add_message("system", response)
 
