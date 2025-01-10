@@ -171,7 +171,20 @@ Please provide a comprehensive answer based on the available information."""
 
             # Add papers to context
             for paper in results.papers:
-                self.current_state.search_context.add_paper(paper.__dict__)
+                # Convert paper data to correct format
+                paper_data = {
+                    "paperId": paper.paperId,
+                    "title": paper.title,
+                    "abstract": paper.abstract,
+                    "year": paper.year,
+                    "authors": [
+                        {"name": author.name, "authorId": author.authorId}
+                        for author in paper.authors
+                    ],
+                    "citations": paper.citations,
+                    "url": paper.url,
+                }
+                self.current_state.search_context.add_paper(paper_data)
 
             # Format response
             response = f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant ones:\n\n"
