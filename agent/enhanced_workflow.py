@@ -25,7 +25,6 @@ class EnhancedWorkflowManager:
         self.model_name = model_name
         self.search_limit = 10
         self.workflow_graph = WorkflowGraph()
-        self.graph = self.workflow_graph.get_graph()
 
     async def process_command_async(self, command: str) -> AgentState:
         """Process command using LangGraph workflow"""
@@ -43,8 +42,8 @@ class EnhancedWorkflowManager:
             else:
                 await self._handle_conversation(command)
 
-            # Run through the graph to update state
-            self.current_state = self.graph.invoke(self.current_state)
+            # Process through the workflow graph
+            self.current_state = self.workflow_graph.process_state(self.current_state)
             return self.current_state
 
         except Exception as e:
@@ -123,7 +122,7 @@ class EnhancedWorkflowManager:
 
         paper_context = (
             f"Title: {paper.title}\n"
-            f"Authors: {', '.join(a['name'] for a in paper.authors)}\n"
+            f"Authors: {', '.join(a.name for a in paper.authors)}\n"
             f"Year: {paper.year or 'Not specified'}\n"
             f"Citations: {paper.citations or 0}\n"
         )
@@ -158,28 +157,19 @@ Please provide a comprehensive answer based on the available information."""
                 query=query, limit=self.search_limit
             )
 
-            # Convert to PaperContext
-            paper_contexts = []
-            for paper in results.papers:
-                paper_context = PaperContext(
-                    paper_id=paper.paperId,
-                    title=paper.title,
-                    authors=[{"name": author.name} for author in paper.authors],
-                    year=paper.year,
-                    citations=paper.citations,
-                    abstract=paper.abstract,
-                    url=paper.url,
-                )
-                paper_contexts.append(paper_context)
-
             # Update state
             self.current_state.status = AgentStatus.SUCCESS
-            self.current_state.search_context.results = paper_contexts
+            self.current_state.search_context.query = query
             self.current_state.search_context.total_results = results.total
+            self.current_state.search_context.results = []
+
+            # Add papers to context
+            for paper in results.papers:
+                self.current_state.search_context.add_paper(paper.__dict__)
 
             # Format response
-            response = f"Found {results.total} papers. Here are the top {len(paper_contexts)} most relevant ones:\n\n"
-            for i, paper in enumerate(paper_contexts, 1):
+            response = f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant ones:\n\n"
+            for i, paper in enumerate(self.current_state.search_context.results, 1):
                 response += f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations\n"
             response += "\nYou can ask me about any of these papers by number or title."
 
