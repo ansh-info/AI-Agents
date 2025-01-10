@@ -43,7 +43,13 @@ class EnhancedWorkflowManager:
                 await self._handle_conversation(command)
 
             # Process through the workflow graph
-            self.current_state = self.workflow_graph.process_state(self.current_state)
+            try:
+                processed_state = self.workflow_graph.process_state(self.current_state)
+                if processed_state:
+                    self.current_state = processed_state
+            except Exception as e:
+                self.current_state.status = AgentStatus.ERROR
+                self.current_state.error_message = str(e)
             return self.current_state
 
         except Exception as e:
