@@ -13,6 +13,7 @@ class WorkflowGraph:
     def __init__(self):
         """Initialize the workflow graph"""
         self.graph = StateGraph(AgentState)
+        self.current_state = AgentState()
         self.setup_graph()
 
     def setup_graph(self):
@@ -38,46 +39,46 @@ class WorkflowGraph:
         # Set entry point
         self.graph.set_entry_point("start")
 
-    def _start_node(self, state: AgentState) -> Dict[str, Any]:
+    def _start_node(self, state: AgentState) -> AgentState:
         """Initialize state for new message"""
         state.status = AgentStatus.PROCESSING
-        return {"state": state, "next": "route"}
+        return {"state": state}
 
-    def _route_message(self, state: AgentState) -> Dict[str, Any]:
+    def _route_message(self, state: AgentState) -> AgentState:
         """Route message to appropriate handler"""
         message = state.memory.messages[-1]["content"].lower()
+        next_node = "process_conversation"
 
         # Check if this is about a previous paper
         if state.search_context.results and any(
             ref in message for ref in ["paper", "study", "research", "article"]
         ):
-            return {"state": state, "next": "process_paper_question"}
+            next_node = "process_paper_question"
 
         # Check if this is a search request
-        if any(
+        elif any(
             term in message for term in ["find", "search", "look for", "papers about"]
         ):
-            return {"state": state, "next": "process_search"}
+            next_node = "process_search"
 
-        # Default to conversation
-        return {"state": state, "next": "process_conversation"}
+        return {"state": state, "next": next_node}
 
-    def _process_search(self, state: AgentState) -> Dict[str, Any]:
+    def _process_search(self, state: AgentState) -> AgentState:
         """Process search request"""
         # Note: Actual search handling is done in EnhancedWorkflowManager
         return {"state": state, "next": "update_memory"}
 
-    def _process_paper_question(self, state: AgentState) -> Dict[str, Any]:
+    def _process_paper_question(self, state: AgentState) -> AgentState:
         """Process paper-related questions"""
         # Note: Actual paper question handling is done in EnhancedWorkflowManager
         return {"state": state, "next": "update_memory"}
 
-    def _process_conversation(self, state: AgentState) -> Dict[str, Any]:
+    def _process_conversation(self, state: AgentState) -> AgentState:
         """Process general conversation"""
         # Note: Actual conversation handling is done in EnhancedWorkflowManager
         return {"state": state, "next": "update_memory"}
 
-    def _update_memory(self, state: AgentState) -> Dict[str, Any]:
+    def _update_memory(self, state: AgentState) -> AgentState:
         """Update conversation memory"""
         if state.status != AgentStatus.ERROR:
             state.status = AgentStatus.SUCCESS
@@ -86,6 +87,13 @@ class WorkflowGraph:
     def get_graph(self):
         """Get the compiled graph"""
         return self.graph.compile()
+
+    def process_state(self, state: AgentState) -> AgentState:
+        """Process a state through the graph"""
+        result = self.graph.invoke(state)
+        if isinstance(result, dict) and "state" in result:
+            return result["state"]
+        return state
 
     def get_state(self) -> AgentState:
         """Get current state"""
