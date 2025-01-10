@@ -6,14 +6,17 @@ from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 
+from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus, ConversationMemory
 
 
 class WorkflowGraph:
-    def __init__(self):
-        """Initialize the workflow graph with enhanced state management"""
+    def __init__(self, ollama_client: Optional[OllamaClient] = None, s2_client: Optional[SemanticScholarClient] = None):
+        """Initialize the workflow graph with client integrations"""
         self.graph = StateGraph(AgentState)
         self.current_state = AgentState()
+        self.ollama_client = ollama_client or OllamaClient()
+        self.s2_client = s2_client or SemanticScholarClient()
         self.setup_graph()
 
     def setup_graph(self):
@@ -113,9 +116,159 @@ class WorkflowGraph:
             state.error_message = f"Error in message routing: {str(e)}"
             return {"state": state, "next": END}
 
-    def _extract_paper_reference(
-        self, message: str, state: AgentState
-    ) -> Optional[Dict]:
+    async def _process_search(self, state: AgentState) -> Dict:
+        """Process search request with direct S2 integration"""
+        try:
+            # Extract search query from latest message
+            latest_message = state.memory.messages[-1]["content"]
+            query = self._clean_search_query(latest_message)
+
+            # Perform search using S2 client
+            results = await self.s2_client.search_papers(
+                query=query,
+                limit=10  # Configurable
+            )
+
+            # Update state with search results
+            state.search_context.query = query
+            state.search_context.total_results = results.total
+            state.search_context.results = []
+
+            for paper in results.papers:
+                paper_data = {
+                    "paperId": paper.paperId,
+                    "title": paper.title,
+                    "abstract": paper.abstract,
+                    "year": paper.year,
+                    "authors": [{"name": author.name, "authorId": author.authorId} 
+                               for author in paper.authors],
+                    "citations": paper.citations,
+                    "url": paper.url
+                }
+        return context
+                state.search_context.add_paper(paper_data)
+
+            # Generate response using Ollama
+            response = await self._generate_search_response(state)
+            state.add_message("system", response)
+            
+            state.current_step = "search_processed"
+            state.status = AgentStatus.SUCCESS
+            
+        except Exception as e:
+            state.status = AgentStatus.ERROR
+            state.error_message = f"Search processing error: {str(e)}"
+            
+        return {"state": state, "next": "update_memory"}
+
+    async def _process_paper_question(self, state: AgentState) -> Dict:
+        """Process paper-related questions with LLM integration"""
+        try:
+            # Get the paper being discussed
+            paper = state.memory.focused_paper
+            if not paper:
+                paper = self._extract_paper_reference(
+                    state.memory.messages[-1]["content"], 
+                    state
+                )
+
+            if not paper:
+                response = "I'm not sure which paper you're referring to. Could you specify the paper number or title?"
+                state.add_message("system", response)
+                return {"state": state, "next": "update_memory"}
+
+            # Build context for the LLM
+            paper_context = (
+                f"Title: {paper.title}\n"
+                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
+                f"Year: {paper.year or 'Not specified'}\n"
+                f"Citations: {paper.citations or 0}\n"
+                f"Abstract: {paper.abstract or 'Not available'}\n"
+            )
+
+            # Get the question from the latest message
+            question = state.memory.messages[-1]["content"]
+
+            # Generate response using Ollama
+            prompt = f"""Based on this academic paper:
+{paper_context}
+
+Question: {question}
+
+Please provide a clear response that addresses the question while considering:
+1. The paper's main findings
+2. Relevant methodology
+3. Key conclusions
+4. Any limitations mentioned
+5. The broader impact of the research"""
+
+            response = await self.ollama_client.generate(
+                prompt=prompt,
+                system_prompt="You are a helpful academic research assistant.",
+                max_tokens=300
+            )
+
+            state.memory.focused_paper = paper
+            state.add_message("system", response.strip())
+            state.current_step = "paper_processed"
+            state.status = AgentStatus.SUCCESS
+
+        except Exception as e:
+            state.status = AgentStatus.ERROR
+            state.error_message = f"Paper question processing error: {str(e)}"
+
+        return {"state": state, "next": "update_memory"}
+
+    async def _process_conversation(self, state: AgentState) -> Dict:
+        """Process general conversation with context-aware LLM integration"""
+        try:
+            # Build conversation context
+            context = []
+            
+            # Add recent conversation history
+            recent_messages = state.memory.messages[-5:]
+            if recent_messages:
+                context.append("Recent conversation:")
+                for msg in recent_messages:
+                    context.append(f"{msg['role']}: {msg['content']}")
+
+            # Add search context if available
+            if state.search_context.results:
+                context.append("\nAvailable papers:")
+                for i, paper in enumerate(state.search_context.results, 1):
+                    context.append(
+                        f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
+                    )
+
+            # Add focused paper context if available
+            if state.memory.focused_paper:
+                paper = state.memory.focused_paper
+                context.append(f"\nCurrently discussing: {paper.title}")
+
+            # Generate response
+            prompt = f"""Context:
+{chr(10).join(context)}
+
+Current query: {state.memory.messages[-1]['content']}
+Please provide a helpful response based on the available context."""
+
+            response = await self.ollama_client.generate(
+                prompt=prompt,
+                system_prompt="You are a helpful academic research assistant.",
+                max_tokens=300
+            )
+
+            state.add_message("system", response.strip())
+            state.current_step = "conversation_processed"
+            state.status = AgentStatus.SUCCESS
+
+        except Exception as e:
+            state.status = AgentStatus.ERROR
+            state.error_message = f"Conversation processing error: {str(e)}"
+
+        return {"state": state, "next": "update_memory"}
+
+    def _extract_paper_reference(self, message: str, state: AgentState) -> Optional[Dict]:
         """Enhanced paper reference extraction"""
         if not state.search_context.results:
             return None
@@ -147,20 +300,54 @@ class WorkflowGraph:
 
         return None
 
-    def _process_search(self, state: AgentState) -> Dict:
-        """Process search request"""
-        state.current_step = "search_processed"
-        return {"state": state, "next": "update_memory"}
+    async def _generate_search_response(self, state: AgentState) -> str:
+        """Generate structured search response using LLM"""
+        context = f"Found {state.search_context.total_results} papers. Here are the top {len(state.search_context.results)} most relevant ones:\n\n"
+        
+        for i, paper in enumerate(state.search_context.results, 1):
+            context += (
+                f"Paper {i}:\n"
+                f"Title: {paper.title}\n"
+                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
+                f"Year: {paper.year or 'N/A'}\n"
+                f"Citations: {paper.citations or 0}\n"
+            )
+            if paper.abstract:
+                context += f"Abstract: {paper.abstract[:200]}...\n"
+            context += "---\n"
 
-    def _process_paper_question(self, state: AgentState) -> Dict:
-        """Process paper-related questions"""
-        state.current_step = "paper_processed"
-        return {"state": state, "next": "update_memory"}
+        prompt = f"""Based on these search results:
+{context}
 
-    def _process_conversation(self, state: AgentState) -> Dict:
-        """Process general conversation"""
-        state.current_step = "conversation_processed"
-        return {"state": state, "next": "update_memory"}
+Please provide a structured response that:
+1. Summarizes the search results
+2. Highlights key papers
+3. Notes any interesting patterns or trends
+4. Suggests how to interact with these results"""
+
+        response = await self.ollama_client.generate(
+            prompt=prompt,
+            system_prompt="You are a helpful academic research assistant.",
+            max_tokens=300
+        )
+        
+        return response.strip()
+
+    def _clean_search_query(self, query: str) -> str:
+        """Clean the search query"""
+        clean_phrases = [
+            "search for",
+            "find me",
+            "look for",
+            "papers about",
+            "papers on",
+            "research on",
+            "can you find"
+        ]
+        cleaned = query.lower()
+        for phrase in clean_phrases:
+            cleaned = cleaned.replace(phrase, "")
+        return cleaned.strip()
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
@@ -193,11 +380,11 @@ class WorkflowGraph:
         """Get the compiled graph"""
         return self.graph.compile()
 
-    def process_state(self, state: AgentState) -> AgentState:
+    async def process_state(self, state: AgentState) -> AgentState:
         """Process a state through the graph"""
         try:
             graph_chain = self.get_graph()
-            result = graph_chain.invoke({"state": state})
+            result = await graph_chain.ainvoke({"state": state})
 
             if isinstance(result, dict) and "state" in result:
                 return result["state"]
@@ -230,5 +417,9 @@ class WorkflowGraph:
                 state.memory.messages[-5:] if state.memory.messages else []
             ),
             "status": state.status.value,
+            "search_context": {
+                "query": state.search_context.query,
+                "total_results": state.search_context.total_results,
+                "current_page": state.search_context.current_page,
+            }
         }
-        return context
