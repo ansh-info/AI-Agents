@@ -7,11 +7,16 @@ from typing import Any, Dict, List, Optional
 from langgraph.graph import END, StateGraph
 
 from clients.ollama_client import OllamaClient
+from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, ConversationMemory
 
 
 class WorkflowGraph:
-    def __init__(self, ollama_client: Optional[OllamaClient] = None, s2_client: Optional[SemanticScholarClient] = None):
+    def __init__(
+        self,
+        ollama_client: Optional[OllamaClient] = None,
+        s2_client: Optional[SemanticScholarClient] = None,
+    ):
         """Initialize the workflow graph with client integrations"""
         self.graph = StateGraph(AgentState)
         self.current_state = AgentState()
@@ -73,7 +78,80 @@ class WorkflowGraph:
 
         except Exception as e:
             state.status = AgentStatus.ERROR
+            state.error_message = f"Error in graph processing: {str(e)}"
+            return state
+
+    def get_state(self) -> AgentState:
+        """Get current state"""
+        return self.current_state
+
+    def reset_state(self):
+        """Reset state to initial values"""
+        self.current_state = AgentState()
+
+    async def check_clients_health(self) -> Dict[str, bool]:
+        """Check if all clients are healthy and responding"""
+        try:
+            # Check Ollama
+            ollama_health = await self.ollama_client.check_model_availability()
+
+            # Check Semantic Scholar
+            s2_health = await self.s2_client.check_api_status()
+
+            return {
+                "ollama_status": ollama_health,
+                "semantic_scholar_status": s2_health,
+                "all_healthy": ollama_health and s2_health,
+            }
+        except Exception:
+            return {
+                "ollama_status": False,
+                "semantic_scholar_status": False,
+                "all_healthy": False,
+            }
+
+    async def reload_clients(self) -> bool:
+        """Attempt to reload clients if they're not responding"""
+        try:
+            # Reinitialize clients
+            self.ollama_client = OllamaClient()
+            self.s2_client = SemanticScholarClient()
+
+            # Check health
+            health = await self.check_clients_health()
+            return health["all_healthy"]
+        except Exception:
+            return False
+
+    def get_conversation_context(self, state: AgentState) -> Dict[str, Any]:
+        """Get current conversation context"""
+        try:
+            context = {
+                "current_step": state.current_step,
+                "has_search_results": bool(state.search_context.results),
+                "focused_paper": (
+                    state.memory.focused_paper.paper_id
+                    if state.memory.focused_paper
+                    else None
+                ),
+                "recent_messages": (
+                    state.memory.messages[-5:] if state.memory.messages else []
+                ),
+                "status": state.status.value,
+                "search_context": {
+                    "query": state.search_context.query,
+                    "total_results": state.search_context.total_results,
+                    "current_page": state.search_context.current_page,
+                },
+            }
+            return context
+        except Exception as e:
             state.error_message = f"Error in input analysis: {str(e)}"
+            return {
+                "error": f"Error getting conversation context: {str(e)}",
+                "current_step": state.current_step,
+                "status": state.status.value,
+            }
             return {"state": state, "next": END}
 
     def _route_message(self, state: AgentState) -> Dict:
@@ -125,8 +203,7 @@ class WorkflowGraph:
 
             # Perform search using S2 client
             results = await self.s2_client.search_papers(
-                query=query,
-                limit=10  # Configurable
+                query=query, limit=10  # Configurable
             )
 
             # Update state with search results
@@ -140,37 +217,35 @@ class WorkflowGraph:
                     "title": paper.title,
                     "abstract": paper.abstract,
                     "year": paper.year,
-                    "authors": [{"name": author.name, "authorId": author.authorId} 
-                               for author in paper.authors],
+                    "authors": [
+                        {"name": author.name, "authorId": author.authorId}
+                        for author in paper.authors
+                    ],
                     "citations": paper.citations,
-                    "url": paper.url
+                    "url": paper.url,
                 }
-        return context
                 state.search_context.add_paper(paper_data)
 
             # Generate response using Ollama
             response = await self._generate_search_response(state)
             state.add_message("system", response)
-            
+
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
-            
+
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error_message = f"Search processing error: {str(e)}"
-            
+
         return {"state": state, "next": "update_memory"}
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
         try:
             # Get the paper being discussed
-            paper = state.memory.focused_paper
-            if not paper:
-                paper = self._extract_paper_reference(
-                    state.memory.messages[-1]["content"], 
-                    state
-                )
+            paper = state.memory.focused_paper or self._extract_paper_reference(
+                state.memory.messages[-1]["content"], state
+            )
 
             if not paper:
                 response = "I'm not sure which paper you're referring to. Could you specify the paper number or title?"
@@ -186,14 +261,11 @@ class WorkflowGraph:
                 f"Abstract: {paper.abstract or 'Not available'}\n"
             )
 
-            # Get the question from the latest message
-            question = state.memory.messages[-1]["content"]
-
             # Generate response using Ollama
             prompt = f"""Based on this academic paper:
 {paper_context}
 
-Question: {question}
+Question: {state.memory.messages[-1]['content']}
 
 Please provide a clear response that addresses the question while considering:
 1. The paper's main findings
@@ -205,7 +277,7 @@ Please provide a clear response that addresses the question while considering:
             response = await self.ollama_client.generate(
                 prompt=prompt,
                 system_prompt="You are a helpful academic research assistant.",
-                max_tokens=300
+                max_tokens=300,
             )
 
             state.memory.focused_paper = paper
@@ -223,31 +295,11 @@ Please provide a clear response that addresses the question while considering:
         """Process general conversation with context-aware LLM integration"""
         try:
             # Build conversation context
-            context = []
-            
-            # Add recent conversation history
-            recent_messages = state.memory.messages[-5:]
-            if recent_messages:
-                context.append("Recent conversation:")
-                for msg in recent_messages:
-                    context.append(f"{msg['role']}: {msg['content']}")
+            context = self._build_conversation_context(state)
 
-            # Add search context if available
-            if state.search_context.results:
-                context.append("\nAvailable papers:")
-                for i, paper in enumerate(state.search_context.results, 1):
-                    context.append(
-                        f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
-                    )
-
-            # Add focused paper context if available
-            if state.memory.focused_paper:
-                paper = state.memory.focused_paper
-                context.append(f"\nCurrently discussing: {paper.title}")
-
-            # Generate response
+            # Generate response using Ollama
             prompt = f"""Context:
-{chr(10).join(context)}
+{context}
 
 Current query: {state.memory.messages[-1]['content']}
 Please provide a helpful response based on the available context."""
@@ -255,7 +307,7 @@ Please provide a helpful response based on the available context."""
             response = await self.ollama_client.generate(
                 prompt=prompt,
                 system_prompt="You are a helpful academic research assistant.",
-                max_tokens=300
+                max_tokens=300,
             )
 
             state.add_message("system", response.strip())
@@ -268,12 +320,84 @@ Please provide a helpful response based on the available context."""
 
         return {"state": state, "next": "update_memory"}
 
-    def _extract_paper_reference(self, message: str, state: AgentState) -> Optional[Dict]:
-        """Enhanced paper reference extraction"""
+    def _build_conversation_context(self, state: AgentState) -> str:
+        """Build context for conversation"""
+        try:
+            context_parts = []
+
+            # Add recent conversation history
+            recent_messages = state.memory.messages[-5:]
+            if recent_messages:
+                context_parts.append("Recent conversation:")
+                for msg in recent_messages:
+                    context_parts.append(f"{msg['role']}: {msg['content']}")
+
+            # Add search context if available
+            if state.search_context.results:
+                context_parts.append("\nAvailable papers:")
+                for i, paper in enumerate(state.search_context.results, 1):
+                    context_parts.append(
+                        f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
+                    )
+
+            # Add focused paper if available
+            if state.memory.focused_paper:
+                paper = state.memory.focused_paper
+                context_parts.append(f"\nCurrently discussing paper: {paper.title}")
+
+            return "\n".join(context_parts)
+
+        except Exception as e:
+            state.status = AgentStatus.ERROR
+            state.error_message = f"Context building error: {str(e)}"
+            return ""
+
+    async def _generate_search_response(self, state: AgentState) -> str:
+        """Generate structured search response using LLM"""
+        try:
+            context = f"Found {state.search_context.total_results} papers. Here are the top {len(state.search_context.results)} most relevant ones:\n\n"
+
+            for i, paper in enumerate(state.search_context.results, 1):
+                context += (
+                    f"Paper {i}:\n"
+                    f"Title: {paper.title}\n"
+                    f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
+                    f"Year: {paper.year or 'N/A'}\n"
+                    f"Citations: {paper.citations or 0}\n"
+                )
+                if paper.abstract:
+                    context += f"Abstract: {paper.abstract[:200]}...\n"
+                context += "---\n"
+
+            prompt = f"""Based on these search results:
+{context}
+
+Please provide a structured response that:
+1. Summarizes the search results
+2. Highlights key papers
+3. Notes any interesting patterns or trends
+4. Suggests how to interact with these results"""
+
+            response = await self.ollama_client.generate(
+                prompt=prompt,
+                system_prompt="You are a helpful academic research assistant.",
+                max_tokens=300,
+            )
+
+            return response.strip()
+
+        except Exception as e:
+            state.status = AgentStatus.ERROR
+            state.error_message = f"Response generation error: {str(e)}"
+            return "I apologize, but I encountered an error generating the search response."
+
+    def _extract_paper_reference(
+        self, message: str, state: AgentState
+    ) -> Optional[Dict]:
+        """Extract paper reference from message"""
         if not state.search_context.results:
             return None
 
-        # Check for numeric references (e.g., "paper 2")
         words = message.split()
         for i, word in enumerate(words):
             if word.isdigit():
@@ -300,41 +424,8 @@ Please provide a helpful response based on the available context."""
 
         return None
 
-    async def _generate_search_response(self, state: AgentState) -> str:
-        """Generate structured search response using LLM"""
-        context = f"Found {state.search_context.total_results} papers. Here are the top {len(state.search_context.results)} most relevant ones:\n\n"
-        
-        for i, paper in enumerate(state.search_context.results, 1):
-            context += (
-                f"Paper {i}:\n"
-                f"Title: {paper.title}\n"
-                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
-                f"Year: {paper.year or 'N/A'}\n"
-                f"Citations: {paper.citations or 0}\n"
-            )
-            if paper.abstract:
-                context += f"Abstract: {paper.abstract[:200]}...\n"
-            context += "---\n"
-
-        prompt = f"""Based on these search results:
-{context}
-
-Please provide a structured response that:
-1. Summarizes the search results
-2. Highlights key papers
-3. Notes any interesting patterns or trends
-4. Suggests how to interact with these results"""
-
-        response = await self.ollama_client.generate(
-            prompt=prompt,
-            system_prompt="You are a helpful academic research assistant.",
-            max_tokens=300
-        )
-        
-        return response.strip()
-
     def _clean_search_query(self, query: str) -> str:
-        """Clean the search query"""
+        """Clean search query"""
         clean_phrases = [
             "search for",
             "find me",
@@ -342,7 +433,7 @@ Please provide a structured response that:
             "papers about",
             "papers on",
             "research on",
-            "can you find"
+            "can you find",
         ]
         cleaned = query.lower()
         for phrase in clean_phrases:
@@ -392,34 +483,3 @@ Please provide a structured response that:
 
         except Exception as e:
             state.status = AgentStatus.ERROR
-            state.error_message = f"Error in graph processing: {str(e)}"
-            return state
-
-    def get_state(self) -> AgentState:
-        """Get current state"""
-        return self.current_state
-
-    def reset_state(self):
-        """Reset state to initial values"""
-        self.current_state = AgentState()
-
-    def get_conversation_context(self, state: AgentState) -> Dict[str, Any]:
-        """Get current conversation context"""
-        context = {
-            "current_step": state.current_step,
-            "has_search_results": bool(state.search_context.results),
-            "focused_paper": (
-                state.memory.focused_paper.paper_id
-                if state.memory.focused_paper
-                else None
-            ),
-            "recent_messages": (
-                state.memory.messages[-5:] if state.memory.messages else []
-            ),
-            "status": state.status.value,
-            "search_context": {
-                "query": state.search_context.query,
-                "total_results": state.search_context.total_results,
-                "current_page": state.search_context.current_page,
-            }
-        }
