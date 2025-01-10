@@ -86,14 +86,21 @@ class WorkflowGraph:
 
     def get_graph(self):
         """Get the compiled graph"""
-        return self.graph.compile()
+        graph_chain = self.graph.compile()
+        return graph_chain
 
     def process_state(self, state: AgentState) -> AgentState:
         """Process a state through the graph"""
-        result = self.graph.invoke(state)
-        if isinstance(result, dict) and "state" in result:
-            return result["state"]
-        return state
+        graph_chain = self.get_graph()
+        try:
+            result = graph_chain.chain(state)
+            if isinstance(result, dict) and "state" in result:
+                return result["state"]
+            return result
+        except Exception as e:
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return state
 
     def get_state(self) -> AgentState:
         """Get current state"""
