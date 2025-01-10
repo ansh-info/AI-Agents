@@ -34,22 +34,31 @@ class SearchContext(BaseModel):
     current_page: int = 1
     total_results: int = 0
     selected_paper_index: Optional[int] = None
-    current_filters: Dict[str, Any] = Field(default_factory=dict)  # Added this field
+    current_filters: Dict[str, Any] = Field(default_factory=dict)
+    papers: List[PaperContext] = Field(
+        default_factory=list
+    )  # Add a list to store papers
 
     class Config:
         arbitrary_types_allowed = True
+
+    def add_paper(self, paper: PaperContext):
+        """Add a PaperContext object to the list of papers"""
+        self.papers.append(paper)
 
 
 class ConversationMemory(BaseModel):
     messages: List[Dict[str, str]] = Field(default_factory=list)
     current_context: Optional[str] = None
     last_command: Optional[str] = None
+    focused_paper: Optional[PaperContext] = None
 
     def model_copy(self, *args, **kwargs):
         return ConversationMemory(
             messages=self.messages.copy(),
             current_context=self.current_context,
             last_command=self.last_command,
+            focused_paper=self.focused_paper,
         )
 
     class Config:
