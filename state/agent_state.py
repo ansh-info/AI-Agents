@@ -18,7 +18,7 @@ class PaperContext(BaseModel):
 
     paper_id: str = Field(alias="paperId")
     title: str = Field(default="Untitled Paper")
-    authors: List[Dict[str, str]] = Field(default_factory=list)
+    authors: List[Dict[str, Any]]
     year: Optional[int] = None
     citations: Optional[int] = None
     abstract: Optional[str] = None
