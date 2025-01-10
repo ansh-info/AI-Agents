@@ -156,11 +156,19 @@ class EnhancedWorkflowManager:
         if paper.abstract:
             paper_context += f"Abstract: {paper.abstract}\n"
 
-        prompt = f"""Based on this paper:
+        prompt = f"""Based on this academic paper:
 {paper_context}
 
 Question: {question}
-Please provide a comprehensive answer based on the available information."""
+
+Please provide a structured response that includes:
+1. A clear reference to the paper (title and authors)
+2. The key points relevant to the question
+3. Any important findings or methodologies mentioned
+4. Limitations or gaps if mentioned
+5. Citations and impact if relevant
+
+Format your response in clear paragraphs with appropriate transitions."""
 
         try:
             response = await self.llm_client.generate(prompt=prompt, max_tokens=300)
@@ -207,24 +215,29 @@ Please provide a comprehensive answer based on the available information."""
                 }
                 self.current_state.search_context.add_paper(paper_data)
 
-            # Format response with clear formatting
+            # Format response with structured formatting
             response = f"Found {results.total} papers. Here are the top {len(self.current_state.search_context.results)} most relevant ones:\n\n"
 
             for i, paper in enumerate(self.current_state.search_context.results, 1):
                 response += (
-                    f"{i}. {paper.title}\n"
-                    f"   Year: {paper.year or 'N/A'}\n"
-                    f"   Citations: {paper.citations or 0}\n"
-                    f"   Authors: {', '.join(author.get('name', '') for author in paper.authors)}\n"
+                    f"Paper {i}:\n"
+                    f"Title: {paper.title}\n"
+                    f"Authors: {', '.join(author.get('name', '') for author in paper.authors)}\n"
+                    f"Year: {paper.year or 'N/A'}\n"
+                    f"Citations: {paper.citations or 0}\n"
                 )
                 if paper.abstract:
-                    response += f"   Abstract: {paper.abstract[:200]}...\n"
-                response += "\n"
+                    response += f"Abstract: {paper.abstract[:200]}..."
+                    if len(paper.abstract) > 200:
+                        response += " [truncated]\n"
+                response += "\n---\n"
 
-            response += "\nYou can ask me about any of these papers by number or title. For example:\n"
-            response += "- Tell me more about paper 1\n"
-            response += "- What is paper 2 about?\n"
-            response += "- Can you explain the first paper's findings?"
+            response += "\nYou can interact with these papers in several ways:\n"
+            response += (
+                "1. Ask about a specific paper (e.g., 'Tell me more about paper 1')\n"
+            )
+            response += "2. Ask about the findings (e.g., 'What are the main findings of paper 2?')\n"
+            response += "3. Compare papers (e.g., 'How do papers 1 and 2 differ?')\n"
 
             self.current_state.add_message("system", response)
 
