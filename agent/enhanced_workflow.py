@@ -113,6 +113,11 @@ class EnhancedWorkflowManager:
             ):
                 return self.current_state.search_context.results[idx]
 
+        # Check for title references
+        for paper in self.current_state.search_context.results:
+            if paper.title.lower() in command_lower:
+                return paper
+
         return None
 
     async def _handle_paper_question(
@@ -128,7 +133,7 @@ class EnhancedWorkflowManager:
 
         paper_context = (
             f"Title: {paper.title}\n"
-            f"Authors: {', '.join(a.name for a in paper.authors)}\n"
+            f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
             f"Year: {paper.year or 'Not specified'}\n"
             f"Citations: {paper.citations or 0}\n"
         )
@@ -186,11 +191,19 @@ Please provide a comprehensive answer based on the available information."""
                 }
                 self.current_state.search_context.add_paper(paper_data)
 
-            # Format response
-            response = f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant ones:\n\n"
+            # Format response with a table
+            response = f"Found {results.total} papers. Here are the top {len(self.current_state.search_context.results)} most relevant ones:\n\n"
+            response += "| # | Title | Year | Citations |\n"
+            response += "|---|--------|------|------------|\n"
+
             for i, paper in enumerate(self.current_state.search_context.results, 1):
-                response += f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations\n"
-            response += "\nYou can ask me about any of these papers by number or title."
+                title = paper.title.replace("|", "-")  # Escape pipe characters
+                response += f"| {i} | {title} | {paper.year or 'N/A'} | {paper.citations or 0} |\n"
+
+            response += "\nYou can ask me about any of these papers by number or title. For example:\n"
+            response += "- Tell me more about paper 1\n"
+            response += "- What is paper 2 about?\n"
+            response += "- Can you explain the first paper's findings?"
 
             self.current_state.add_message("system", response)
 
@@ -213,6 +226,14 @@ Please provide a comprehensive answer based on the available information."""
             for msg in recent_messages:
                 context.append(f"{msg['role']}: {msg['content']}")
 
+        # Add search results context if available
+        if self.current_state.search_context.results:
+            context.append("\nCurrent search results:")
+            for i, paper in enumerate(self.current_state.search_context.results, 1):
+                context.append(
+                    f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
+                )
+
         # Add paper context if available
         if self.current_state.memory.focused_paper:
             paper = self.current_state.memory.focused_paper
@@ -222,8 +243,8 @@ Please provide a comprehensive answer based on the available information."""
 {chr(10).join(context)}
 
 Current query: {command}
-
-Please provide a helpful response based on the conversation context."""
+The user is asking about the search results or papers. Please provide a helpful response based on the available context. 
+If they ask about specific papers, refer to them by their details from the search results."""
 
         try:
             response = await self.llm_client.generate(
