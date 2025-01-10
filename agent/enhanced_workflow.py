@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 from agent.workflow_graph import WorkflowGraph
 from clients.ollama_client import OllamaClient
 from clients.ollama_enhanced import EnhancedOllamaClient
-from clients.semantic_scholar_client import (SearchResults,
+from clients.semantic_scholar_client import (PaperMetadata, SearchResults,
                                              SemanticScholarClient)
 from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
                                PaperContext, SearchContext)
@@ -124,6 +124,22 @@ class EnhancedWorkflowManager:
         self, paper: Optional[PaperContext], question: str
     ):
         """Handle questions about a specific paper"""
+        # Try to get paper from search context if not directly referenced
+        if not paper and self.current_state.search_context.results:
+            # Extract number from question (e.g., "paper 1" or "1")
+            words = question.lower().split()
+            for i, word in enumerate(words):
+                if word.isdigit():
+                    paper_num = int(word)
+                    if 1 <= paper_num <= len(self.current_state.search_context.results):
+                        paper = self.current_state.search_context.results[paper_num - 1]
+                        break
+                elif word == "paper" and i + 1 < len(words) and words[i + 1].isdigit():
+                    paper_num = int(words[i + 1])
+                    if 1 <= paper_num <= len(self.current_state.search_context.results):
+                        paper = self.current_state.search_context.results[paper_num - 1]
+                        break
+
         if not paper:
             self.current_state.add_message(
                 "system",
@@ -191,14 +207,19 @@ Please provide a comprehensive answer based on the available information."""
                 }
                 self.current_state.search_context.add_paper(paper_data)
 
-            # Format response with a table
+            # Format response with clear formatting
             response = f"Found {results.total} papers. Here are the top {len(self.current_state.search_context.results)} most relevant ones:\n\n"
-            response += "| # | Title | Year | Citations |\n"
-            response += "|---|--------|------|------------|\n"
 
             for i, paper in enumerate(self.current_state.search_context.results, 1):
-                title = paper.title.replace("|", "-")  # Escape pipe characters
-                response += f"| {i} | {title} | {paper.year or 'N/A'} | {paper.citations or 0} |\n"
+                response += (
+                    f"{i}. {paper.title}\n"
+                    f"   Year: {paper.year or 'N/A'}\n"
+                    f"   Citations: {paper.citations or 0}\n"
+                    f"   Authors: {', '.join(author.get('name', '') for author in paper.authors)}\n"
+                )
+                if paper.abstract:
+                    response += f"   Abstract: {paper.abstract[:200]}...\n"
+                response += "\n"
 
             response += "\nYou can ask me about any of these papers by number or title. For example:\n"
             response += "- Tell me more about paper 1\n"
