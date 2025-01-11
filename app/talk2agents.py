@@ -269,8 +269,15 @@ class DashboardApp:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
-                if message["role"] == "system" and "papers" in message:
-                    self.render_papers(message["papers"])
+                # If this is a system message and we have search results, display them
+                if (
+                    message["role"] == "system"
+                    and st.session_state.agent_state.search_context
+                    and st.session_state.agent_state.search_context.results
+                ):
+                    self.render_papers(
+                        st.session_state.agent_state.search_context.results
+                    )
 
     def render_pagination(self, total_results: int):
         """Render pagination controls"""
