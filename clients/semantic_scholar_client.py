@@ -36,7 +36,6 @@ class PaperMetadata(BaseModel):
     citations: Optional[int] = None
     references: Optional[int] = None
     url: Optional[str] = None
-    topics: List[str] = Field(default_factory=list)
     fieldsOfStudy: List[str] = Field(default_factory=list)
     isOpenAccess: Optional[bool] = None
     tldr: Optional[str] = None  # Short summary if available
@@ -163,9 +162,7 @@ class SemanticScholarClient:
                 "citationCount",
                 "referenceCount",
                 "fieldsOfStudy",
-                "topics",
                 "isOpenAccess",
-                "tldr",
                 "url",
             ]
 
@@ -173,7 +170,7 @@ class SemanticScholarClient:
         params = {
             "query": query,
             "offset": offset,
-            "limit": min(limit, 100),  # API limit is 100
+            "limit": min(limit, 10),  # API limit is 100, but we're limiting to 10
             "fields": ",".join(fields),
         }
 
