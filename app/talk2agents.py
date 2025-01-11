@@ -161,22 +161,29 @@ class DashboardApp:
 
     def render_papers(self, papers: List[PaperContext]):
         """Render paper results with enhanced display"""
+        if not papers:
+            st.info("No papers found. Try adjusting your search terms.")
+            return
+
+        st.write(f"Found {len(papers)} papers:")
+
         for i, paper in enumerate(papers, 1):
             with st.container():
                 col1, col2 = st.columns([4, 1])
                 with col1:
                     st.markdown(
                         f"""<div class="paper-card">
-                            <h3>{i}. {paper.title}</h3>
-                            <p><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</p>
-                            <p><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</p>
-                        </div>""",
+                                <h3>{i}. {paper.title}</h3>
+                                <p><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</p>
+                                <p><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</p>
+                                {f'<p><strong>Abstract:</strong> {paper.abstract}</p>' if paper.abstract else ''}
+                            </div>""",
                         unsafe_allow_html=True,
                     )
                 with col2:
-                    if st.button("Select", key=f"select_{paper.paperId}"):
-                        st.session_state.selected_paper = paper.paperId
-                        st.experimental_rerun()
+                    if st.button("View Details", key=f"select_{i}"):
+                        st.session_state.selected_paper = paper.paper_id
+                        st.rerun()  # Changed from experimental_rerun
 
                 if paper.abstract:
                     with st.expander("Show Abstract"):
