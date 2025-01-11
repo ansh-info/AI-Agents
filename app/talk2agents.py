@@ -269,7 +269,7 @@ class DashboardApp:
 
     def render_chat_history(self):
         """Render chat message history"""
-        for message in st.session_state.messages:
+        for idx, message in enumerate(st.session_state.messages):
             with st.chat_message(message["role"]):
                 st.write(message["content"])
                 # If this is a system message and we have search results, display them
@@ -278,8 +278,10 @@ class DashboardApp:
                     and st.session_state.agent_state.search_context
                     and st.session_state.agent_state.search_context.results
                 ):
+                    # Use message index as part of the unique prefix
                     self.render_papers(
-                        st.session_state.agent_state.search_context.results
+                        st.session_state.agent_state.search_context.results,
+                        context_prefix=f"chat_{idx}",
                     )
 
     def render_pagination(self, total_results: int):
