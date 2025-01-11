@@ -33,13 +33,11 @@ class PaperMetadata(BaseModel):
     year: Optional[int] = None
     authors: List[Author] = Field(default_factory=list)
     venue: Optional[str] = None
-    citations: Optional[int] = None
-    references: Optional[int] = None
+    citations: Optional[int] = Field(default=0, alias="citationCount")
+    references: Optional[int] = Field(default=0, alias="referenceCount")
     url: Optional[str] = None
-    topics: List[str] = Field(default_factory=list)
-    fieldsOfStudy: List[str] = Field(default_factory=list)
+    fieldsOfStudy: Optional[List[str]] = Field(default_factory=list)  # Made Optional
     isOpenAccess: Optional[bool] = None
-    tldr: Optional[str] = None  # Short summary if available
 
     @validator("title")
     def validate_title(cls, v):
@@ -54,6 +52,16 @@ class PaperMetadata(BaseModel):
         if not v:
             return None
         return v.strip()
+
+    @validator("fieldsOfStudy", pre=True)
+    def validate_fields_of_study(cls, v):
+        """Handle None value for fieldsOfStudy"""
+        if v is None:
+            return []
+        return v
+
+    class Config:
+        populate_by_name = True
 
 
 class SearchFilters(BaseModel):
@@ -163,9 +171,7 @@ class SemanticScholarClient:
                 "citationCount",
                 "referenceCount",
                 "fieldsOfStudy",
-                "topics",
                 "isOpenAccess",
-                "tldr",
                 "url",
             ]
 
@@ -173,7 +179,7 @@ class SemanticScholarClient:
         params = {
             "query": query,
             "offset": offset,
-            "limit": min(limit, 100),  # API limit is 100
+            "limit": min(limit, 10),  # API limit is 100, but we're limiting to 10
             "fields": ",".join(fields),
         }
 

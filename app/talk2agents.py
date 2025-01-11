@@ -7,10 +7,20 @@ from typing import List, Optional
 import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
+
+
 from agent.enhanced_workflow import EnhancedWorkflowManager
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, PaperContext
+
+# Set page config at the very start of the script
+st.set_page_config(
+    page_title="Academic Paper Search",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 
 class DashboardApp:
@@ -30,15 +40,7 @@ class DashboardApp:
             st.session_state.selected_paper = None
 
     def setup_page(self):
-        """Setup page configuration and styling"""
-        st.set_page_config(
-            page_title="Academic Paper Search",
-            page_icon="📚",
-            layout="wide",
-            initial_sidebar_state="expanded",
-        )
-
-        # Custom CSS for enhanced UI
+        """Setup page styling"""
         st.markdown(
             """
             <style>
@@ -46,55 +48,43 @@ class DashboardApp:
                 max-width: 1200px;
                 margin: 0 auto;
             }
-            .element-container {
-                width: 100%;
+            .chat-message {
+                padding: 1rem;
+                margin-bottom: 1rem;
+                border-radius: 0.5rem;
+                background-color: #f8f9fa;
+            }
+            .chat-message.user {
+                background-color: #e9ecef;
+            }
+            .paper-list {
+                list-style-type: decimal;
+                padding-left: 1.5rem;
+            }
+            .paper-item {
+                margin-bottom: 1rem;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                background-color: white;
+                border: 1px solid #dee2e6;
+            }
+            .paper-title {
+                font-weight: bold;
+                margin-bottom: 0.5rem;
             }
             .stChatInputContainer {
                 position: fixed;
                 bottom: 0;
                 left: 0;
                 right: 0;
-                padding: 1rem 2rem;
                 background: white;
-                border-top: 1px solid #ddd;
+                padding: 1rem 2rem;
+                border-top: 1px solid #dee2e6;
                 z-index: 100;
             }
-            .chat-messages {
-                margin-bottom: 100px;
+            .main-content {
+                margin-bottom: 80px;  /* Space for fixed chat input */
                 padding: 20px;
-            }
-            .paper-card {
-                background-color: #f8f9fa;
-                padding: 1rem;
-                border-radius: 10px;
-                margin-bottom: 1rem;
-                border: 1px solid #e9ecef;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            }
-            .paper-card:hover {
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-                transition: all 0.3s ease;
-            }
-            .debug-message { 
-                padding: 10px;
-                margin: 5px 0;
-                border-radius: 5px;
-                font-family: monospace;
-            }
-            .debug-message.api { background-color: #403f3e; color: #fff; }
-            .debug-message.error { background-color: #403f3e; color: #ff6b6b; }
-            .debug-message.info { background-color: #403f3e; color: #69db7c; }
-            .filter-section {
-                background-color: #f8f9fa;
-                padding: 1rem;
-                border-radius: 10px;
-                margin-bottom: 1rem;
-            }
-            .pagination {
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                margin: 1rem 0;
             }
             </style>
             """,
@@ -156,28 +146,30 @@ class DashboardApp:
                 "is_open_access": is_open_access,
             }
 
-    def render_papers(self, papers: List[PaperContext]):
+    def render_papers(self, papers: List[PaperContext], context_prefix: str = "main"):
         """Render paper results with enhanced display"""
-        for i, paper in enumerate(papers, 1):
-            with st.container():
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.markdown(
-                        f"""<div class="paper-card">
-                            <h3>{i}. {paper.title}</h3>
-                            <p><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</p>
-                            <p><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</p>
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
-                with col2:
-                    if st.button("Select", key=f"select_{paper.paperId}"):
-                        st.session_state.selected_paper = paper.paperId
-                        st.experimental_rerun()
+        if not papers:
+            st.info("No papers found. Try adjusting your search terms.")
+            return
 
-                if paper.abstract:
-                    with st.expander("Show Abstract"):
-                        st.write(paper.abstract)
+        st.markdown(f"<div class='paper-list'>", unsafe_allow_html=True)
+
+        for i, paper in enumerate(papers, 1):
+            st.markdown(
+                f"""<div class='paper-item'>
+                        <div class='paper-title'>{i}. {paper.title}</div>
+                        <div><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</div>
+                        <div><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</div>
+                        <div><strong>Abstract:</strong> {paper.abstract if paper.abstract else 'Not available'}</div>
+                        </div>""",
+                unsafe_allow_html=True,
+            )
+
+            if st.button("View Details", key=f"{context_prefix}_select_{i}"):
+                st.session_state.selected_paper = paper.paper_id
+                st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
@@ -204,15 +196,6 @@ class DashboardApp:
     async def process_input(self, prompt: str):
         """Process user input asynchronously"""
         try:
-            # Debug logging
-            self.add_debug_message(f"Processing input: {prompt}", "info")
-
-            # Check client health
-            health = await st.session_state.workflow_manager.check_clients_health()
-            if not health["all_healthy"]:
-                self.add_debug_message("Attempting to reload clients...", "info")
-                await st.session_state.workflow_manager.reload_clients()
-
             # Process command
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
@@ -221,27 +204,22 @@ class DashboardApp:
             # Update session state
             st.session_state.agent_state = state
 
-            # Debug log after processing
-            self.add_debug_message(
-                f"Command processed with status: {state.status}. Current step: {state.current_step}",
-                "info",
-            )
-
-            # Log search results if available
-            if state.search_context and state.search_context.results:
-                self.add_debug_message(
-                    f"Search results: Found {len(state.search_context.results)} papers",
-                    "api",
-                )
-
             # Get and show response
             if state.memory and state.memory.messages:
-                response_message = state.memory.messages[-1]
-                st.session_state.messages.append(response_message)
+                response_message = {
+                    "role": "system",
+                    "content": state.memory.messages[-1]["content"],
+                }
 
                 # If search was successful, attach papers to message
-                if state.status == AgentStatus.SUCCESS and state.search_context.results:
+                if (
+                    state.status == AgentStatus.SUCCESS
+                    and state.search_context
+                    and state.search_context.results
+                ):
                     response_message["papers"] = state.search_context.results
+
+                st.session_state.messages.append(response_message)
 
             return state
 
@@ -251,16 +229,26 @@ class DashboardApp:
                 "content": f"I apologize, but I encountered an error: {str(e)}",
             }
             st.session_state.messages.append(error_msg)
-            self.add_debug_message(f"Error: {str(e)}", "error")
             return None
 
     def render_chat_history(self):
         """Render chat message history"""
-        for message in st.session_state.messages:
+        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
+
+        for idx, message in enumerate(st.session_state.messages):
             with st.chat_message(message["role"]):
                 st.write(message["content"])
-                if message["role"] == "system" and "papers" in message:
-                    self.render_papers(message["papers"])
+                if (
+                    message["role"] == "system"
+                    and st.session_state.agent_state.search_context
+                    and st.session_state.agent_state.search_context.results
+                ):
+                    self.render_papers(
+                        st.session_state.agent_state.search_context.results,
+                        context_prefix=f"chat_{idx}",
+                    )
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     def render_pagination(self, total_results: int):
         """Render pagination controls"""
@@ -270,79 +258,50 @@ class DashboardApp:
                 if st.session_state.current_page > 1:
                     if st.button("← Previous"):
                         st.session_state.current_page -= 1
-                        st.experimental_rerun()
+                        st.rerun()  # Changed from experimental_rerun
             with col2:
                 st.write(f"Page {st.session_state.current_page}")
             with col3:
                 if len(st.session_state.agent_state.search_context.results) >= 10:
                     if st.button("Next →"):
                         st.session_state.current_page += 1
-                        st.experimental_rerun()
+                        st.rerun()  # Changed from experimental_rerun
 
     def run(self):
         """Run the dashboard application"""
         self.setup_page()
-        self.render_debug_panel()
 
-        # Main chat container
-        st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
+        # Main content container
+        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 
-        # Render filters if we have search results
-        if (
-            st.session_state.agent_state.search_context
-            and st.session_state.agent_state.search_context.results
-        ):
-            filters = self.render_filters()
-            st.session_state.agent_state.search_context.current_filters = filters
-
-        # Display chat history
-        self.render_chat_history()
-
-        # Render pagination if we have search results
-        if (
-            st.session_state.agent_state.search_context
-            and st.session_state.agent_state.search_context.total_results > 0
-        ):
-            self.render_pagination(
-                st.session_state.agent_state.search_context.total_results
-            )
-
-        # Selected paper view
-        if st.session_state.selected_paper:
-            paper = next(
-                (
-                    p
-                    for p in st.session_state.agent_state.search_context.results
-                    if p.paperId == st.session_state.selected_paper
-                ),
-                None,
-            )
-            if paper:
-                self.render_paper_details(paper)
+        # Only render chat history once
+        for idx, message in enumerate(st.session_state.messages):
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+                # Only render papers for system messages with search results
+                if (
+                    message["role"] == "system"
+                    and hasattr(message, "papers")
+                    and message.get("papers")
+                ):
+                    self.render_papers(message["papers"], context_prefix=f"chat_{idx}")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Chat input
-        if prompt := st.chat_input("Message Academic Research Assistant..."):
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": prompt})
+        # Fixed chat input at bottom
+        with st.container():
+            if prompt := st.chat_input("Ask about research papers..."):
+                # Add user message
+                st.session_state.messages.append({"role": "user", "content": prompt})
 
-            # Process command
-            with st.spinner("Processing..."):
-                asyncio.run(self.process_input(prompt))
+                # Process command
+                with st.spinner("Processing..."):
+                    response_state = asyncio.run(self.process_input(prompt))
 
-            # Rerun to update UI
-            st.rerun()
+                st.rerun()
 
 
 def main():
-    """Main entry point"""
-    st.set_page_config(
-        page_title="Academic Research Assistant",
-        page_icon="📚",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
     app = DashboardApp()
     app.run()
 

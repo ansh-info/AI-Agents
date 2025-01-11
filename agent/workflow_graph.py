@@ -1,8 +1,10 @@
 import os
 import sys
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
-from typing import Any, Dict, List, Optional
+
 
 from langgraph.graph import END, StateGraph
 
@@ -78,8 +80,8 @@ class WorkflowGraph:
 
         except Exception as e:
             state.status = AgentStatus.ERROR
-            state.error_message = f"Error in graph processing: {str(e)}"
-            return state
+            state.error_message = f"Error in input analysis: {str(e)}"
+            return {"state": state, "next": END}
 
     def get_state(self) -> AgentState:
         """Get current state"""
@@ -146,13 +148,11 @@ class WorkflowGraph:
             }
             return context
         except Exception as e:
-            state.error_message = f"Error in input analysis: {str(e)}"
             return {
                 "error": f"Error getting conversation context: {str(e)}",
                 "current_step": state.current_step,
                 "status": state.status.value,
             }
-            return {"state": state, "next": END}
 
     def _route_message(self, state: AgentState) -> Dict:
         """Enhanced message routing with context awareness"""
@@ -202,9 +202,11 @@ class WorkflowGraph:
             query = self._clean_search_query(latest_message)
 
             # Perform search using S2 client
-            results = await self.s2_client.search_papers(
-                query=query, limit=10  # Configurable
-            )
+            results = await self.s2_client.search_papers(query=query, limit=10)
+
+            if not results:
+                state.add_message("system", "No results found for your search.")
+                return {"state": state, "next": "update_memory"}
 
             # Update state with search results
             state.search_context.query = query
@@ -212,23 +214,33 @@ class WorkflowGraph:
             state.search_context.results = []
 
             for paper in results.papers:
-                paper_data = {
-                    "paperId": paper.paperId,
-                    "title": paper.title,
-                    "abstract": paper.abstract,
-                    "year": paper.year,
-                    "authors": [
-                        {"name": author.name, "authorId": author.authorId}
-                        for author in paper.authors
-                    ],
-                    "citations": paper.citations,
-                    "url": paper.url,
-                }
-                state.search_context.add_paper(paper_data)
+                try:
+                    paper_data = {
+                        "paper_id": paper.paperId,
+                        "title": paper.title,
+                        "abstract": paper.abstract,
+                        "year": paper.year,
+                        "authors": [
+                            {"name": author.name, "authorId": author.authorId}
+                            for author in paper.authors
+                        ],
+                        "citations": paper.citations,
+                        "url": paper.url,
+                    }
+                    state.search_context.add_paper(paper_data)
+                except AttributeError as e:
+                    continue  # Skip papers with missing attributes
 
-            # Generate response using Ollama
-            response = await self._generate_search_response(state)
-            state.add_message("system", response)
+            if not state.search_context.results:
+                state.add_message(
+                    "system",
+                    "I found some papers but there was an error processing them. Please try your search again.",
+                )
+                return {"state": state, "next": "update_memory"}
+
+            # Generate search summary
+            summary = f"I found {len(state.search_context.results)} papers about {query}. Here are the most relevant ones:"
+            state.add_message("system", summary)
 
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
@@ -236,6 +248,10 @@ class WorkflowGraph:
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error_message = f"Search processing error: {str(e)}"
+            state.add_message(
+                "system",
+                "I apologize, but I encountered an error while searching. Please try again.",
+            )
 
         return {"state": state, "next": "update_memory"}
 
@@ -348,9 +364,7 @@ Please provide a helpful response based on the available context."""
             return "\n".join(context_parts)
 
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Context building error: {str(e)}"
-            return ""
+            return f"Error building context: {str(e)}"
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
@@ -387,9 +401,7 @@ Please provide a structured response that:
             return response.strip()
 
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Response generation error: {str(e)}"
-            return "I apologize, but I encountered an error generating the search response."
+            return f"Error generating search response: {str(e)}"
 
     def _extract_paper_reference(
         self, message: str, state: AgentState
@@ -419,7 +431,7 @@ Please provide a structured response that:
 
         # Check for title references
         for paper in state.search_context.results:
-            if paper.title.lower() in message:
+            if paper.title.lower() in message.lower():
                 return paper
 
         return None
@@ -483,3 +495,5 @@ Please provide a structured response that:
 
         except Exception as e:
             state.status = AgentStatus.ERROR
+            state.error_message = f"Error processing state: {str(e)}"
+            return state

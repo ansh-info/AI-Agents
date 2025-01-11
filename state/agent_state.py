@@ -1,9 +1,10 @@
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
+from uuid import uuid4
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 
 class AgentStatus(Enum):
@@ -27,14 +28,31 @@ class PaperContext(BaseModel):
     # Added fields for better context tracking
     last_referenced: Optional[datetime] = None
     reference_count: int = 0
-    discussed_aspects: Set[str] = Field(
-        default_factory=set
-    )  # Track what's been discussed
+    discussed_aspects: Set[str] = Field(default_factory=set)
 
     def update_reference(self):
         """Update paper reference tracking"""
         self.last_referenced = datetime.now()
         self.reference_count += 1
+
+    @validator("paper_id", pre=True, always=True)
+    def validate_or_generate_paper_id(cls, v):
+        """Validate or generate a default paper_id if missing."""
+        if not v:
+            return str(uuid4())  # Generate a unique ID if paper_id is missing
+        return str(v).strip()
+
+    @validator("title")
+    def validate_title(cls, v):
+        if not v:
+            return "Untitled Paper"
+        return v.strip()
+
+    @validator("authors")
+    def validate_authors(cls, v):
+        if not v:
+            return [{"name": "Unknown Author", "authorId": None}]
+        return v
 
     class Config:
         arbitrary_types_allowed = True
@@ -53,24 +71,27 @@ class SearchContext(BaseModel):
     # Added fields for better search context
     search_history: List[Dict[str, Any]] = Field(default_factory=list)
     last_search_time: Optional[datetime] = None
-    active_papers: List[str] = Field(default_factory=list)  # Currently discussed papers
+    active_papers: List[str] = Field(default_factory=list)
 
     def add_paper(self, paper: Dict[str, Any]):
         """Add a paper to results with enhanced tracking"""
-        paper_ctx = PaperContext(
-            paper_id=paper.get("paperId"),
-            title=paper.get("title"),
-            authors=paper.get("authors", []),
-            year=paper.get("year"),
-            citations=paper.get("citationCount"),
-            abstract=paper.get("abstract"),
-            url=paper.get("url"),
-        )
-        self.results.append(paper_ctx)
+        try:
+            paper_ctx = PaperContext(
+                paper_id=paper.get("paper_id"),
+                title=paper.get("title"),
+                authors=paper.get("authors", []),
+                year=paper.get("year"),
+                citations=paper.get("citations"),
+                abstract=paper.get("abstract"),
+                url=paper.get("url"),
+            )
+            self.results.append(paper_ctx)
 
-        # Track this paper as active
-        if paper_ctx.paper_id not in self.active_papers:
-            self.active_papers.append(paper_ctx.paper_id)
+            # Track this paper as active
+            if paper_ctx.paper_id not in self.active_papers:
+                self.active_papers.append(paper_ctx.paper_id)
+        except Exception as e:
+            print(f"Error creating PaperContext: {e}, input data: {paper}")
 
     def get_paper_by_index(self, index: int) -> Optional[PaperContext]:
         """Get paper by its display index (1-based) with reference update"""
@@ -115,9 +136,7 @@ class ConversationMemory(BaseModel):
     # Enhanced context tracking
     context_history: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_topics: Set[str] = Field(default_factory=set)
-    referenced_papers: Dict[str, int] = Field(
-        default_factory=dict
-    )  # Track paper reference counts
+    referenced_papers: Dict[str, int] = Field(default_factory=dict)
 
     def add_message(
         self, role: str, content: str, context: Optional[Dict[str, Any]] = None
