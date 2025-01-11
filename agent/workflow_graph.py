@@ -1,8 +1,10 @@
 import os
 import sys
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
-from typing import Any, Dict, List, Optional
+
 
 from langgraph.graph import END, StateGraph
 
@@ -146,13 +148,11 @@ class WorkflowGraph:
             }
             return context
         except Exception as e:
-            state.error_message = f"Error in input analysis: {str(e)}"
             return {
                 "error": f"Error getting conversation context: {str(e)}",
                 "current_step": state.current_step,
                 "status": state.status.value,
             }
-            return {"state": state, "next": END}
 
     def _route_message(self, state: AgentState) -> Dict:
         """Enhanced message routing with context awareness"""
@@ -348,9 +348,7 @@ Please provide a helpful response based on the available context."""
             return "\n".join(context_parts)
 
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Context building error: {str(e)}"
-            return ""
+            return f"Error building context: {str(e)}"
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
@@ -387,9 +385,7 @@ Please provide a structured response that:
             return response.strip()
 
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Response generation error: {str(e)}"
-            return "I apologize, but I encountered an error generating the search response."
+            return f"Error generating search response: {str(e)}"
 
     def _extract_paper_reference(
         self, message: str, state: AgentState
@@ -419,7 +415,7 @@ Please provide a structured response that:
 
         # Check for title references
         for paper in state.search_context.results:
-            if paper.title.lower() in message:
+            if paper.title.lower() in message.lower():
                 return paper
 
         return None
@@ -483,3 +479,5 @@ Please provide a structured response that:
 
         except Exception as e:
             state.status = AgentStatus.ERROR
+            state.error_message = f"Error processing state: {str(e)}"
+            return state
