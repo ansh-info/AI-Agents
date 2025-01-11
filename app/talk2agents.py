@@ -273,14 +273,14 @@ class DashboardApp:
                 if st.session_state.current_page > 1:
                     if st.button("← Previous"):
                         st.session_state.current_page -= 1
-                        st.experimental_rerun()
+                        st.rerun()  # Changed from experimental_rerun
             with col2:
                 st.write(f"Page {st.session_state.current_page}")
             with col3:
                 if len(st.session_state.agent_state.search_context.results) >= 10:
                     if st.button("Next →"):
                         st.session_state.current_page += 1
-                        st.experimental_rerun()
+                        st.rerun()  # Changed from experimental_rerun
 
     def run(self):
         """Run the dashboard application"""
