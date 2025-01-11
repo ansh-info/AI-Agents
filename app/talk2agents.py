@@ -41,7 +41,6 @@ class DashboardApp:
 
     def setup_page(self):
         """Setup page styling"""
-        # Custom CSS for enhanced UI
         st.markdown(
             """
             <style>
@@ -49,55 +48,43 @@ class DashboardApp:
                 max-width: 1200px;
                 margin: 0 auto;
             }
-            .element-container {
-                width: 100%;
+            .chat-message {
+                padding: 1rem;
+                margin-bottom: 1rem;
+                border-radius: 0.5rem;
+                background-color: #f8f9fa;
+            }
+            .chat-message.user {
+                background-color: #e9ecef;
+            }
+            .paper-list {
+                list-style-type: decimal;
+                padding-left: 1.5rem;
+            }
+            .paper-item {
+                margin-bottom: 1rem;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                background-color: white;
+                border: 1px solid #dee2e6;
+            }
+            .paper-title {
+                font-weight: bold;
+                margin-bottom: 0.5rem;
             }
             .stChatInputContainer {
                 position: fixed;
                 bottom: 0;
                 left: 0;
                 right: 0;
-                padding: 1rem 2rem;
                 background: white;
-                border-top: 1px solid #ddd;
+                padding: 1rem 2rem;
+                border-top: 1px solid #dee2e6;
                 z-index: 100;
             }
-            .chat-messages {
-                margin-bottom: 100px;
+            .main-content {
+                margin-bottom: 80px;  /* Space for fixed chat input */
                 padding: 20px;
-            }
-            .paper-card {
-                background-color: #f8f9fa;
-                padding: 1rem;
-                border-radius: 10px;
-                margin-bottom: 1rem;
-                border: 1px solid #e9ecef;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            }
-            .paper-card:hover {
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-                transition: all 0.3s ease;
-            }
-            .debug-message { 
-                padding: 10px;
-                margin: 5px 0;
-                border-radius: 5px;
-                font-family: monospace;
-            }
-            .debug-message.api { background-color: #403f3e; color: #fff; }
-            .debug-message.error { background-color: #403f3e; color: #ff6b6b; }
-            .debug-message.info { background-color: #403f3e; color: #69db7c; }
-            .filter-section {
-                background-color: #f8f9fa;
-                padding: 1rem;
-                border-radius: 10px;
-                margin-bottom: 1rem;
-            }
-            .pagination {
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                margin: 1rem 0;
             }
             </style>
             """,
@@ -165,32 +152,24 @@ class DashboardApp:
             st.info("No papers found. Try adjusting your search terms.")
             return
 
-        st.write(f"Found {len(papers)} papers:")
+        st.markdown(f"<div class='paper-list'>", unsafe_allow_html=True)
 
         for i, paper in enumerate(papers, 1):
-            with st.container():
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.markdown(
-                        f"""<div class="paper-card">
-                                <h3>{i}. {paper.title}</h3>
-                                <p><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</p>
-                                <p><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</p>
-                                {f'<p><strong>Abstract:</strong> {paper.abstract}</p>' if paper.abstract else ''}
-                            </div>""",
-                        unsafe_allow_html=True,
-                    )
-                with col2:
-                    # Use context_prefix to create unique keys
-                    if st.button("View Details", key=f"{context_prefix}_select_{i}"):
-                        st.session_state.selected_paper = paper.paper_id
-                        st.rerun()
+            st.markdown(
+                f"""<div class='paper-item'>
+                    <div class='paper-title'>{i}. {paper.title}</div>
+                    <div><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</div>
+                    <div><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</div>
+                    <div><strong>Abstract:</strong> {paper.abstract if paper.abstract else 'Not available'}</div>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
 
-                if paper.abstract:
-                    with st.expander(
-                        "Show Abstract", key=f"{context_prefix}_abstract_{i}"
-                    ):
-                        st.write(paper.abstract)
+            if st.button("View Details", key=f"{context_prefix}_select_{i}"):
+                st.session_state.selected_paper = paper.paper_id
+                st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
@@ -269,20 +248,22 @@ class DashboardApp:
 
     def render_chat_history(self):
         """Render chat message history"""
+        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
+
         for idx, message in enumerate(st.session_state.messages):
             with st.chat_message(message["role"]):
                 st.write(message["content"])
-                # If this is a system message and we have search results, display them
                 if (
                     message["role"] == "system"
                     and st.session_state.agent_state.search_context
                     and st.session_state.agent_state.search_context.results
                 ):
-                    # Use message index as part of the unique prefix
                     self.render_papers(
                         st.session_state.agent_state.search_context.results,
                         context_prefix=f"chat_{idx}",
                     )
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     def render_pagination(self, total_results: int):
         """Render pagination controls"""
@@ -304,57 +285,22 @@ class DashboardApp:
     def run(self):
         """Run the dashboard application"""
         self.setup_page()
-        self.render_debug_panel()
 
-        # Main chat container
-        st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
-
-        # Render filters if we have search results
-        if (
-            st.session_state.agent_state.search_context
-            and st.session_state.agent_state.search_context.results
-        ):
-            filters = self.render_filters()
-            st.session_state.agent_state.search_context.current_filters = filters
+        # Main content area
+        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 
         # Display chat history
         self.render_chat_history()
 
-        # Render pagination if we have search results
-        if (
-            st.session_state.agent_state.search_context
-            and st.session_state.agent_state.search_context.total_results > 0
-        ):
-            self.render_pagination(
-                st.session_state.agent_state.search_context.total_results
-            )
-
-        # Selected paper view
-        if st.session_state.selected_paper:
-            paper = next(
-                (
-                    p
-                    for p in st.session_state.agent_state.search_context.results
-                    if p.paper_id == st.session_state.selected_paper
-                ),
-                None,
-            )
-            if paper:
-                self.render_paper_details(paper)
-
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Chat input
-        if prompt := st.chat_input("Message Academic Research Assistant..."):
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": prompt})
-
-            # Process command
-            with st.spinner("Processing..."):
-                asyncio.run(self.process_input(prompt))
-
-            # Rerun to update UI
-            st.rerun()
+        # Fixed chat input at bottom
+        with st.container():
+            if prompt := st.chat_input("Ask about research papers..."):
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                with st.spinner("Processing..."):
+                    asyncio.run(self.process_input(prompt))
+                st.rerun()
 
 
 def main():
