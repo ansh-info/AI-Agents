@@ -157,11 +157,11 @@ class DashboardApp:
         for i, paper in enumerate(papers, 1):
             st.markdown(
                 f"""<div class='paper-item'>
-                    <div class='paper-title'>{i}. {paper.title}</div>
-                    <div><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</div>
-                    <div><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</div>
-                    <div><strong>Abstract:</strong> {paper.abstract if paper.abstract else 'Not available'}</div>
-                    </div>""",
+                        <div class='paper-title'>{i}. {paper.title}</div>
+                        <div><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</div>
+                        <div><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</div>
+                        <div><strong>Abstract:</strong> {paper.abstract if paper.abstract else 'Not available'}</div>
+                        </div>""",
                 unsafe_allow_html=True,
             )
 
@@ -196,15 +196,6 @@ class DashboardApp:
     async def process_input(self, prompt: str):
         """Process user input asynchronously"""
         try:
-            # Debug logging
-            self.add_debug_message(f"Processing input: {prompt}", "info")
-
-            # Check client health
-            health = await st.session_state.workflow_manager.check_clients_health()
-            if not health["all_healthy"]:
-                self.add_debug_message("Attempting to reload clients...", "info")
-                await st.session_state.workflow_manager.reload_clients()
-
             # Process command
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
@@ -213,27 +204,22 @@ class DashboardApp:
             # Update session state
             st.session_state.agent_state = state
 
-            # Debug log after processing
-            self.add_debug_message(
-                f"Command processed with status: {state.status}. Current step: {state.current_step}",
-                "info",
-            )
-
-            # Log search results if available
-            if state.search_context and state.search_context.results:
-                self.add_debug_message(
-                    f"Search results: Found {len(state.search_context.results)} papers",
-                    "api",
-                )
-
             # Get and show response
             if state.memory and state.memory.messages:
-                response_message = state.memory.messages[-1]
-                st.session_state.messages.append(response_message)
+                response_message = {
+                    "role": "system",
+                    "content": state.memory.messages[-1]["content"],
+                }
 
                 # If search was successful, attach papers to message
-                if state.status == AgentStatus.SUCCESS and state.search_context.results:
+                if (
+                    state.status == AgentStatus.SUCCESS
+                    and state.search_context
+                    and state.search_context.results
+                ):
                     response_message["papers"] = state.search_context.results
+
+                st.session_state.messages.append(response_message)
 
             return state
 
@@ -243,7 +229,6 @@ class DashboardApp:
                 "content": f"I apologize, but I encountered an error: {str(e)}",
             }
             st.session_state.messages.append(error_msg)
-            self.add_debug_message(f"Error: {str(e)}", "error")
             return None
 
     def render_chat_history(self):
@@ -286,20 +271,33 @@ class DashboardApp:
         """Run the dashboard application"""
         self.setup_page()
 
-        # Main content area
+        # Main content container
         st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 
-        # Display chat history
-        self.render_chat_history()
+        # Only render chat history once
+        for idx, message in enumerate(st.session_state.messages):
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+                # Only render papers for system messages with search results
+                if (
+                    message["role"] == "system"
+                    and hasattr(message, "papers")
+                    and message.get("papers")
+                ):
+                    self.render_papers(message["papers"], context_prefix=f"chat_{idx}")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Fixed chat input at bottom
         with st.container():
             if prompt := st.chat_input("Ask about research papers..."):
+                # Add user message
                 st.session_state.messages.append({"role": "user", "content": prompt})
+
+                # Process command
                 with st.spinner("Processing..."):
-                    asyncio.run(self.process_input(prompt))
+                    response_state = asyncio.run(self.process_input(prompt))
+
                 st.rerun()
 
 
