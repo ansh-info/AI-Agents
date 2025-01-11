@@ -335,7 +335,7 @@ class DashboardApp:
                 (
                     p
                     for p in st.session_state.agent_state.search_context.results
-                    if p.paperId == st.session_state.selected_paper
+                    if p.paper_id == st.session_state.selected_paper
                 ),
                 None,
             )
