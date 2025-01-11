@@ -27,9 +27,7 @@ class PaperContext(BaseModel):
     # Added fields for better context tracking
     last_referenced: Optional[datetime] = None
     reference_count: int = 0
-    discussed_aspects: Set[str] = Field(
-        default_factory=set
-    )  # Track what's been discussed
+    discussed_aspects: Set[str] = Field(default_factory=set)
 
     def update_reference(self):
         """Update paper reference tracking"""
@@ -38,6 +36,24 @@ class PaperContext(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
+    @validator("paper_id")
+    def validate_paper_id(cls, v):
+        if not v:
+            raise ValueError("paper_id cannot be empty")
+        return v
+
+    @validator("title")
+    def validate_title(cls, v):
+        if not v:
+            return "Untitled Paper"
+        return v.strip()
+
+    @validator("authors")
+    def validate_authors(cls, v):
+        if not v:
+            return [{"name": "Unknown Author", "authorId": None}]
+        return v
 
 
 class SearchContext(BaseModel):
