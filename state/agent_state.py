@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
+from uuid import uuid4
 
 import pandas as pd
 from pydantic import BaseModel, Field, validator
@@ -34,11 +35,12 @@ class PaperContext(BaseModel):
         self.last_referenced = datetime.now()
         self.reference_count += 1
 
-    @validator("paper_id")
-    def validate_paper_id(cls, v):
+    @validator("paper_id", pre=True, always=True)
+    def validate_or_generate_paper_id(cls, v):
+        """Validate or generate a default paper_id if missing."""
         if not v:
-            raise ValueError("paper_id cannot be empty")
-        return v
+            return str(uuid4())  # Generate a unique ID if paper_id is missing
+        return str(v).strip()
 
     @validator("title")
     def validate_title(cls, v):
@@ -73,20 +75,23 @@ class SearchContext(BaseModel):
 
     def add_paper(self, paper: Dict[str, Any]):
         """Add a paper to results with enhanced tracking"""
-        paper_ctx = PaperContext(
-            paper_id=paper.get("paper_id"),
-            title=paper.get("title"),
-            authors=paper.get("authors", []),
-            year=paper.get("year"),
-            citations=paper.get("citations"),
-            abstract=paper.get("abstract"),
-            url=paper.get("url"),
-        )
-        self.results.append(paper_ctx)
+        try:
+            paper_ctx = PaperContext(
+                paper_id=paper.get("paper_id"),
+                title=paper.get("title"),
+                authors=paper.get("authors", []),
+                year=paper.get("year"),
+                citations=paper.get("citations"),
+                abstract=paper.get("abstract"),
+                url=paper.get("url"),
+            )
+            self.results.append(paper_ctx)
 
-        # Track this paper as active
-        if paper_ctx.paper_id not in self.active_papers:
-            self.active_papers.append(paper_ctx.paper_id)
+            # Track this paper as active
+            if paper_ctx.paper_id not in self.active_papers:
+                self.active_papers.append(paper_ctx.paper_id)
+        except Exception as e:
+            print(f"Error creating PaperContext: {e}, input data: {paper}")
 
     def get_paper_by_index(self, index: int) -> Optional[PaperContext]:
         """Get paper by its display index (1-based) with reference update"""
