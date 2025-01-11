@@ -202,9 +202,7 @@ class WorkflowGraph:
             query = self._clean_search_query(latest_message)
 
             # Perform search using S2 client
-            results = await self.s2_client.search_papers(
-                query=query, limit=10  # Configurable
-            )
+            results = await self.s2_client.search_papers(query=query, limit=10)
 
             # Update state with search results
             state.search_context.query = query
@@ -221,8 +219,10 @@ class WorkflowGraph:
                         {"name": author.name, "authorId": author.authorId}
                         for author in paper.authors
                     ],
-                    "citations": paper.citations,
+                    "citations": paper.citations or 0,
+                    "references": paper.references or 0,
                     "url": paper.url,
+                    "fieldsOfStudy": paper.fieldsOfStudy or [],
                 }
                 state.search_context.add_paper(paper_data)
 
