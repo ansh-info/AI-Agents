@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 
 class AgentStatus(Enum):
@@ -34,9 +34,6 @@ class PaperContext(BaseModel):
         self.last_referenced = datetime.now()
         self.reference_count += 1
 
-    class Config:
-        arbitrary_types_allowed = True
-
     @validator("paper_id")
     def validate_paper_id(cls, v):
         if not v:
@@ -55,6 +52,9 @@ class PaperContext(BaseModel):
             return [{"name": "Unknown Author", "authorId": None}]
         return v
 
+    class Config:
+        arbitrary_types_allowed = True
+
 
 class SearchContext(BaseModel):
     """Enhanced context for search operations"""
@@ -69,16 +69,16 @@ class SearchContext(BaseModel):
     # Added fields for better search context
     search_history: List[Dict[str, Any]] = Field(default_factory=list)
     last_search_time: Optional[datetime] = None
-    active_papers: List[str] = Field(default_factory=list)  # Currently discussed papers
+    active_papers: List[str] = Field(default_factory=list)
 
     def add_paper(self, paper: Dict[str, Any]):
         """Add a paper to results with enhanced tracking"""
         paper_ctx = PaperContext(
-            paper_id=paper.get("paperId"),
+            paper_id=paper.get("paper_id"),
             title=paper.get("title"),
             authors=paper.get("authors", []),
             year=paper.get("year"),
-            citations=paper.get("citationCount"),
+            citations=paper.get("citations"),
             abstract=paper.get("abstract"),
             url=paper.get("url"),
         )
@@ -131,9 +131,7 @@ class ConversationMemory(BaseModel):
     # Enhanced context tracking
     context_history: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_topics: Set[str] = Field(default_factory=set)
-    referenced_papers: Dict[str, int] = Field(
-        default_factory=dict
-    )  # Track paper reference counts
+    referenced_papers: Dict[str, int] = Field(default_factory=dict)
 
     def add_message(
         self, role: str, content: str, context: Optional[Dict[str, Any]] = None
