@@ -159,7 +159,7 @@ class DashboardApp:
                 "is_open_access": is_open_access,
             }
 
-    def render_papers(self, papers: List[PaperContext]):
+    def render_papers(self, papers: List[PaperContext], context_prefix: str = "main"):
         """Render paper results with enhanced display"""
         if not papers:
             st.info("No papers found. Try adjusting your search terms.")
@@ -181,12 +181,15 @@ class DashboardApp:
                         unsafe_allow_html=True,
                     )
                 with col2:
-                    if st.button("View Details", key=f"select_{i}"):
+                    # Use context_prefix to create unique keys
+                    if st.button("View Details", key=f"{context_prefix}_select_{i}"):
                         st.session_state.selected_paper = paper.paper_id
-                        st.rerun()  # Changed from experimental_rerun
+                        st.rerun()
 
                 if paper.abstract:
-                    with st.expander("Show Abstract"):
+                    with st.expander(
+                        "Show Abstract", key=f"{context_prefix}_abstract_{i}"
+                    ):
                         st.write(paper.abstract)
 
     def render_paper_details(self, paper: PaperContext):
