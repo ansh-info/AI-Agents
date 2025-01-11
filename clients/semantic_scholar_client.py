@@ -33,12 +33,11 @@ class PaperMetadata(BaseModel):
     year: Optional[int] = None
     authors: List[Author] = Field(default_factory=list)
     venue: Optional[str] = None
-    citations: Optional[int] = None
-    references: Optional[int] = None
+    citations: Optional[int] = Field(default=0, alias="citationCount")
+    references: Optional[int] = Field(default=0, alias="referenceCount")
     url: Optional[str] = None
-    fieldsOfStudy: List[str] = Field(default_factory=list)
+    fieldsOfStudy: Optional[List[str]] = Field(default_factory=list)  # Made Optional
     isOpenAccess: Optional[bool] = None
-    tldr: Optional[str] = None  # Short summary if available
 
     @validator("title")
     def validate_title(cls, v):
@@ -53,6 +52,16 @@ class PaperMetadata(BaseModel):
         if not v:
             return None
         return v.strip()
+
+    @validator("fieldsOfStudy", pre=True)
+    def validate_fields_of_study(cls, v):
+        """Handle None value for fieldsOfStudy"""
+        if v is None:
+            return []
+        return v
+
+    class Config:
+        populate_by_name = True
 
 
 class SearchFilters(BaseModel):
