@@ -204,31 +204,43 @@ class WorkflowGraph:
             # Perform search using S2 client
             results = await self.s2_client.search_papers(query=query, limit=10)
 
+            if not results:
+                state.add_message("system", "No results found for your search.")
+                return {"state": state, "next": "update_memory"}
+
             # Update state with search results
             state.search_context.query = query
             state.search_context.total_results = results.total
             state.search_context.results = []
 
             for paper in results.papers:
-                paper_data = {
-                    "paperId": paper.paperId,
-                    "title": paper.title,
-                    "abstract": paper.abstract,
-                    "year": paper.year,
-                    "authors": [
-                        {"name": author.name, "authorId": author.authorId}
-                        for author in paper.authors
-                    ],
-                    "citations": paper.citations or 0,
-                    "references": paper.references or 0,
-                    "url": paper.url,
-                    "fieldsOfStudy": paper.fieldsOfStudy or [],
-                }
-                state.search_context.add_paper(paper_data)
+                try:
+                    paper_data = {
+                        "paper_id": paper.paperId,
+                        "title": paper.title,
+                        "abstract": paper.abstract,
+                        "year": paper.year,
+                        "authors": [
+                            {"name": author.name, "authorId": author.authorId}
+                            for author in paper.authors
+                        ],
+                        "citations": paper.citations,
+                        "url": paper.url,
+                    }
+                    state.search_context.add_paper(paper_data)
+                except AttributeError as e:
+                    continue  # Skip papers with missing attributes
 
-            # Generate response using Ollama
-            response = await self._generate_search_response(state)
-            state.add_message("system", response)
+            if not state.search_context.results:
+                state.add_message(
+                    "system",
+                    "I found some papers but there was an error processing them. Please try your search again.",
+                )
+                return {"state": state, "next": "update_memory"}
+
+            # Generate search summary
+            summary = f"I found {len(state.search_context.results)} papers about {query}. Here are the most relevant ones:"
+            state.add_message("system", summary)
 
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
@@ -236,6 +248,10 @@ class WorkflowGraph:
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error_message = f"Search processing error: {str(e)}"
+            state.add_message(
+                "system",
+                "I apologize, but I encountered an error while searching. Please try again.",
+            )
 
         return {"state": state, "next": "update_memory"}
 
