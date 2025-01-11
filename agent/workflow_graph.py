@@ -78,8 +78,8 @@ class WorkflowGraph:
 
         except Exception as e:
             state.status = AgentStatus.ERROR
-            state.error_message = f"Error in graph processing: {str(e)}"
-            return state
+            state.error_message = f"Error in input analysis: {str(e)}"
+            return {"state": state, "next": END}
 
     def get_state(self) -> AgentState:
         """Get current state"""
