@@ -7,10 +7,20 @@ from typing import List, Optional
 import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
+
+
 from agent.enhanced_workflow import EnhancedWorkflowManager
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, PaperContext
+
+# Set page config at the very start of the script
+st.set_page_config(
+    page_title="Academic Paper Search",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 
 class DashboardApp:
@@ -30,14 +40,7 @@ class DashboardApp:
             st.session_state.selected_paper = None
 
     def setup_page(self):
-        """Setup page configuration and styling"""
-        st.set_page_config(
-            page_title="Academic Paper Search",
-            page_icon="📚",
-            layout="wide",
-            initial_sidebar_state="expanded",
-        )
-
+        """Setup page styling"""
         # Custom CSS for enhanced UI
         st.markdown(
             """
@@ -336,13 +339,6 @@ class DashboardApp:
 
 
 def main():
-    """Main entry point"""
-    st.set_page_config(
-        page_title="Academic Research Assistant",
-        page_icon="📚",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
     app = DashboardApp()
     app.run()
 
