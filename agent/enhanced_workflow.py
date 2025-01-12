@@ -169,25 +169,33 @@ class ConversationAgent:
         self.client = ollama_client
 
     async def generate_response(
-        self, prompt: str, context: Optional[str] = None, max_tokens: int = 300
-    ) -> Dict[str, Any]:
-        """Generate response with context"""
+        self, prompt: str, context: Optional[str] = None, max_tokens: int = 500
+    ):
+        """Generate response with enhanced context handling"""
         try:
-            print(f"[DEBUG] Generating response for prompt: {prompt}")
+            print(f"\n[DEBUG] Generating response")
+            print(f"[DEBUG] Prompt: {prompt[:200]}...")
 
             # Build system context
-            system_prompt = "You are a helpful academic research assistant. "
-            system_prompt += "When presenting search results, always summarize the papers found and list them clearly."
-            if context:
-                system_prompt += f"\nContext: {context}"
+            system_prompt = """You are a helpful academic research assistant. 
+When presenting search results:
+1. Always summarize the key findings
+2. Highlight the relevance to the search query
+3. Mention important details like methodologies and conclusions
+4. Point out any significant patterns or trends
+5. Suggest related areas of interest"""
 
-            print(f"[DEBUG] Using system prompt: {system_prompt}")
+            if context:
+                system_prompt += f"\n\nAdditional context: {context}"
+
+            print(f"[DEBUG] Using system prompt: {system_prompt[:200]}...")
 
             response = await self.client.generate(
                 prompt=prompt, system_prompt=system_prompt, max_tokens=max_tokens
             )
 
-            print(f"[DEBUG] Generated response: {response[:100]}...")
+            print(f"[DEBUG] Generated response: {response[:200]}...")
+
             return {"status": "success", "response": response, "error": None}
 
         except Exception as e:
@@ -356,7 +364,6 @@ class EnhancedWorkflowManager:
         """Handle search with error recovery"""
         try:
             print("\n[DEBUG] ===== Search Process Start =====")
-            print(f"[DEBUG] Original query: {query}")
 
             # Perform search
             search_result = await self.search_agent.search_papers(query)
@@ -365,82 +372,84 @@ class EnhancedWorkflowManager:
             if search_result["status"] == "error":
                 raise Exception(f"Search failed: {search_result['error']}")
 
+            results = search_result["results"]
+            print(f"[DEBUG] Total results: {results.total}")
+
             # Update state
             self.current_state.status = AgentStatus.SUCCESS
             self.current_state.search_context.query = query
-
-            results = search_result["results"]
-            print(f"[DEBUG] Total results found: {results.total}")
-
             self.current_state.search_context.total_results = results.total
 
-            # Add papers to context with proper validation
+            # Add papers to context
             papers_added = 0
-            print(f"[DEBUG] Processing {len(results.papers)} papers")
+            papers_text = "Here are the papers I found:\n\n"
 
             for i, paper in enumerate(results.papers, 1):
                 try:
-                    print(f"\n[DEBUG] Processing paper {i}:")
-                    print(
-                        f"[DEBUG] Raw paper ID: {getattr(paper, 'paperId', 'NO_ID_ATTR')}"
-                    )
-                    print(f"[DEBUG] Raw paper type: {type(paper)}")
-
-                    # Create paper data dictionary
                     paper_data = {
-                        "paperId": str(getattr(paper, "paperId", None)),
-                        "title": getattr(paper, "title", "Untitled Paper"),
-                        "abstract": getattr(paper, "abstract", None),
-                        "year": getattr(paper, "year", None),
+                        "paperId": paper.paperId,
+                        "title": paper.title,
+                        "abstract": paper.abstract,
+                        "year": paper.year,
                         "authors": [
-                            {
-                                "name": getattr(a, "name", "Unknown Author"),
-                                "authorId": getattr(a, "authorId", None),
-                            }
-                            for a in getattr(paper, "authors", [])
+                            {"name": a.name, "authorId": a.authorId}
+                            for a in paper.authors
                         ],
-                        "citations": getattr(paper, "citations", 0),
-                        "url": getattr(paper, "url", None),
+                        "citations": paper.citations,
+                        "url": paper.url,
                     }
 
-                    print(f"[DEBUG] Transformed paper_data:")
-                    print(f"  paperId: {paper_data['paperId']}")
-                    print(f"  title: {paper_data['title']}")
+                    print(f"[DEBUG] Processing paper {i}: {paper_data['title']}")
 
-                    # Only add if we have a valid ID
-                    if (
-                        paper_data["paperId"]
-                        and paper_data["paperId"].lower() != "none"
-                    ):
-                        print(f"[DEBUG] Adding paper {i} to context")
-                        self.current_state.search_context.add_paper(paper_data)
-                        papers_added += 1
-                    else:
-                        print(f"[DEBUG] Skipping paper {i} - Invalid ID")
+                    self.current_state.search_context.add_paper(paper_data)
+                    papers_added += 1
+
+                    # Build text representation for LLM
+                    papers_text += f"{i}. {paper_data['title']}\n"
+                    papers_text += f"   Authors: {', '.join(a['name'] for a in paper_data['authors'])}\n"
+                    papers_text += f"   Year: {paper_data['year']}\n"
+                    if paper_data["abstract"]:
+                        papers_text += (
+                            f"   Abstract: {paper_data['abstract'][:200]}...\n"
+                        )
+                    papers_text += "\n"
 
                 except Exception as e:
                     print(f"[DEBUG] Error processing paper {i}: {str(e)}")
                     continue
 
-            print(f"\n[DEBUG] Successfully added {papers_added} papers")
-            print("[DEBUG] ===== Search Process End =====\n")
+            print(f"[DEBUG] Added {papers_added} papers to context")
 
-            # Generate appropriate response
             if papers_added > 0:
+                # Generate summary using LLM
+                prompt = f"""I found {papers_added} papers related to '{query}'. 
+
+    {papers_text}
+
+    Please provide a helpful summary of these papers, highlighting key findings and relevance to the search query."""
+
+                print("[DEBUG] Generating response with papers")
                 response = await self.conversation_agent.generate_response(
-                    prompt=f"Please summarize these {papers_added} search results for '{query}' in a helpful way."
+                    prompt=prompt
                 )
+
                 if response["status"] == "error":
                     raise Exception(f"Response generation failed: {response['error']}")
-                self.current_state.add_message("system", response["response"])
+
+                # Add both the summary and the papers list to the response
+                summary = response["response"]
+                full_response = f"{summary}\n\n{papers_text}"
+
+                print("[DEBUG] Adding response to state")
+                self.current_state.add_message("system", full_response)
             else:
-                self.current_state.add_message(
-                    "system",
-                    "I found no valid papers matching your search criteria. Please try a different search term.",
-                )
+                error_msg = "No valid papers found matching your search criteria."
+                self.current_state.add_message("system", error_msg)
+
+            print("[DEBUG] ===== Search Process Complete =====")
 
         except Exception as e:
-            print(f"[DEBUG] Search handler error: {str(e)}")
+            print(f"[DEBUG] Error in search handler: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
