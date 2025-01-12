@@ -83,22 +83,34 @@ class SearchContext(BaseModel):
     def add_paper(self, paper: Dict[str, Any]):
         """Add a paper to results with enhanced tracking"""
         try:
+            print(f"\n[DEBUG] Adding paper to SearchContext:")
+            print(f"[DEBUG] Input paper data: {paper}")
+            print(
+                f"[DEBUG] PaperId from input: {paper.get('paperId', 'NO_ID_IN_DICT')}"
+            )
+
             paper_ctx = PaperContext(
-                paper_id=paper.get("paper_id"),
-                title=paper.get("title"),
+                paperId=paper.get("paperId"),  # Using the aliased field name
+                title=paper.get("title", "Untitled Paper"),
                 authors=paper.get("authors", []),
                 year=paper.get("year"),
-                citations=paper.get("citations"),
+                citations=paper.get("citations", 0),
                 abstract=paper.get("abstract"),
                 url=paper.get("url"),
             )
+            print(f"[DEBUG] Created PaperContext with ID: {paper_ctx.paper_id}")
+
             self.results.append(paper_ctx)
 
             # Track this paper as active
             if paper_ctx.paper_id not in self.active_papers:
                 self.active_papers.append(paper_ctx.paper_id)
+
+            print(f"[DEBUG] Successfully added paper to results")
+
         except Exception as e:
-            print(f"Error creating PaperContext: {e}, input data: {paper}")
+            print(f"[DEBUG] Error in add_paper: {str(e)}")
+            raise  # Re-raise the exception after logging
 
     def get_paper_by_index(self, index: int) -> Optional[PaperContext]:
         """Get paper by its display index (1-based) with reference update"""
