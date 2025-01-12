@@ -22,6 +22,7 @@ class CommandParser:
     @staticmethod
     def parse_command(command: str) -> Dict[str, Any]:
         """Parse command and identify intent"""
+        print(f"[DEBUG] Parsing command: {command}")
         command_lower = command.lower()
 
         # Check for search intent
@@ -34,11 +35,14 @@ class CommandParser:
                 "papers about",
                 "papers on",
                 "research about",
+                "can you search",
             ]
         ):
+            cleaned_query = CommandParser._clean_search_query(command)
+            print(f"[DEBUG] Detected search intent. Cleaned query: {cleaned_query}")
             return {
                 "intent": "search",
-                "query": CommandParser._clean_search_query(command),
+                "query": cleaned_query,
             }
 
         # Check for paper question intent
@@ -78,6 +82,7 @@ class CommandParser:
     @staticmethod
     def _clean_search_query(query: str) -> str:
         """Clean search query"""
+        print(f"[DEBUG] Cleaning query: {query}")
         clean_phrases = [
             "search for",
             "find me",
@@ -86,11 +91,16 @@ class CommandParser:
             "papers on",
             "research on",
             "can you find",
+            "can you search for",
+            "can you search",
+            "search",
         ]
         cleaned = query.lower()
         for phrase in clean_phrases:
             cleaned = cleaned.replace(phrase, "")
-        return cleaned.strip()
+        cleaned = cleaned.strip()
+        print(f"[DEBUG] Cleaned query result: {cleaned}")
+        return cleaned
 
     @staticmethod
     def _extract_paper_reference(command: str) -> str:
@@ -163,17 +173,25 @@ class ConversationAgent:
     ) -> Dict[str, Any]:
         """Generate response with context"""
         try:
+            print(f"[DEBUG] Generating response for prompt: {prompt}")
+
             # Build system context
-            system_prompt = "You are a helpful academic research assistant."
+            system_prompt = "You are a helpful academic research assistant. "
+            system_prompt += "When presenting search results, always summarize the papers found and list them clearly."
             if context:
                 system_prompt += f"\nContext: {context}"
+
+            print(f"[DEBUG] Using system prompt: {system_prompt}")
 
             response = await self.client.generate(
                 prompt=prompt, system_prompt=system_prompt, max_tokens=max_tokens
             )
 
+            print(f"[DEBUG] Generated response: {response[:100]}...")
             return {"status": "success", "response": response, "error": None}
+
         except Exception as e:
+            print(f"[DEBUG] Error in generate_response: {str(e)}")
             return {"status": "error", "response": None, "error": str(e)}
 
     async def generate_paper_analysis(
@@ -262,45 +280,75 @@ class EnhancedWorkflowManager:
         self.command_parser = CommandParser()
 
     async def process_command_async(self, command: str) -> AgentState:
-        """Process command with enhanced error handling"""
+        """Process command with enhanced error handling and logging"""
         try:
-            # Add command to state
-            self.current_state.add_message("user", command)
+            print("\n[DEBUG] Starting command processing")
+            print(f"[DEBUG] Command received: {command}")
 
             # Parse command intent
             parsed_command = self.command_parser.parse_command(command)
+            print(f"[DEBUG] Parsed command intent: {parsed_command['intent']}")
 
-            # Process based on intent
+            # Add command to state
+            self.current_state.add_message("user", command)
+
             if parsed_command["intent"] == "search":
+                print("[DEBUG] Handling search intent")
                 await self._handle_search(parsed_command["query"])
 
+                # After search, check state
+                print(
+                    f"[DEBUG] After search - State status: {self.current_state.status}"
+                )
+                print(
+                    f"[DEBUG] Results count: {len(self.current_state.search_context.results)}"
+                )
+                print("[DEBUG] Checking memory messages:")
+                for msg in self.current_state.memory.messages[-3:]:
+                    print(f"  - {msg['role']}: {msg['content'][:100]}...")
+
+                if self.current_state.search_context.results:
+                    # Generate a summary response that includes the papers
+                    papers_summary = f"I found {len(self.current_state.search_context.results)} papers related to your query. Here are the results:\n\n"
+                    for i, paper in enumerate(
+                        self.current_state.search_context.results, 1
+                    ):
+                        papers_summary += f"{i}. {paper.title}\n"
+                        papers_summary += f"   Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
+                        if paper.year:
+                            papers_summary += f"   Year: {paper.year}\n"
+                        if paper.abstract:
+                            papers_summary += (
+                                f"   Abstract: {paper.abstract[:200]}...\n"
+                            )
+                        papers_summary += "\n"
+
+                    print("[DEBUG] Adding papers summary to state")
+                    self.current_state.add_message("system", papers_summary)
+
             elif parsed_command["intent"] == "paper_question":
+                print("[DEBUG] Handling paper question intent")
                 await self._handle_paper_question(
                     parsed_command["paper_reference"], command
                 )
 
             elif parsed_command["intent"] == "compare_papers":
+                print("[DEBUG] Handling paper comparison intent")
                 await self._handle_paper_comparison(parsed_command["paper_references"])
 
             else:
+                print("[DEBUG] Handling conversation intent")
                 await self._handle_conversation(command)
-
-            # Process through workflow graph
-            try:
-                self.current_state = await self.workflow_graph.process_state(
-                    self.current_state
-                )
-            except Exception as e:
-                self.current_state.status = AgentStatus.ERROR
-                self.current_state.error_message = f"Workflow error: {str(e)}"
 
             return self.current_state
 
         except Exception as e:
+            print(f"[DEBUG] Error in process_command_async: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
-                "system", f"I apologize, but I encountered an error: {str(e)}"
+                "system",
+                f"I apologize, but I encountered an error: {str(e)}",
             )
             return self.current_state
 
