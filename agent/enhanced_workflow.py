@@ -328,8 +328,18 @@ class EnhancedWorkflowManager:
             print(f"[DEBUG] Total papers found: {len(results.papers)}")
             for i, paper in enumerate(results.papers, 1):
                 try:
+                    # Log paper details
+                    print(f"[DEBUG] Processing paper {i}:")
+                    print(
+                        f"  - paperId: {paper.paperId if hasattr(paper, 'paperId') else 'NO ID'}"
+                    )
+                    print(
+                        f"  - title: {paper.title if hasattr(paper, 'title') else 'NO TITLE'}"
+                    )
+
                     # Skip papers without an ID
                     if not paper.paperId:
+                        print(f"[DEBUG] Skipping paper {i} - No ID")
                         continue
 
                     paper_data = {
