@@ -34,10 +34,6 @@ class DashboardApp:
             st.session_state.debug_messages = []
         if "messages" not in st.session_state:
             st.session_state.messages = []
-        if "current_page" not in st.session_state:
-            st.session_state.current_page = 1
-        if "selected_paper" not in st.session_state:
-            st.session_state.selected_paper = None
 
     def setup_page(self):
         """Setup page styling"""
@@ -91,40 +87,21 @@ class DashboardApp:
             unsafe_allow_html=True,
         )
 
-    def add_debug_message(self, message: str, msg_type: str = "info"):
-        """Add a debug message with timestamp"""
+    def add_debug_message(self, message: str):
+        """Add a debug message that will be displayed in the UI"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        debug_msg = {"timestamp": timestamp, "message": message, "type": msg_type}
-        st.session_state.debug_messages.append(debug_msg)
+        st.session_state.debug_messages.append(f"[{timestamp}] {message}")
 
     def render_debug_panel(self):
-        """Render debug panel in sidebar"""
+        """Render debug panel in the sidebar"""
         with st.sidebar:
             st.markdown("### 🔍 Debug Panel")
-
-            # Add client status indicators
-            if st.button("Check API Status"):
-                with st.spinner("Checking API status..."):
-                    health = asyncio.run(
-                        st.session_state.workflow_manager.check_clients_health()
-                    )
-                    st.write("API Status:")
-                    st.write(f"- Ollama: {'✅' if health['ollama_status'] else '❌'}")
-                    st.write(
-                        f"- Semantic Scholar: {'✅' if health['semantic_scholar_status'] else '❌'}"
-                    )
-
             if st.button("Clear Debug Log"):
                 st.session_state.debug_messages = []
 
-            # Display debug messages
+            st.markdown("#### Debug Messages")
             for msg in st.session_state.debug_messages:
-                st.markdown(
-                    f"""<div class="debug-message {msg['type']}">
-                    [{msg['timestamp']}] {msg['message']}
-                    </div>""",
-                    unsafe_allow_html=True,
-                )
+                st.text(msg)
 
     def render_filters(self):
         """Render search filters"""
@@ -194,12 +171,26 @@ class DashboardApp:
                 st.experimental_rerun()
 
     async def process_input(self, prompt: str):
-        """Process user input asynchronously"""
+        """Process user input with debug logging"""
         try:
+            self.add_debug_message(f"Processing input: {prompt}")
+
             # Process command
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
+
+            self.add_debug_message(f"Command status: {state.status}")
+            if state.error_message:
+                self.add_debug_message(f"Error: {state.error_message}")
+
+            # Debug log for search results
+            if state.search_context and state.search_context.results:
+                self.add_debug_message(
+                    f"Found {len(state.search_context.results)} papers"
+                )
+                for i, paper in enumerate(state.search_context.results, 1):
+                    self.add_debug_message(f"Paper {i}: {paper.title}")
 
             # Update session state
             st.session_state.agent_state = state
@@ -211,42 +202,71 @@ class DashboardApp:
                     "content": state.memory.messages[-1]["content"],
                 }
 
-                # If search was successful, attach papers to message
+                # Attach papers to message if search was successful
                 if (
                     state.status == AgentStatus.SUCCESS
                     and state.search_context
                     and state.search_context.results
                 ):
+
                     response_message["papers"] = state.search_context.results
+
+                    # Also add papers list to the message content
+                    papers_list = "\n\nFound papers:\n"
+                    for i, paper in enumerate(state.search_context.results, 1):
+                        papers_list += f"{i}. {paper.title} ({paper.year if paper.year else 'N/A'})\n"
+                        if paper.authors:
+                            authors = ", ".join(
+                                a.get("name", "") for a in paper.authors
+                            )
+                            papers_list += f"   Authors: {authors}\n"
+                        if paper.abstract:
+                            papers_list += f"   Abstract: {paper.abstract[:200]}...\n"
+                        papers_list += "\n"
+
+                    response_message["content"] += papers_list
 
                 st.session_state.messages.append(response_message)
 
             return state
 
         except Exception as e:
-            error_msg = {
-                "role": "system",
-                "content": f"I apologize, but I encountered an error: {str(e)}",
-            }
-            st.session_state.messages.append(error_msg)
+            error_msg = f"Error processing input: {str(e)}"
+            self.add_debug_message(error_msg)
+            st.session_state.messages.append(
+                {
+                    "role": "system",
+                    "content": f"I apologize, but I encountered an error: {str(e)}",
+                }
+            )
             return None
 
     def render_chat_history(self):
         """Render chat message history"""
         st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 
-        for idx, message in enumerate(st.session_state.messages):
+        for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
-                if (
-                    message["role"] == "system"
-                    and st.session_state.agent_state.search_context
-                    and st.session_state.agent_state.search_context.results
-                ):
-                    self.render_papers(
-                        st.session_state.agent_state.search_context.results,
-                        context_prefix=f"chat_{idx}",
-                    )
+
+                # If this is a system message and has papers attached, render them
+                if message["role"] == "system" and "papers" in message:
+                    st.write("---")
+                    st.write("### Search Results")
+                    for i, paper in enumerate(message["papers"], 1):
+                        with st.expander(f"{i}. {paper.title}"):
+                            st.write(
+                                f"**Authors:** {', '.join(a.get('name', '') for a in paper.authors)}"
+                            )
+                            if paper.year:
+                                st.write(f"**Year:** {paper.year}")
+                            if paper.citations:
+                                st.write(f"**Citations:** {paper.citations}")
+                            if paper.abstract:
+                                st.write("**Abstract:**")
+                                st.write(paper.abstract)
+                            if paper.url:
+                                st.write(f"**URL:** {paper.url}")
 
         st.markdown("</div>", unsafe_allow_html=True)
 

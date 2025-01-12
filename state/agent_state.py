@@ -17,15 +17,13 @@ class AgentStatus(Enum):
 class PaperContext(BaseModel):
     """Enhanced model for tracking paper details in conversation"""
 
-    paper_id: str
-    title: str
-    authors: List[Dict[str, Any]]
+    paper_id: str = Field(alias="paperId")  # Keep the alias
+    title: str = Field(default="Untitled Paper")
+    authors: List[Dict[str, Any]] = Field(default_factory=list)
     year: Optional[int] = None
     citations: Optional[int] = None
     abstract: Optional[str] = None
     url: Optional[str] = None
-
-    # Added fields for better context tracking
     last_referenced: Optional[datetime] = None
     reference_count: int = 0
     discussed_aspects: Set[str] = Field(default_factory=set)
@@ -48,14 +46,23 @@ class PaperContext(BaseModel):
             return "Untitled Paper"
         return v.strip()
 
+    @validator("paper_id", pre=True)
+    def validate_paper_id(cls, v):
+        """Ensure paper_id is never null and is a valid string"""
+        if not v:
+            raise ValueError("paper_id cannot be null or empty")
+        return str(v)  # Convert to string if it isn't already
+
     @validator("authors")
     def validate_authors(cls, v):
+        """Ensure authors list is never null"""
         if not v:
             return [{"name": "Unknown Author", "authorId": None}]
         return v
 
     class Config:
         arbitrary_types_allowed = True
+        populate_by_name = True
 
 
 class SearchContext(BaseModel):
@@ -76,22 +83,34 @@ class SearchContext(BaseModel):
     def add_paper(self, paper: Dict[str, Any]):
         """Add a paper to results with enhanced tracking"""
         try:
+            print(f"\n[DEBUG] Adding paper to SearchContext:")
+            print(f"[DEBUG] Input paper data: {paper}")
+            print(
+                f"[DEBUG] PaperId from input: {paper.get('paperId', 'NO_ID_IN_DICT')}"
+            )
+
             paper_ctx = PaperContext(
-                paper_id=paper.get("paper_id"),
-                title=paper.get("title"),
+                paperId=paper.get("paperId"),  # Using the aliased field name
+                title=paper.get("title", "Untitled Paper"),
                 authors=paper.get("authors", []),
                 year=paper.get("year"),
-                citations=paper.get("citations"),
+                citations=paper.get("citations", 0),
                 abstract=paper.get("abstract"),
                 url=paper.get("url"),
             )
+            print(f"[DEBUG] Created PaperContext with ID: {paper_ctx.paper_id}")
+
             self.results.append(paper_ctx)
 
             # Track this paper as active
             if paper_ctx.paper_id not in self.active_papers:
                 self.active_papers.append(paper_ctx.paper_id)
+
+            print(f"[DEBUG] Successfully added paper to results")
+
         except Exception as e:
-            print(f"Error creating PaperContext: {e}, input data: {paper}")
+            print(f"[DEBUG] Error in add_paper: {str(e)}")
+            raise  # Re-raise the exception after logging
 
     def get_paper_by_index(self, index: int) -> Optional[PaperContext]:
         """Get paper by its display index (1-based) with reference update"""
