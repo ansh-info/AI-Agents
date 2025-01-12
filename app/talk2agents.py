@@ -184,6 +184,14 @@ class DashboardApp:
             if state.error_message:
                 self.add_debug_message(f"Error: {state.error_message}")
 
+            # Debug log for search results
+            if state.search_context and state.search_context.results:
+                self.add_debug_message(
+                    f"Found {len(state.search_context.results)} papers"
+                )
+                for i, paper in enumerate(state.search_context.results, 1):
+                    self.add_debug_message(f"Paper {i}: {paper.title}")
+
             # Update session state
             st.session_state.agent_state = state
 
@@ -193,6 +201,31 @@ class DashboardApp:
                     "role": "system",
                     "content": state.memory.messages[-1]["content"],
                 }
+
+                # Attach papers to message if search was successful
+                if (
+                    state.status == AgentStatus.SUCCESS
+                    and state.search_context
+                    and state.search_context.results
+                ):
+
+                    response_message["papers"] = state.search_context.results
+
+                    # Also add papers list to the message content
+                    papers_list = "\n\nFound papers:\n"
+                    for i, paper in enumerate(state.search_context.results, 1):
+                        papers_list += f"{i}. {paper.title} ({paper.year if paper.year else 'N/A'})\n"
+                        if paper.authors:
+                            authors = ", ".join(
+                                a.get("name", "") for a in paper.authors
+                            )
+                            papers_list += f"   Authors: {authors}\n"
+                        if paper.abstract:
+                            papers_list += f"   Abstract: {paper.abstract[:200]}...\n"
+                        papers_list += "\n"
+
+                    response_message["content"] += papers_list
+
                 st.session_state.messages.append(response_message)
 
             return state
@@ -212,18 +245,28 @@ class DashboardApp:
         """Render chat message history"""
         st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 
-        for idx, message in enumerate(st.session_state.messages):
+        for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
-                if (
-                    message["role"] == "system"
-                    and st.session_state.agent_state.search_context
-                    and st.session_state.agent_state.search_context.results
-                ):
-                    self.render_papers(
-                        st.session_state.agent_state.search_context.results,
-                        context_prefix=f"chat_{idx}",
-                    )
+
+                # If this is a system message and has papers attached, render them
+                if message["role"] == "system" and "papers" in message:
+                    st.write("---")
+                    st.write("### Search Results")
+                    for i, paper in enumerate(message["papers"], 1):
+                        with st.expander(f"{i}. {paper.title}"):
+                            st.write(
+                                f"**Authors:** {', '.join(a.get('name', '') for a in paper.authors)}"
+                            )
+                            if paper.year:
+                                st.write(f"**Year:** {paper.year}")
+                            if paper.citations:
+                                st.write(f"**Citations:** {paper.citations}")
+                            if paper.abstract:
+                                st.write("**Abstract:**")
+                                st.write(paper.abstract)
+                            if paper.url:
+                                st.write(f"**URL:** {paper.url}")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
