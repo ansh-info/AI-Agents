@@ -17,15 +17,13 @@ class AgentStatus(Enum):
 class PaperContext(BaseModel):
     """Enhanced model for tracking paper details in conversation"""
 
-    paper_id: str = Field(alias="paperId")
-    title: str
-    authors: List[Dict[str, Any]]
+    paper_id: str = Field(alias="paperId")  # Keep the alias
+    title: str = Field(default="Untitled Paper")
+    authors: List[Dict[str, Any]] = Field(default_factory=list)
     year: Optional[int] = None
     citations: Optional[int] = None
     abstract: Optional[str] = None
     url: Optional[str] = None
-
-    # Added fields for better context tracking
     last_referenced: Optional[datetime] = None
     reference_count: int = 0
     discussed_aspects: Set[str] = Field(default_factory=set)
@@ -48,15 +46,23 @@ class PaperContext(BaseModel):
             return "Untitled Paper"
         return v.strip()
 
+    @validator("paper_id", pre=True)
+    def validate_paper_id(cls, v):
+        """Ensure paper_id is never null and is a valid string"""
+        if not v:
+            raise ValueError("paper_id cannot be null or empty")
+        return str(v)  # Convert to string if it isn't already
+
     @validator("authors")
     def validate_authors(cls, v):
+        """Ensure authors list is never null"""
         if not v:
             return [{"name": "Unknown Author", "authorId": None}]
         return v
 
     class Config:
-        populate_by_name = True  # Allow both alias and original field names
         arbitrary_types_allowed = True
+        populate_by_name = True
 
 
 class SearchContext(BaseModel):
