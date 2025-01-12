@@ -306,10 +306,11 @@ class EnhancedWorkflowManager:
 
     async def _handle_search(self, query: str):
         """Handle search with error recovery"""
-        print(f"\n[DEBUG] Starting search with query: {query}")
         try:
+            print("\n[DEBUG] ===== Search Process Start =====")
+            print(f"[DEBUG] Original query: {query}")
+
             # Perform search
-            print("[DEBUG] Executing search_papers call...")
             search_result = await self.search_agent.search_papers(query)
             print(f"[DEBUG] Search result status: {search_result['status']}")
 
@@ -321,61 +322,62 @@ class EnhancedWorkflowManager:
             self.current_state.search_context.query = query
 
             results = search_result["results"]
+            print(f"[DEBUG] Total results found: {results.total}")
+
             self.current_state.search_context.total_results = results.total
 
             # Add papers to context with proper validation
             papers_added = 0
-            print(f"[DEBUG] Total papers found: {len(results.papers)}")
+            print(f"[DEBUG] Processing {len(results.papers)} papers")
+
             for i, paper in enumerate(results.papers, 1):
                 try:
-                    # Log paper details
-                    print(f"[DEBUG] Processing paper {i}:")
+                    print(f"\n[DEBUG] Processing paper {i}:")
                     print(
-                        f"  - paperId: {paper.paperId if hasattr(paper, 'paperId') else 'NO ID'}"
+                        f"[DEBUG] Raw paper ID: {getattr(paper, 'paperId', 'NO_ID_ATTR')}"
                     )
-                    print(
-                        f"  - title: {paper.title if hasattr(paper, 'title') else 'NO TITLE'}"
-                    )
+                    print(f"[DEBUG] Raw paper type: {type(paper)}")
 
-                    # Skip papers without an ID
-                    if not paper.paperId:
-                        print(f"[DEBUG] Skipping paper {i} - No ID")
-                        continue
-
+                    # Create paper data dictionary
                     paper_data = {
-                        "paperId": str(paper.paperId),  # Ensure string type
-                        "title": paper.title if paper.title else "Untitled Paper",
-                        "abstract": paper.abstract if paper.abstract else None,
-                        "year": paper.year if hasattr(paper, "year") else None,
+                        "paperId": str(getattr(paper, "paperId", None)),
+                        "title": getattr(paper, "title", "Untitled Paper"),
+                        "abstract": getattr(paper, "abstract", None),
+                        "year": getattr(paper, "year", None),
                         "authors": [
                             {
-                                "name": a.name if a.name else "Unknown Author",
-                                "authorId": (
-                                    a.authorId if hasattr(a, "authorId") else None
-                                ),
+                                "name": getattr(a, "name", "Unknown Author"),
+                                "authorId": getattr(a, "authorId", None),
                             }
-                            for a in (
-                                paper.authors
-                                if hasattr(paper, "authors") and paper.authors
-                                else []
-                            )
+                            for a in getattr(paper, "authors", [])
                         ],
-                        "citations": (
-                            paper.citations if hasattr(paper, "citations") else 0
-                        ),
-                        "url": paper.url if hasattr(paper, "url") else None,
+                        "citations": getattr(paper, "citations", 0),
+                        "url": getattr(paper, "url", None),
                     }
 
-                    # Validate data before adding
-                    if paper_data["paperId"]:  # Only add if we have a valid ID
+                    print(f"[DEBUG] Transformed paper_data:")
+                    print(f"  paperId: {paper_data['paperId']}")
+                    print(f"  title: {paper_data['title']}")
+
+                    # Only add if we have a valid ID
+                    if (
+                        paper_data["paperId"]
+                        and paper_data["paperId"].lower() != "none"
+                    ):
+                        print(f"[DEBUG] Adding paper {i} to context")
                         self.current_state.search_context.add_paper(paper_data)
                         papers_added += 1
+                    else:
+                        print(f"[DEBUG] Skipping paper {i} - Invalid ID")
 
                 except Exception as e:
-                    print(f"Error processing paper: {str(e)}")
+                    print(f"[DEBUG] Error processing paper {i}: {str(e)}")
                     continue
 
-            # Generate appropriate response based on results
+            print(f"\n[DEBUG] Successfully added {papers_added} papers")
+            print("[DEBUG] ===== Search Process End =====\n")
+
+            # Generate appropriate response
             if papers_added > 0:
                 response = await self.conversation_agent.generate_response(
                     prompt=f"Please summarize these {papers_added} search results for '{query}' in a helpful way."
@@ -389,16 +391,16 @@ class EnhancedWorkflowManager:
                     "I found no valid papers matching your search criteria. Please try a different search term.",
                 )
 
-            return {"state": self.current_state, "next": "update_memory"}
-
         except Exception as e:
+            print(f"[DEBUG] Search handler error: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
                 "system",
                 f"I apologize, but I encountered an error while searching: {str(e)}",
             )
-            return {"state": self.current_state, "next": "update_memory"}
+
+        return {"state": self.current_state, "next": "update_memory"}
 
     async def _handle_paper_question(self, paper_reference: str, question: str):
         """Handle paper-specific questions"""
