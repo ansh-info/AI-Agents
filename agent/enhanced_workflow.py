@@ -310,30 +310,50 @@ class EnhancedWorkflowManager:
             results = search_result["results"]
             self.current_state.search_context.total_results = results.total
 
-            # Add papers to context
+            # Add papers to context with proper field mapping
             for paper in results.papers:
-                paper_data = {
-                    "paperId": paper.paperId,
-                    "title": paper.title,
-                    "abstract": paper.abstract,
-                    "year": paper.year,
-                    "authors": [
-                        {"name": a.name, "authorId": a.authorId} for a in paper.authors
-                    ],
-                    "citations": paper.citations,
-                    "url": paper.url,
-                }
-                self.current_state.search_context.add_paper(paper_data)
+                try:
+                    paper_data = {
+                        "paperId": paper.paperId,  # Keep consistent with PaperContext alias
+                        "title": paper.title
+                        or "Untitled",  # Ensure title is never None
+                        "abstract": paper.abstract,
+                        "year": paper.year,
+                        "authors": (
+                            [
+                                {
+                                    "name": a.name or "Unknown Author",
+                                    "authorId": a.authorId,
+                                }
+                                for a in paper.authors
+                            ]
+                            if paper.authors
+                            else [{"name": "Unknown Author", "authorId": None}]
+                        ),
+                        "citations": paper.citations
+                        or 0,  # Ensure citations is never None
+                        "url": paper.url,
+                    }
+                    self.current_state.search_context.add_paper(paper_data)
+                except AttributeError as e:
+                    print(f"Error processing paper: {str(e)}")  # Log error but continue
+                    continue
 
-            # Generate response
-            response = await self.conversation_agent.generate_response(
-                prompt=f"Please summarize these search results for '{query}' in a helpful way."
-            )
+            # Only generate response if we have results
+            if self.current_state.search_context.results:
+                response = await self.conversation_agent.generate_response(
+                    prompt=f"Please summarize these search results for '{query}' in a helpful way."
+                )
 
-            if response["status"] == "error":
-                raise Exception(f"Response generation failed: {response['error']}")
+                if response["status"] == "error":
+                    raise Exception(f"Response generation failed: {response['error']}")
 
-            self.current_state.add_message("system", response["response"])
+                self.current_state.add_message("system", response["response"])
+            else:
+                self.current_state.add_message(
+                    "system",
+                    "I found no papers matching your search criteria. Please try a different search term.",
+                )
 
         except Exception as e:
             self.current_state.status = AgentStatus.ERROR
@@ -342,6 +362,8 @@ class EnhancedWorkflowManager:
                 "system",
                 f"I apologize, but I encountered an error while searching: {str(e)}",
             )
+
+        return {"state": self.current_state, "next": "update_memory"}
 
     async def _handle_paper_question(self, paper_reference: str, question: str):
         """Handle paper-specific questions"""
