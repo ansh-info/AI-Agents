@@ -17,7 +17,7 @@ class AgentStatus(Enum):
 class PaperContext(BaseModel):
     """Enhanced model for tracking paper details in conversation"""
 
-    paper_id: str
+    paper_id: str = Field(alias="paperId")
     title: str
     authors: List[Dict[str, Any]]
     year: Optional[int] = None
@@ -55,6 +55,7 @@ class PaperContext(BaseModel):
         return v
 
     class Config:
+        populate_by_name = True  # Allow both alias and original field names
         arbitrary_types_allowed = True
 
 
