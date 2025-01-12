@@ -125,12 +125,22 @@ class SearchAgent:
     ) -> Dict[str, Any]:
         """Perform paper search with error handling"""
         try:
+            print(f"[DEBUG] SearchAgent: Starting search with query: {query}")
             results = await self.client.search_papers(
                 query=query, filters=filters, limit=10
             )
 
+            print(f"[DEBUG] SearchAgent: Got {results.total} total results")
+            print("[DEBUG] SearchAgent: First paper details:")
+            if results.papers:
+                first_paper = results.papers[0]
+                print(f"  - paperId: {first_paper.paperId}")
+                print(f"  - title: {first_paper.title}")
+                print(f"  - authors: {[a.name for a in first_paper.authors]}")
+
             return {"status": "success", "results": results, "error": None}
         except Exception as e:
+            print(f"[DEBUG] SearchAgent: Error during search: {str(e)}")
             return {"status": "error", "results": None, "error": str(e)}
 
     async def get_paper_details(self, paper_id: str) -> Dict[str, Any]:
@@ -296,9 +306,12 @@ class EnhancedWorkflowManager:
 
     async def _handle_search(self, query: str):
         """Handle search with error recovery"""
+        print(f"\n[DEBUG] Starting search with query: {query}")
         try:
             # Perform search
+            print("[DEBUG] Executing search_papers call...")
             search_result = await self.search_agent.search_papers(query)
+            print(f"[DEBUG] Search result status: {search_result['status']}")
 
             if search_result["status"] == "error":
                 raise Exception(f"Search failed: {search_result['error']}")
@@ -310,50 +323,63 @@ class EnhancedWorkflowManager:
             results = search_result["results"]
             self.current_state.search_context.total_results = results.total
 
-            # Add papers to context with proper field mapping
-            for paper in results.papers:
+            # Add papers to context with proper validation
+            papers_added = 0
+            print(f"[DEBUG] Total papers found: {len(results.papers)}")
+            for i, paper in enumerate(results.papers, 1):
                 try:
+                    # Skip papers without an ID
+                    if not paper.paperId:
+                        continue
+
                     paper_data = {
-                        "paperId": paper.paperId,  # Keep consistent with PaperContext alias
-                        "title": paper.title
-                        or "Untitled",  # Ensure title is never None
-                        "abstract": paper.abstract,
-                        "year": paper.year,
-                        "authors": (
-                            [
-                                {
-                                    "name": a.name or "Unknown Author",
-                                    "authorId": a.authorId,
-                                }
-                                for a in paper.authors
-                            ]
-                            if paper.authors
-                            else [{"name": "Unknown Author", "authorId": None}]
+                        "paperId": str(paper.paperId),  # Ensure string type
+                        "title": paper.title if paper.title else "Untitled Paper",
+                        "abstract": paper.abstract if paper.abstract else None,
+                        "year": paper.year if hasattr(paper, "year") else None,
+                        "authors": [
+                            {
+                                "name": a.name if a.name else "Unknown Author",
+                                "authorId": (
+                                    a.authorId if hasattr(a, "authorId") else None
+                                ),
+                            }
+                            for a in (
+                                paper.authors
+                                if hasattr(paper, "authors") and paper.authors
+                                else []
+                            )
+                        ],
+                        "citations": (
+                            paper.citations if hasattr(paper, "citations") else 0
                         ),
-                        "citations": paper.citations
-                        or 0,  # Ensure citations is never None
-                        "url": paper.url,
+                        "url": paper.url if hasattr(paper, "url") else None,
                     }
-                    self.current_state.search_context.add_paper(paper_data)
-                except AttributeError as e:
-                    print(f"Error processing paper: {str(e)}")  # Log error but continue
+
+                    # Validate data before adding
+                    if paper_data["paperId"]:  # Only add if we have a valid ID
+                        self.current_state.search_context.add_paper(paper_data)
+                        papers_added += 1
+
+                except Exception as e:
+                    print(f"Error processing paper: {str(e)}")
                     continue
 
-            # Only generate response if we have results
-            if self.current_state.search_context.results:
+            # Generate appropriate response based on results
+            if papers_added > 0:
                 response = await self.conversation_agent.generate_response(
-                    prompt=f"Please summarize these search results for '{query}' in a helpful way."
+                    prompt=f"Please summarize these {papers_added} search results for '{query}' in a helpful way."
                 )
-
                 if response["status"] == "error":
                     raise Exception(f"Response generation failed: {response['error']}")
-
                 self.current_state.add_message("system", response["response"])
             else:
                 self.current_state.add_message(
                     "system",
-                    "I found no papers matching your search criteria. Please try a different search term.",
+                    "I found no valid papers matching your search criteria. Please try a different search term.",
                 )
+
+            return {"state": self.current_state, "next": "update_memory"}
 
         except Exception as e:
             self.current_state.status = AgentStatus.ERROR
@@ -362,8 +388,7 @@ class EnhancedWorkflowManager:
                 "system",
                 f"I apologize, but I encountered an error while searching: {str(e)}",
             )
-
-        return {"state": self.current_state, "next": "update_memory"}
+            return {"state": self.current_state, "next": "update_memory"}
 
     async def _handle_paper_question(self, paper_reference: str, question: str):
         """Handle paper-specific questions"""
