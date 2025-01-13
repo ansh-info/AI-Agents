@@ -262,30 +262,85 @@ class DashboardApp:
         """Render chat message history"""
         st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 
-        for message in st.session_state.messages:
+        for idx, message in enumerate(st.session_state.messages):
             with st.chat_message(message["role"]):
-                st.write(message["content"])
+                content = message["content"]
 
-                # If this is a system message and has papers attached, render them
-                if message["role"] == "system" and "papers" in message:
-                    st.write("---")
-                    st.write("### Search Results")
-                    for i, paper in enumerate(message["papers"], 1):
-                        with st.expander(f"{i}. {paper.title}"):
-                            st.write(
-                                f"**Authors:** {', '.join(a.get('name', '') for a in paper.authors)}"
-                            )
-                            if paper.year:
-                                st.write(f"**Year:** {paper.year}")
-                            if paper.citations:
-                                st.write(f"**Citations:** {paper.citations}")
-                            if paper.abstract:
-                                st.write("**Abstract:**")
-                                st.write(paper.abstract)
-                            if paper.url:
-                                st.write(f"**URL:** {paper.url}")
+                # Check if this is a search result message
+                if (
+                    message["role"] == "system"
+                    and "Found" in content
+                    and "papers related to" in content
+                ):
+                    # Split the content into header and papers
+                    parts = content.split("\n\n")
+                    st.write(parts[0])  # Write the "Found X papers" header
+
+                    # Process each paper section
+                    current_paper = []
+                    for line in parts[1:]:
+                        if line.startswith("Summary:"):
+                            # Render any pending paper
+                            if current_paper:
+                                self._render_paper_section("\n".join(current_paper))
+                            # Render summary
+                            st.markdown("### Summary")
+                            st.write(line[8:].strip())
+                            break
+
+                        if line.strip():
+                            current_paper.append(line)
+                        else:
+                            if current_paper:
+                                self._render_paper_section("\n".join(current_paper))
+                                current_paper = []
+                else:
+                    st.write(content)
 
         st.markdown("</div>", unsafe_allow_html=True)
+
+    def _render_paper_section(self, paper_text):
+        """Render a single paper section with proper formatting"""
+        lines = paper_text.split("\n")
+        if not lines:
+            return
+
+        # Extract title (first line)
+        title = lines[0].split("Authors:")[0].strip()
+        st.markdown(f"### {title}")
+
+        # Create columns for metadata
+        col1, col2 = st.columns(2)
+
+        # Extract and display authors
+        authors = next((line for line in lines if "Authors:" in line), "")
+        if authors:
+            authors = authors.split("Authors:")[1].strip()
+            with col1:
+                st.markdown("**Authors:**")
+                st.write(authors)
+
+        # Extract and display year and citations
+        year_citations = next((line for line in lines if "Year:" in line), "")
+        if year_citations:
+            with col2:
+                st.markdown("**Publication Details:**")
+                st.write(year_citations)
+
+        # Extract and display abstract in expander
+        abstract = next((line for line in lines if "Abstract:" in line), "")
+        if abstract:
+            with st.expander("View Abstract"):
+                st.write(abstract.split("Abstract:")[1].strip())
+
+        # Extract and display URL
+        url = next((line for line in lines if "URL:" in line), "")
+        if url:
+            st.markdown(
+                f"**Link:** [{url.split('URL:')[1].strip()}]({url.split('URL:')[1].strip()})"
+            )
+
+        st.divider()
 
     def render_pagination(self, total_results: int):
         """Render pagination controls"""
