@@ -197,55 +197,89 @@ class WorkflowGraph:
     async def _process_search(self, state: AgentState) -> Dict:
         """Process search request with direct S2 integration"""
         try:
-            # Extract search query from latest message
+            # Extract and clean search query
             latest_message = state.memory.messages[-1]["content"]
             query = self._clean_search_query(latest_message)
+            print(f"[DEBUG] Processing search for cleaned query: '{query}'")
 
-            # Perform search using S2 client
+            # Perform search
             results = await self.s2_client.search_papers(query=query, limit=10)
+            print(
+                f"[DEBUG] Retrieved {len(results.papers)} papers from total {results.total}"
+            )
 
-            if not results:
+            if not results or not results.papers:
                 state.add_message("system", "No results found for your search.")
                 return {"state": state, "next": "update_memory"}
 
-            # Update state with search results
+            # Update state
             state.search_context.query = query
             state.search_context.total_results = results.total
             state.search_context.results = []
 
-            for paper in results.papers:
+            # Format the response with markdown
+            response_parts = [
+                f"Found {results.total:,} papers related to '{query}'. Here are the most relevant papers:\n"
+            ]
+
+            # Build detailed paper information and add to state
+            for i, paper in enumerate(results.papers, 1):
                 try:
+                    # Add to state
                     paper_data = {
-                        "paper_id": paper.paperId,
+                        "paperId": paper.paperId,
                         "title": paper.title,
                         "abstract": paper.abstract,
                         "year": paper.year,
                         "authors": [
-                            {"name": author.name, "authorId": author.authorId}
-                            for author in paper.authors
+                            {"name": a.name, "authorId": a.authorId}
+                            for a in paper.authors
                         ],
                         "citations": paper.citations,
                         "url": paper.url,
                     }
                     state.search_context.add_paper(paper_data)
-                except AttributeError as e:
-                    continue  # Skip papers with missing attributes
 
-            if not state.search_context.results:
-                state.add_message(
-                    "system",
-                    "I found some papers but there was an error processing them. Please try your search again.",
-                )
-                return {"state": state, "next": "update_memory"}
+                    # Format paper details with clear sections
+                    paper_info = [
+                        f"### {i}. {paper.title}",
+                        "",
+                        "**Authors:**",
+                        f"{', '.join(a.name for a in paper.authors)}",
+                        "",
+                        "**Publication Details:**",
+                        f"- Year: {paper.year or 'N/A'}",
+                        f"- Citations: {paper.citations or 0}",
+                        "",
+                    ]
 
-            # Generate search summary
-            summary = f"I found {len(state.search_context.results)} papers about {query}. Here are the most relevant ones:"
-            state.add_message("system", summary)
+                    if paper.abstract:
+                        paper_info.extend(["**Abstract:**", f"{paper.abstract}", ""])
 
+                    paper_info.extend(
+                        ["**Link:**", f"[View Paper]({paper.url})", "", "---", ""]
+                    )
+
+                    response_parts.extend(paper_info)
+                    print(f"[DEBUG] Processed paper {i}: {paper.title}")
+
+                except Exception as e:
+                    print(f"[DEBUG] Error processing paper {i}: {str(e)}")
+                    continue
+
+            # Generate summary using the actual papers
+            summary_text = await self._generate_summary(query, results.papers)
+
+            # Add summary section
+            response_parts.extend(["### Summary", "", summary_text])
+
+            # Update state with complete response
+            state.add_message("system", "\n".join(response_parts))
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
 
         except Exception as e:
+            print(f"[DEBUG] Search processing error: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = f"Search processing error: {str(e)}"
             state.add_message(
@@ -254,6 +288,43 @@ class WorkflowGraph:
             )
 
         return {"state": state, "next": "update_memory"}
+
+    async def _generate_summary(self, query: str, papers: List[Any]) -> str:
+        """Generate a summary of the search results"""
+        try:
+            papers_info = []
+            for paper in papers:
+                papers_info.append(
+                    {
+                        "title": paper.title,
+                        "year": paper.year,
+                        "citations": paper.citations,
+                        "abstract": (
+                            paper.abstract[:200]
+                            if paper.abstract
+                            else "No abstract available"
+                        ),
+                    }
+                )
+
+            summary_prompt = f"""Based on these {len(papers_info)} papers about "{query}", please provide a brief summary that:
+    1. Highlights the main research themes found in these papers
+    2. Notes any significant methodologies or approaches mentioned
+    3. Points out any trends in publication years or citation patterns
+    4. Identifies potential areas of interest based on these specific papers
+
+    Papers details:
+    {papers_info}"""
+
+            summary = await self.ollama_client.generate(
+                prompt=summary_prompt,
+                system_prompt="You are a helpful academic research assistant. Focus only on summarizing the specific papers provided.",
+                max_tokens=200,
+            )
+
+            return summary
+        except Exception as e:
+            return f"Error generating summary: {str(e)}"
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
@@ -437,20 +508,43 @@ Please provide a structured response that:
         return None
 
     def _clean_search_query(self, query: str) -> str:
-        """Clean search query"""
-        clean_phrases = [
-            "search for",
-            "find me",
-            "look for",
-            "papers about",
-            "papers on",
-            "research on",
+        """Clean search query to extract just the topic"""
+        # Remove common prefixes and phrases
+        prefixes_to_remove = [
+            "can you search for papers on",
+            "can you search for papers about",
+            "can you search for papers",
+            "can you search for",
+            "can you search",
+            "can you find papers on",
+            "can you find papers about",
+            "can you find papers",
             "can you find",
+            "can you",
+            "search for papers on",
+            "search for papers about",
+            "search for papers",
+            "search for",
+            "papers on",
+            "papers about",
         ]
-        cleaned = query.lower()
-        for phrase in clean_phrases:
-            cleaned = cleaned.replace(phrase, "")
-        return cleaned.strip()
+
+        query = query.lower().strip()
+
+        # Remove each prefix if found at start of query
+        for prefix in sorted(prefixes_to_remove, key=len, reverse=True):
+            if query.startswith(prefix):
+                query = query[len(prefix) :].strip()
+                break
+
+        # Remove question mark if present
+        query = query.replace("?", "").strip()
+
+        print(f"[DEBUG] Query cleaning:")
+        print(f"  Original: '{query}'")
+        print(f"  Cleaned: '{query}'")
+
+        return query
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""

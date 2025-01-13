@@ -129,24 +129,41 @@ class DashboardApp:
             st.info("No papers found. Try adjusting your search terms.")
             return
 
-        st.markdown(f"<div class='paper-list'>", unsafe_allow_html=True)
-
         for i, paper in enumerate(papers, 1):
-            st.markdown(
-                f"""<div class='paper-item'>
-                        <div class='paper-title'>{i}. {paper.title}</div>
-                        <div><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</div>
-                        <div><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</div>
-                        <div><strong>Abstract:</strong> {paper.abstract if paper.abstract else 'Not available'}</div>
-                        </div>""",
-                unsafe_allow_html=True,
-            )
+            with st.container():
+                # Title with numbering
+                st.markdown(f"### {i}. {paper.title}")
 
-            if st.button("View Details", key=f"{context_prefix}_select_{i}"):
-                st.session_state.selected_paper = paper.paper_id
-                st.rerun()
+                # Authors in a separate section
+                st.markdown("**Authors:**")
+                authors = ", ".join(author.get("name", "") for author in paper.authors)
+                st.write(authors)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                # Publication details in columns
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Year:**")
+                    st.write(paper.year or "N/A")
+                with col2:
+                    st.markdown("**Citations:**")
+                    st.write(paper.citations or 0)
+
+                # Abstract in an expander
+                if paper.abstract:
+                    with st.expander("View Abstract"):
+                        st.write(paper.abstract)
+
+                # URL as a button
+                if paper.url:
+                    st.markdown(f"[View Paper]({paper.url})")
+
+                # Add view details button
+                if st.button("View Details", key=f"{context_prefix}_select_{i}"):
+                    st.session_state.selected_paper = paper.paper_id
+                    st.experimental_rerun()
+
+                # Separator between papers
+                st.divider()
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
@@ -242,33 +259,151 @@ class DashboardApp:
             return None
 
     def render_chat_history(self):
-        """Render chat message history"""
-        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
-
+        """Render chat message history with enhanced paper formatting"""
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                st.write(message["content"])
+                if (
+                    message["role"] == "system"
+                    and "Found" in message["content"]
+                    and "papers related to" in message["content"]
+                ):
+                    # Split content into sections
+                    sections = message["content"].split("\n\n")
 
-                # If this is a system message and has papers attached, render them
-                if message["role"] == "system" and "papers" in message:
-                    st.write("---")
-                    st.write("### Search Results")
-                    for i, paper in enumerate(message["papers"], 1):
-                        with st.expander(f"{i}. {paper.title}"):
-                            st.write(
-                                f"**Authors:** {', '.join(a.get('name', '') for a in paper.authors)}"
+                    # Display header (Found X papers...)
+                    st.write(sections[0])
+
+                    # Process each paper section
+                    paper_sections = []
+                    current_section = []
+
+                    for section in sections[1:]:
+                        if section.strip().startswith(("Summary:", "Based on")):
+                            if current_section:
+                                paper_sections.append("\n".join(current_section))
+                            st.markdown("### Summary")
+                            st.write(section.replace("Summary:", "").strip())
+                            break
+                        elif section.strip():
+                            current_section.append(section)
+                        else:
+                            if current_section:
+                                paper_sections.append("\n".join(current_section))
+                                current_section = []
+
+                    # Render each paper in a structured format
+                    for i, paper in enumerate(paper_sections, 1):
+                        with st.container():
+                            lines = paper.split("\n")
+
+                            # Extract title
+                            title = (
+                                lines[0].split("Authors:")[0].strip() if lines else ""
                             )
-                            if paper.year:
-                                st.write(f"**Year:** {paper.year}")
-                            if paper.citations:
-                                st.write(f"**Citations:** {paper.citations}")
-                            if paper.abstract:
-                                st.write("**Abstract:**")
-                                st.write(paper.abstract)
-                            if paper.url:
-                                st.write(f"**URL:** {paper.url}")
+                            st.markdown(f"### {i}. {title}")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                            # Create two columns for metadata
+                            col1, col2 = st.columns(2)
+
+                            with col1:
+                                # Extract and display authors
+                                authors = next(
+                                    (
+                                        l.split("Authors:")[1].strip()
+                                        for l in lines
+                                        if "Authors:" in l
+                                    ),
+                                    "",
+                                )
+                                st.markdown("**Authors**")
+                                st.write(authors)
+
+                            with col2:
+                                # Extract and display year/citations
+                                year_citations = next(
+                                    (
+                                        l
+                                        for l in lines
+                                        if "Year:" in l and "Citations:" in l
+                                    ),
+                                    "",
+                                )
+                                if year_citations:
+                                    st.markdown("**Publication Details**")
+                                    st.write(year_citations)
+
+                            # Display abstract in expander
+                            abstract = next(
+                                (
+                                    l.split("Abstract:")[1].strip()
+                                    for l in lines
+                                    if "Abstract:" in l
+                                ),
+                                "",
+                            )
+                            if abstract:
+                                with st.expander("View Abstract"):
+                                    st.write(abstract)
+
+                            # Display URL as link
+                            url = next(
+                                (
+                                    l.split("URL:")[1].strip()
+                                    for l in lines
+                                    if "URL:" in l
+                                ),
+                                "",
+                            )
+                            if url:
+                                st.markdown(f"[View Paper]({url})")
+
+                            st.divider()
+                else:
+                    # Display regular messages
+                    st.write(message["content"])
+
+    def _render_paper_section(self, paper_text):
+        """Render a single paper section with proper formatting"""
+        lines = paper_text.split("\n")
+        if not lines:
+            return
+
+        # Extract title (first line)
+        title = lines[0].split("Authors:")[0].strip()
+        st.markdown(f"### {title}")
+
+        # Create columns for metadata
+        col1, col2 = st.columns(2)
+
+        # Extract and display authors
+        authors = next((line for line in lines if "Authors:" in line), "")
+        if authors:
+            authors = authors.split("Authors:")[1].strip()
+            with col1:
+                st.markdown("**Authors:**")
+                st.write(authors)
+
+        # Extract and display year and citations
+        year_citations = next((line for line in lines if "Year:" in line), "")
+        if year_citations:
+            with col2:
+                st.markdown("**Publication Details:**")
+                st.write(year_citations)
+
+        # Extract and display abstract in expander
+        abstract = next((line for line in lines if "Abstract:" in line), "")
+        if abstract:
+            with st.expander("View Abstract"):
+                st.write(abstract.split("Abstract:")[1].strip())
+
+        # Extract and display URL
+        url = next((line for line in lines if "URL:" in line), "")
+        if url:
+            st.markdown(
+                f"**Link:** [{url.split('URL:')[1].strip()}]({url.split('URL:')[1].strip()})"
+            )
+
+        st.divider()
 
     def render_pagination(self, total_results: int):
         """Render pagination controls"""
