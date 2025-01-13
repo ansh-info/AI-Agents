@@ -508,43 +508,43 @@ Please provide a structured response that:
         return None
 
     def _clean_search_query(self, query: str) -> str:
-        """Clean search query by removing common prefixes and noise words"""
-        # First, extract just the main search terms
-        removing_phrases = [
+        """Clean search query to extract just the topic"""
+        # Remove common prefixes and phrases
+        prefixes_to_remove = [
+            "can you search for papers on",
+            "can you search for papers about",
+            "can you search for papers",
+            "can you search for",
+            "can you search",
+            "can you find papers on",
+            "can you find papers about",
+            "can you find papers",
+            "can you find",
+            "can you",
             "search for papers on",
             "search for papers about",
+            "search for papers",
             "search for",
             "papers on",
             "papers about",
-            "can you search for papers on",
-            "can you search for papers about",
-            "can you search for",
-            "can you find papers on",
-            "can you find papers about",
-            "can you find",
-            "can you",
-            "please find",
-            "find me",
-            "look for",
         ]
 
-        # Convert to lowercase for consistent processing
-        cleaned = query.lower().strip()
+        query = query.lower().strip()
 
-        # Remove each phrase
-        for phrase in removing_phrases:
-            if cleaned.startswith(phrase):
-                cleaned = cleaned[len(phrase) :].strip()
+        # Remove each prefix if found at start of query
+        for prefix in sorted(prefixes_to_remove, key=len, reverse=True):
+            if query.startswith(prefix):
+                query = query[len(prefix) :].strip()
+                break
 
-        # Further clean up
-        cleaned = cleaned.replace("papers", "").replace("paper", "").strip()
-        cleaned = " ".join(word for word in cleaned.split() if len(word) > 1)
+        # Remove question mark if present
+        query = query.replace("?", "").strip()
 
-        print(f"[DEBUG] Clean query process:")
+        print(f"[DEBUG] Query cleaning:")
         print(f"  Original: '{query}'")
-        print(f"  Cleaned: '{cleaned}'")
+        print(f"  Cleaned: '{query}'")
 
-        return cleaned
+        return query
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
