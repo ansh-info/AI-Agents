@@ -217,11 +217,12 @@ class WorkflowGraph:
             state.search_context.total_results = results.total
             state.search_context.results = []
 
-            # Format the response
-            response = f"Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n\n"
+            # Format the response with markdown
+            response_parts = [
+                f"Found {results.total:,} papers related to '{query}'. Here are the most relevant papers:\n"
+            ]
 
             # Build detailed paper information and add to state
-            papers_info = []
             for i, paper in enumerate(results.papers, 1):
                 try:
                     # Add to state
@@ -239,48 +240,41 @@ class WorkflowGraph:
                     }
                     state.search_context.add_paper(paper_data)
 
-                    # Format paper details
-                    paper_info = f"{i}. {paper.title}\n"
-                    paper_info += (
-                        f"Authors: {', '.join(a.name for a in paper.authors)}\n"
-                    )
-                    paper_info += f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}\n"
+                    # Format paper details with clear sections
+                    paper_info = [
+                        f"### {i}. {paper.title}",
+                        "",
+                        "**Authors:**",
+                        f"{', '.join(a.name for a in paper.authors)}",
+                        "",
+                        "**Publication Details:**",
+                        f"- Year: {paper.year or 'N/A'}",
+                        f"- Citations: {paper.citations or 0}",
+                        "",
+                    ]
+
                     if paper.abstract:
-                        paper_info += f"Abstract: {paper.abstract}\n"
-                    paper_info += f"URL: {paper.url}\n\n"
+                        paper_info.extend(["**Abstract:**", f"{paper.abstract}", ""])
 
-                    papers_info.append(paper_info)
+                    paper_info.extend(
+                        ["**Link:**", f"[View Paper]({paper.url})", "", "---", ""]
+                    )
 
+                    response_parts.extend(paper_info)
                     print(f"[DEBUG] Processed paper {i}: {paper.title}")
 
                 except Exception as e:
                     print(f"[DEBUG] Error processing paper {i}: {str(e)}")
                     continue
 
-            # Add all papers to response
-            response += "\n".join(papers_info)
-
             # Generate summary using the actual papers
-            summary_prompt = f"""Based on these {len(papers_info)} papers about "{query}", please provide a brief summary that:
-    1. Highlights the main research themes found in these papers
-    2. Notes any significant methodologies or approaches mentioned
-    3. Points out any trends in publication years or citation patterns
-    4. Identifies potential areas of interest based on these specific papers
+            summary_text = await self._generate_summary(query, results.papers)
 
-    Papers details:
-    {papers_info}"""
-
-            print(f"[DEBUG] Generating summary for {len(papers_info)} papers")
-            summary = await self.ollama_client.generate(
-                prompt=summary_prompt,
-                system_prompt="You are a helpful academic research assistant. Focus only on summarizing the specific papers provided.",
-                max_tokens=200,
-            )
-
-            response += "\nSummary:\n" + summary
+            # Add summary section
+            response_parts.extend(["### Summary", "", summary_text])
 
             # Update state with complete response
-            state.add_message("system", response)
+            state.add_message("system", "\n".join(response_parts))
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
 
@@ -295,24 +289,42 @@ class WorkflowGraph:
 
         return {"state": state, "next": "update_memory"}
 
-    async def _generate_search_summary(self, query: str, papers: List[Any]) -> str:
-        """Generate a brief summary of search results"""
+    async def _generate_summary(self, query: str, papers: List[Any]) -> str:
+        """Generate a summary of the search results"""
         try:
-            summary_prompt = f"""Based on these {len(papers)} papers about "{query}", provide a 2-3 sentence summary highlighting:
-    1. The main research areas covered
-    2. Any notable trends or patterns
-    3. The potential relevance to the search query
+            papers_info = []
+            for paper in papers:
+                papers_info.append(
+                    {
+                        "title": paper.title,
+                        "year": paper.year,
+                        "citations": paper.citations,
+                        "abstract": (
+                            paper.abstract[:200]
+                            if paper.abstract
+                            else "No abstract available"
+                        ),
+                    }
+                )
 
-    Keep the summary brief and focused on the actual papers found."""
+            summary_prompt = f"""Based on these {len(papers_info)} papers about "{query}", please provide a brief summary that:
+    1. Highlights the main research themes found in these papers
+    2. Notes any significant methodologies or approaches mentioned
+    3. Points out any trends in publication years or citation patterns
+    4. Identifies potential areas of interest based on these specific papers
+
+    Papers details:
+    {papers_info}"""
 
             summary = await self.ollama_client.generate(
                 prompt=summary_prompt,
-                system_prompt="You are a helpful academic research assistant.",
-                max_tokens=150,
+                system_prompt="You are a helpful academic research assistant. Focus only on summarizing the specific papers provided.",
+                max_tokens=200,
             )
-            return summary.strip()
+
+            return summary
         except Exception as e:
-            return f"Unable to generate summary due to error: {str(e)}"
+            return f"Error generating summary: {str(e)}"
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
