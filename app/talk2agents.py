@@ -129,33 +129,41 @@ class DashboardApp:
             st.info("No papers found. Try adjusting your search terms.")
             return
 
-        st.markdown("### Search Results")
-
         for i, paper in enumerate(papers, 1):
             with st.container():
-                st.markdown(
-                    f"""
-                #### {i}. {paper.title}
-                
-                **Authors:** {', '.join(author.get('name', '') for author in paper.authors)}  
-                **Year:** {paper.year or 'N/A'} | **Citations:** {paper.citations or 0}  
-                **Paper ID:** {paper.paper_id}
-                """
-                )
+                # Title with numbering
+                st.markdown(f"### {i}. {paper.title}")
 
+                # Authors in a separate section
+                st.markdown("**Authors:**")
+                authors = ", ".join(author.get("name", "") for author in paper.authors)
+                st.write(authors)
+
+                # Publication details in columns
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Year:**")
+                    st.write(paper.year or "N/A")
+                with col2:
+                    st.markdown("**Citations:**")
+                    st.write(paper.citations or 0)
+
+                # Abstract in an expander
                 if paper.abstract:
                     with st.expander("View Abstract"):
                         st.write(paper.abstract)
 
+                # URL as a button
                 if paper.url:
                     st.markdown(f"[View Paper]({paper.url})")
 
-                st.divider()
-
-                # Add button for detailed view
+                # Add view details button
                 if st.button("View Details", key=f"{context_prefix}_select_{i}"):
                     st.session_state.selected_paper = paper.paper_id
-                    st.rerun()
+                    st.experimental_rerun()
+
+                # Separator between papers
+                st.divider()
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
