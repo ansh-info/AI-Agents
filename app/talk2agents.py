@@ -129,24 +129,33 @@ class DashboardApp:
             st.info("No papers found. Try adjusting your search terms.")
             return
 
-        st.markdown(f"<div class='paper-list'>", unsafe_allow_html=True)
+        st.markdown("### Search Results")
 
         for i, paper in enumerate(papers, 1):
-            st.markdown(
-                f"""<div class='paper-item'>
-                        <div class='paper-title'>{i}. {paper.title}</div>
-                        <div><strong>Authors:</strong> {', '.join(author.get('name', '') for author in paper.authors)}</div>
-                        <div><strong>Year:</strong> {paper.year or 'N/A'} | <strong>Citations:</strong> {paper.citations or 0}</div>
-                        <div><strong>Abstract:</strong> {paper.abstract if paper.abstract else 'Not available'}</div>
-                        </div>""",
-                unsafe_allow_html=True,
-            )
+            with st.container():
+                st.markdown(
+                    f"""
+                #### {i}. {paper.title}
+                
+                **Authors:** {', '.join(author.get('name', '') for author in paper.authors)}  
+                **Year:** {paper.year or 'N/A'} | **Citations:** {paper.citations or 0}  
+                **Paper ID:** {paper.paper_id}
+                """
+                )
 
-            if st.button("View Details", key=f"{context_prefix}_select_{i}"):
-                st.session_state.selected_paper = paper.paper_id
-                st.rerun()
+                if paper.abstract:
+                    with st.expander("View Abstract"):
+                        st.write(paper.abstract)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                if paper.url:
+                    st.markdown(f"[View Paper]({paper.url})")
+
+                st.divider()
+
+                # Add button for detailed view
+                if st.button("View Details", key=f"{context_prefix}_select_{i}"):
+                    st.session_state.selected_paper = paper.paper_id
+                    st.rerun()
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
