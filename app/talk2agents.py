@@ -259,45 +259,108 @@ class DashboardApp:
             return None
 
     def render_chat_history(self):
-        """Render chat message history"""
-        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
-
-        for idx, message in enumerate(st.session_state.messages):
+        """Render chat message history with enhanced paper formatting"""
+        for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                content = message["content"]
-
-                # Check if this is a search result message
                 if (
                     message["role"] == "system"
-                    and "Found" in content
-                    and "papers related to" in content
+                    and "Found" in message["content"]
+                    and "papers related to" in message["content"]
                 ):
-                    # Split the content into header and papers
-                    parts = content.split("\n\n")
-                    st.write(parts[0])  # Write the "Found X papers" header
+                    # Split content into sections
+                    sections = message["content"].split("\n\n")
+
+                    # Display header (Found X papers...)
+                    st.write(sections[0])
 
                     # Process each paper section
-                    current_paper = []
-                    for line in parts[1:]:
-                        if line.startswith("Summary:"):
-                            # Render any pending paper
-                            if current_paper:
-                                self._render_paper_section("\n".join(current_paper))
-                            # Render summary
+                    paper_sections = []
+                    current_section = []
+
+                    for section in sections[1:]:
+                        if section.strip().startswith(("Summary:", "Based on")):
+                            if current_section:
+                                paper_sections.append("\n".join(current_section))
                             st.markdown("### Summary")
-                            st.write(line[8:].strip())
+                            st.write(section.replace("Summary:", "").strip())
                             break
-
-                        if line.strip():
-                            current_paper.append(line)
+                        elif section.strip():
+                            current_section.append(section)
                         else:
-                            if current_paper:
-                                self._render_paper_section("\n".join(current_paper))
-                                current_paper = []
-                else:
-                    st.write(content)
+                            if current_section:
+                                paper_sections.append("\n".join(current_section))
+                                current_section = []
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                    # Render each paper in a structured format
+                    for i, paper in enumerate(paper_sections, 1):
+                        with st.container():
+                            lines = paper.split("\n")
+
+                            # Extract title
+                            title = (
+                                lines[0].split("Authors:")[0].strip() if lines else ""
+                            )
+                            st.markdown(f"### {i}. {title}")
+
+                            # Create two columns for metadata
+                            col1, col2 = st.columns(2)
+
+                            with col1:
+                                # Extract and display authors
+                                authors = next(
+                                    (
+                                        l.split("Authors:")[1].strip()
+                                        for l in lines
+                                        if "Authors:" in l
+                                    ),
+                                    "",
+                                )
+                                st.markdown("**Authors**")
+                                st.write(authors)
+
+                            with col2:
+                                # Extract and display year/citations
+                                year_citations = next(
+                                    (
+                                        l
+                                        for l in lines
+                                        if "Year:" in l and "Citations:" in l
+                                    ),
+                                    "",
+                                )
+                                if year_citations:
+                                    st.markdown("**Publication Details**")
+                                    st.write(year_citations)
+
+                            # Display abstract in expander
+                            abstract = next(
+                                (
+                                    l.split("Abstract:")[1].strip()
+                                    for l in lines
+                                    if "Abstract:" in l
+                                ),
+                                "",
+                            )
+                            if abstract:
+                                with st.expander("View Abstract"):
+                                    st.write(abstract)
+
+                            # Display URL as link
+                            url = next(
+                                (
+                                    l.split("URL:")[1].strip()
+                                    for l in lines
+                                    if "URL:" in l
+                                ),
+                                "",
+                            )
+                            if url:
+                                st.markdown(f"[View Paper]({url})")
+
+                            st.divider()
+                else:
+                    # Display regular messages
+                    st.write(message["content"])
 
     def _render_paper_section(self, paper_text):
         """Render a single paper section with proper formatting"""
