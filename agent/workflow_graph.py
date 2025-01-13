@@ -215,12 +215,13 @@ class WorkflowGraph:
             state.search_context.total_results = results.total
             state.search_context.results = []
 
-            # Build response message
+            # Process papers and build response message
             response_parts = [
-                f"Found {results.total} papers related to '{query}'. Here are the top {len(results.papers)} most relevant papers:\n"
+                f"Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
             ]
 
-            # Process each paper
+            papers_for_llm = []  # Build context for LLM
+
             for i, paper in enumerate(results.papers, 1):
                 try:
                     # Add to search context
@@ -236,34 +237,66 @@ class WorkflowGraph:
                         "citations": paper.citations,
                         "url": paper.url,
                     }
-                    print(f"[DEBUG] Adding paper {i} to results: {paper.title}")
                     state.search_context.add_paper(paper_data)
 
-                    # Add to response message
-                    response_parts.append(f"\n{i}. {paper.title}")
-                    response_parts.append(
-                        f"   Authors: {', '.join(a.name for a in paper.authors)}"
-                    )
-                    response_parts.append(
-                        f"   Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}"
-                    )
+                    # Format paper details for response
+                    paper_details = [
+                        f"\n{i}. {paper.title}",
+                        f"   Authors: {', '.join(a.name for a in paper.authors)}",
+                        f"   Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                    ]
+
                     if paper.abstract:
-                        response_parts.append(f"   Abstract: {paper.abstract[:300]}...")
-                    response_parts.append(f"   URL: {paper.url}\n")
+                        paper_details.append(f"   Abstract: {paper.abstract[:300]}...")
+                    paper_details.append(f"   URL: {paper.url}\n")
+
+                    response_parts.extend(paper_details)
+
+                    # Add to LLM context
+                    papers_for_llm.append(
+                        {
+                            "title": paper.title,
+                            "year": paper.year,
+                            "citations": paper.citations,
+                            "abstract": (
+                                paper.abstract[:200]
+                                if paper.abstract
+                                else "No abstract available"
+                            ),
+                        }
+                    )
 
                 except Exception as e:
                     print(f"[DEBUG] Error processing paper {i}: {str(e)}")
                     continue
 
-            # Add summary
-            response_parts.append("\nSummary:")
-            summary = f"The search returned papers focusing on {query}, including works on {results.papers[0].title.split()[0]} and related topics. "
-            summary += f"The papers range from {min((p.year for p in results.papers if p.year))} to {max((p.year for p in results.papers if p.year))} "
-            summary += f"with citation counts ranging from {min((p.citations for p in results.papers if p.citations))} to {max((p.citations for p in results.papers if p.citations))}."
-            response_parts.append(summary)
+            # Generate summary using LLM with actual paper context
+            llm_prompt = f"""Based on these papers about "{query}":
 
-            # Update state
-            state.add_message("system", "\n".join(response_parts))
+    {papers_for_llm}
+
+    Please provide a brief summary that includes:
+    1. The main themes or areas covered in these papers
+    2. Any notable trends in methodology or findings
+    3. The general relevance to the search query
+
+    Focus only on the actual papers provided above."""
+
+            print(f"[DEBUG] Generating summary with papers context")
+            summary_response = await self.ollama_client.generate(
+                prompt=llm_prompt,
+                system_prompt="You are a helpful academic research assistant. Summarize only the provided papers.",
+                max_tokens=200,
+            )
+
+            # Add summary to response
+            response_parts.append("\nSummary:")
+            response_parts.append(summary_response)
+
+            # Update state with complete response
+            full_response = "\n".join(response_parts)
+            print(f"[DEBUG] Full response generated with {len(papers_for_llm)} papers")
+            state.add_message("system", full_response)
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
 
@@ -479,7 +512,8 @@ Please provide a structured response that:
         return None
 
     def _clean_search_query(self, query: str) -> str:
-        """Clean search query"""
+        """Clean search query by removing common prefixes and noise words"""
+        # List of phrases to remove
         clean_phrases = [
             "search for",
             "find me",
@@ -488,11 +522,32 @@ Please provide a structured response that:
             "papers on",
             "research on",
             "can you find",
+            "can you search for",
+            "can you search",
+            "can you",
+            "please",
+            "i want",
+            "i need",
         ]
+
+        # Convert to lowercase for consistent processing
         cleaned = query.lower()
+
+        # Remove each phrase
         for phrase in clean_phrases:
             cleaned = cleaned.replace(phrase, "")
-        return cleaned.strip()
+
+        # Clean up extra whitespace
+        cleaned = " ".join(cleaned.split())
+
+        print(f"[DEBUG] Original query: {query}")
+        print(f"[DEBUG] Cleaned query: {cleaned}")
+
+        # If the cleaning removed too much, return a sensible query
+        if len(cleaned.strip()) < 3:
+            cleaned = query.lower().split()[-1]  # Take the last word as the query
+
+        return cleaned
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
