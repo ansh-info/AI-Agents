@@ -197,73 +197,78 @@ class WorkflowGraph:
     async def _process_search(self, state: AgentState) -> Dict:
         """Process search request with direct S2 integration"""
         try:
-            # Extract search query from latest message
+            # Extract and clean search query
             latest_message = state.memory.messages[-1]["content"]
             query = self._clean_search_query(latest_message)
+            print(f"[DEBUG] Processing search for query: {query}")
 
-            # Perform search using S2 client
+            # Perform search
             results = await self.s2_client.search_papers(query=query, limit=10)
+            print(f"[DEBUG] Got {results.total} total results")
 
-            if not results:
+            if not results or not results.papers:
                 state.add_message("system", "No results found for your search.")
                 return {"state": state, "next": "update_memory"}
 
-            # Update state with search results
+            # Update state
             state.search_context.query = query
             state.search_context.total_results = results.total
             state.search_context.results = []
 
-            # Build detailed search response
-            response = f"Found {results.total} papers related to '{query}'. Here are the top {len(results.papers)} most relevant papers:\n\n"
+            # Build response message
+            response_parts = [
+                f"Found {results.total} papers related to '{query}'. Here are the top {len(results.papers)} most relevant papers:\n"
+            ]
 
             # Process each paper
             for i, paper in enumerate(results.papers, 1):
                 try:
-                    # Add paper to state context
+                    # Add to search context
                     paper_data = {
                         "paperId": paper.paperId,
                         "title": paper.title,
                         "abstract": paper.abstract,
                         "year": paper.year,
                         "authors": [
-                            {"name": author.name, "authorId": author.authorId}
-                            for author in paper.authors
+                            {"name": a.name, "authorId": a.authorId}
+                            for a in paper.authors
                         ],
                         "citations": paper.citations,
                         "url": paper.url,
                     }
+                    print(f"[DEBUG] Adding paper {i} to results: {paper.title}")
                     state.search_context.add_paper(paper_data)
 
-                    # Add paper details to response
-                    response += f"{i}. {paper.title}\n"
-                    response += f"   Authors: {', '.join(author.name for author in paper.authors)}\n"
-                    response += f"   Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}\n"
+                    # Add to response message
+                    response_parts.append(f"\n{i}. {paper.title}")
+                    response_parts.append(
+                        f"   Authors: {', '.join(a.name for a in paper.authors)}"
+                    )
+                    response_parts.append(
+                        f"   Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}"
+                    )
                     if paper.abstract:
-                        response += f"   Abstract: {paper.abstract}\n"
-                    response += f"   URL: {paper.url}\n\n"
+                        response_parts.append(f"   Abstract: {paper.abstract[:300]}...")
+                    response_parts.append(f"   URL: {paper.url}\n")
 
-                except AttributeError as e:
+                except Exception as e:
                     print(f"[DEBUG] Error processing paper {i}: {str(e)}")
                     continue
 
-            if not state.search_context.results:
-                state.add_message(
-                    "system",
-                    "I found some papers but there was an error processing them. Please try your search again.",
-                )
-                return {"state": state, "next": "update_memory"}
+            # Add summary
+            response_parts.append("\nSummary:")
+            summary = f"The search returned papers focusing on {query}, including works on {results.papers[0].title.split()[0]} and related topics. "
+            summary += f"The papers range from {min((p.year for p in results.papers if p.year))} to {max((p.year for p in results.papers if p.year))} "
+            summary += f"with citation counts ranging from {min((p.citations for p in results.papers if p.citations))} to {max((p.citations for p in results.papers if p.citations))}."
+            response_parts.append(summary)
 
-            # Add search summary at the end
-            summary = await self._generate_search_summary(
-                query, state.search_context.results
-            )
-            response += f"\nSummary:\n{summary}"
-
-            state.add_message("system", response)
+            # Update state
+            state.add_message("system", "\n".join(response_parts))
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
 
         except Exception as e:
+            print(f"[DEBUG] Search processing error: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = f"Search processing error: {str(e)}"
             state.add_message(
