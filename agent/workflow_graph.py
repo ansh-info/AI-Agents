@@ -213,10 +213,15 @@ class WorkflowGraph:
             state.search_context.total_results = results.total
             state.search_context.results = []
 
-            for paper in results.papers:
+            # Build detailed search response
+            response = f"Found {results.total} papers related to '{query}'. Here are the top {len(results.papers)} most relevant papers:\n\n"
+
+            # Process each paper
+            for i, paper in enumerate(results.papers, 1):
                 try:
+                    # Add paper to state context
                     paper_data = {
-                        "paper_id": paper.paperId,
+                        "paperId": paper.paperId,
                         "title": paper.title,
                         "abstract": paper.abstract,
                         "year": paper.year,
@@ -228,8 +233,18 @@ class WorkflowGraph:
                         "url": paper.url,
                     }
                     state.search_context.add_paper(paper_data)
+
+                    # Add paper details to response
+                    response += f"{i}. {paper.title}\n"
+                    response += f"   Authors: {', '.join(author.name for author in paper.authors)}\n"
+                    response += f"   Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}\n"
+                    if paper.abstract:
+                        response += f"   Abstract: {paper.abstract}\n"
+                    response += f"   URL: {paper.url}\n\n"
+
                 except AttributeError as e:
-                    continue  # Skip papers with missing attributes
+                    print(f"[DEBUG] Error processing paper {i}: {str(e)}")
+                    continue
 
             if not state.search_context.results:
                 state.add_message(
@@ -238,10 +253,13 @@ class WorkflowGraph:
                 )
                 return {"state": state, "next": "update_memory"}
 
-            # Generate search summary
-            summary = f"I found {len(state.search_context.results)} papers about {query}. Here are the most relevant ones:"
-            state.add_message("system", summary)
+            # Add search summary at the end
+            summary = await self._generate_search_summary(
+                query, state.search_context.results
+            )
+            response += f"\nSummary:\n{summary}"
 
+            state.add_message("system", response)
             state.current_step = "search_processed"
             state.status = AgentStatus.SUCCESS
 
@@ -254,6 +272,25 @@ class WorkflowGraph:
             )
 
         return {"state": state, "next": "update_memory"}
+
+    async def _generate_search_summary(self, query: str, papers: List[Any]) -> str:
+        """Generate a brief summary of search results"""
+        try:
+            summary_prompt = f"""Based on these {len(papers)} papers about "{query}", provide a 2-3 sentence summary highlighting:
+    1. The main research areas covered
+    2. Any notable trends or patterns
+    3. The potential relevance to the search query
+
+    Keep the summary brief and focused on the actual papers found."""
+
+            summary = await self.ollama_client.generate(
+                prompt=summary_prompt,
+                system_prompt="You are a helpful academic research assistant.",
+                max_tokens=150,
+            )
+            return summary.strip()
+        except Exception as e:
+            return f"Unable to generate summary due to error: {str(e)}"
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
