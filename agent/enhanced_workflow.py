@@ -187,15 +187,17 @@ class ConversationAgent:
         try:
             print(f"\n[DEBUG] Generating response")
             print(f"[DEBUG] Prompt: {prompt[:200]}...")
+            if context:
+                print(f"[DEBUG] Context: {context[:200]}...")
 
             # Build system context
             system_prompt = """You are a helpful academic research assistant. 
-When presenting search results:
-1. Always summarize the key findings
-2. Highlight the relevance to the search query
-3. Mention important details like methodologies and conclusions
-4. Point out any significant patterns or trends
-5. Suggest related areas of interest"""
+    When presenting search results:
+    1. Always summarize papers that are provided in the context
+    2. Focus on the specific papers mentioned, not general knowledge
+    3. Highlight key findings from the actual papers
+    4. Mention specific methodologies used in these papers
+    5. Point out patterns across the provided papers"""
 
             if context:
                 system_prompt += f"\n\nAdditional context: {context}"
@@ -375,29 +377,28 @@ class EnhancedWorkflowManager:
     async def _handle_search(self, query: str):
         """Handle search with error recovery"""
         try:
-            print("\n[DEBUG] ===== Search Process Start =====")
-
             # Perform search
             search_result = await self.search_agent.search_papers(query)
-            print(f"[DEBUG] Search result status: {search_result['status']}")
 
             if search_result["status"] == "error":
                 raise Exception(f"Search failed: {search_result['error']}")
 
-            results = search_result["results"]
-            print(f"[DEBUG] Total results: {results.total}")
-
             # Update state
             self.current_state.status = AgentStatus.SUCCESS
             self.current_state.search_context.query = query
+
+            results = search_result["results"]
             self.current_state.search_context.total_results = results.total
 
-            # Add papers to context
-            papers_added = 0
-            papers_text = "Here are the papers I found:\n\n"
+            # Build response message
+            response_parts = [
+                f"Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
+            ]
 
-            for i, paper in enumerate(results.papers, 1):
+            # Process papers
+            for paper in results.papers:
                 try:
+                    # Add to search context
                     paper_data = {
                         "paperId": paper.paperId,
                         "title": paper.title,
@@ -410,58 +411,63 @@ class EnhancedWorkflowManager:
                         "citations": paper.citations,
                         "url": paper.url,
                     }
-
-                    print(f"[DEBUG] Processing paper {i}: {paper_data['title']}")
-
                     self.current_state.search_context.add_paper(paper_data)
-                    papers_added += 1
 
-                    # Build text representation for LLM
-                    papers_text += f"{i}. {paper_data['title']}\n"
-                    papers_text += f"   Authors: {', '.join(a['name'] for a in paper_data['authors'])}\n"
-                    papers_text += f"   Year: {paper_data['year']}\n"
-                    if paper_data["abstract"]:
-                        papers_text += (
-                            f"   Abstract: {paper_data['abstract'][:200]}...\n"
-                        )
-                    papers_text += "\n"
+                    # Add to response
+                    response_parts.append(f"\n{paper.title}")
+                    response_parts.append(
+                        f"Authors: {', '.join(a.name for a in paper.authors)}"
+                    )
+                    response_parts.append(
+                        f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}"
+                    )
+                    if paper.abstract:
+                        response_parts.append(f"Abstract: {paper.abstract[:300]}...")
+                    response_parts.append(f"URL: {paper.url}\n")
 
                 except Exception as e:
-                    print(f"[DEBUG] Error processing paper {i}: {str(e)}")
+                    print(f"[DEBUG] Error processing paper: {str(e)}")
                     continue
 
-            print(f"[DEBUG] Added {papers_added} papers to context")
+            # Generate summary using papers context
+            papers_context = [
+                {
+                    "title": p.title,
+                    "year": p.year,
+                    "citations": p.citations,
+                    "abstract": p.abstract[:200] if p.abstract else "No abstract",
+                }
+                for p in results.papers
+            ]
 
-            if papers_added > 0:
-                # Generate summary using LLM
-                prompt = f"""I found {papers_added} papers related to '{query}'. 
+            summary_prompt = f"""Based on these papers about "{query}":
+    {papers_context}
 
-    {papers_text}
+    Please provide a brief summary that:
+    1. Outlines the main research areas covered
+    2. Highlights key methodologies used
+    3. Notes significant findings
+    4. Identifies any trends
+    Keep the summary focused on these specific papers."""
 
-    Please provide a helpful summary of these papers, highlighting key findings and relevance to the search query."""
+            # Generate summary
+            summary_response = await self.conversation_agent.generate_response(
+                prompt=summary_prompt, max_tokens=200
+            )
 
-                print("[DEBUG] Generating response with papers")
-                response = await self.conversation_agent.generate_response(
-                    prompt=prompt
+            if summary_response["status"] == "error":
+                raise Exception(
+                    f"Response generation failed: {summary_response['error']}"
                 )
 
-                if response["status"] == "error":
-                    raise Exception(f"Response generation failed: {response['error']}")
+            # Add summary to response
+            response_parts.append("\nSummary:")
+            response_parts.append(summary_response["response"])
 
-                # Add both the summary and the papers list to the response
-                summary = response["response"]
-                full_response = f"{summary}\n\n{papers_text}"
-
-                print("[DEBUG] Adding response to state")
-                self.current_state.add_message("system", full_response)
-            else:
-                error_msg = "No valid papers found matching your search criteria."
-                self.current_state.add_message("system", error_msg)
-
-            print("[DEBUG] ===== Search Process Complete =====")
+            # Update state with complete response
+            self.current_state.add_message("system", "\n".join(response_parts))
 
         except Exception as e:
-            print(f"[DEBUG] Error in search handler: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
