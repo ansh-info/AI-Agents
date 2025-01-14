@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime
@@ -55,6 +56,7 @@ class WorkflowGraph:
         """Initialize state for new message processing"""
         state.status = AgentStatus.PROCESSING
         state.current_step = "start"
+        state.next_steps = ["analyze_input"]
         return {"state": state, "next": "analyze_input"}
 
     def _analyze_input(self, state: AgentState) -> Dict:
@@ -617,26 +619,49 @@ Please provide a structured response that:
         return debug_info
 
     async def process_state(self, state: AgentState) -> AgentState:
-        """Process a state through the graph with debugging"""
+        """Process a state through the graph with enhanced error handling"""
         try:
             # Debug before processing
             print("\n[DEBUG] State before processing:")
             await self.debug_state(state)
 
+            # Ensure state has required fields
+            if not hasattr(state, "current_step"):
+                state.current_step = "initial"
+            if not hasattr(state, "next_steps"):
+                state.next_steps = []
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            if not hasattr(state, "last_update"):
+                state.last_update = datetime.now()
+
+            # Update state history before processing
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": state.current_step,
+                    "status": state.status.value,
+                }
+            )
+
             graph_chain = self.get_graph()
             result = await graph_chain.ainvoke({"state": state})
 
-            # Debug after processing
-            print("\n[DEBUG] State after processing:")
+            # Update final state
             if isinstance(result, dict) and "state" in result:
-                await self.debug_state(result["state"])
-                return result["state"]
+                final_state = result["state"]
             else:
-                await self.debug_state(result)
-                return result
+                final_state = result
+
+            # Ensure final state is updated
+            final_state.last_update = datetime.now()
+            await self.debug_state(final_state)
+            return final_state
 
         except Exception as e:
             print(f"[DEBUG] Error processing state: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = f"Error processing state: {str(e)}"
+            state.current_step = "error"
+            state.last_update = datetime.now()
             return state
