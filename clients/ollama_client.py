@@ -14,8 +14,29 @@ class OllamaClient:
         self.base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.model_name = model_name
         print(
-            f"Initialized Ollama client with URL: {self.base_url} and model: {self.model_name}"
+            f"[DEBUG] Initialized Ollama client with URL: {self.base_url} and model: {self.model_name}"
         )
+
+    async def check_model_availability(self) -> bool:
+        """Check if the model is available"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/api/generate",
+                    json={"model": self.model_name, "prompt": "test", "stream": False},
+                    timeout=5,
+                ) as response:
+                    if response.status == 200:
+                        print(f"[DEBUG] Model {self.model_name} is available")
+                        return True
+                    else:
+                        print(
+                            f"[DEBUG] Model check failed with status {response.status}"
+                        )
+                        return False
+        except Exception as e:
+            print(f"[DEBUG] Model check error: {str(e)}")
+            return False
 
     async def generate(
         self,
@@ -25,46 +46,55 @@ class OllamaClient:
         temperature: float = 0.7,
     ) -> str:
         """Generate response from Ollama API"""
+        # Print debug info
+        print(f"[DEBUG] Generating with prompt: {prompt[:100]}...")
+        if system_prompt:
+            print(f"[DEBUG] System prompt: {system_prompt[:100]}...")
+
         payload = {
             "model": self.model_name,
             "prompt": prompt,
             "stream": False,
             "temperature": temperature,
+            "raw": True,  # Add raw mode for more consistent output
         }
 
         if system_prompt:
             payload["system"] = system_prompt
-        if max_tokens:
-            payload["max_tokens"] = max_tokens
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.base_url}/api/generate", json=payload, timeout=30
                 ) as response:
+                    print(f"[DEBUG] Ollama response status: {response.status}")
+
                     if response.status != 200:
                         error_text = await response.text()
+                        print(f"[DEBUG] Ollama error response: {error_text}")
                         raise Exception(
                             f"Ollama API error ({response.status}): {error_text}"
                         )
 
                     data = await response.json()
+                    print(f"[DEBUG] Ollama response type: {type(data)}")
+                    print(
+                        f"[DEBUG] Ollama response keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}"
+                    )
 
                     if "error" in data:
                         raise Exception(f"Ollama API error: {data['error']}")
 
-                    return data.get("response", "")
+                    response_text = data.get("response", "")
+                    print(f"[DEBUG] Generated response length: {len(response_text)}")
+                    return response_text
 
+        except aiohttp.ClientError as e:
+            print(f"[DEBUG] Network error: {str(e)}")
+            raise Exception(f"Network error: {str(e)}")
         except Exception as e:
-            raise Exception(f"Failed to generate response: {str(e)}")
-
-    async def check_model_availability(self) -> bool:
-        """Check if the configured model is available"""
-        try:
-            response = await self.generate("test", max_tokens=1)
-            return True
-        except Exception:
-            return False
+            print(f"[DEBUG] Unexpected error: {str(e)}")
+            raise
 
 
 # Helper function for synchronous calls
