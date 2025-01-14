@@ -446,61 +446,89 @@ Please provide a clear response that addresses the question while considering:
     async def _process_conversation(self, state: AgentState) -> Dict:
         """Process general conversation with context-aware LLM integration"""
         try:
+            # Initialize state
+            state.update_state(
+                current_step="conversation_processing",
+                next_steps=["update_memory"],
+                status=AgentStatus.PROCESSING,
+            )
+
             # Build conversation context
             context = self._build_conversation_context(state)
 
             # Generate response using Ollama
-            prompt = f"""Context:
-{context}
+            prompt = f"Context:\n{context}\n\nCurrent query: {state.memory.messages[-1]['content']}"
 
-Current query: {state.memory.messages[-1]['content']}
-Please provide a helpful response based on the available context."""
-
-            response = await self.ollama_client.generate(
+            response = await self.conversation_agent.generate_response(
                 prompt=prompt,
                 system_prompt="You are a helpful academic research assistant.",
                 max_tokens=300,
             )
 
-            state.add_message("system", response.strip())
-            state.current_step = "conversation_processed"
-            state.status = AgentStatus.SUCCESS
+            if response["status"] == "error":
+                raise Exception(
+                    f"Response generation failed: {response.get('error', 'Unknown error')}"
+                )
+
+            # Add response to state
+            state.add_message("system", response["response"].strip())
+
+            # Update state on success
+            state.update_state(
+                current_step="conversation_completed",
+                status=AgentStatus.SUCCESS,
+                next_steps=["update_memory"],
+            )
+
+            return {"state": state, "next": "update_memory"}
 
         except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Conversation processing error: {str(e)}"
-
-        return {"state": state, "next": "update_memory"}
+            print(f"[DEBUG] Conversation processing error: {str(e)}")
+            state.update_state(
+                status=AgentStatus.ERROR,
+                error_message=f"Conversation processing error: {str(e)}",
+                current_step="error",
+                next_steps=["update_memory"],
+            )
+            state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
+            return {"state": state, "next": "update_memory"}
 
     def _build_conversation_context(self, state: AgentState) -> str:
         """Build context for conversation"""
-        try:
-            context_parts = []
+        context_parts = []
 
-            # Add recent conversation history
-            recent_messages = state.memory.messages[-5:]
-            if recent_messages:
-                context_parts.append("Recent conversation:")
-                for msg in recent_messages:
-                    context_parts.append(f"{msg['role']}: {msg['content']}")
+        # Add recent conversation history
+        recent_messages = state.memory.messages[-5:]
+        if recent_messages:
+            context_parts.append("Recent conversation:")
+            for msg in recent_messages:
+                context_parts.append(f"{msg['role']}: {msg['content']}")
 
-            # Add search context if available
-            if state.search_context.results:
-                context_parts.append("\nAvailable papers:")
-                for i, paper in enumerate(state.search_context.results, 1):
-                    context_parts.append(
-                        f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
-                    )
+        # Add search context if available
+        if state.search_context.results:
+            context_parts.append("\nAvailable papers:")
+            for i, paper in enumerate(state.search_context.results, 1):
+                context_parts.append(
+                    f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
+                )
 
-            # Add focused paper if available
-            if state.memory.focused_paper:
-                paper = state.memory.focused_paper
-                context_parts.append(f"\nCurrently discussing paper: {paper.title}")
+        # Add focused paper if available
+        if state.memory.focused_paper:
+            paper = state.memory.focused_paper
+            context_parts.append(f"\nCurrently discussing paper: {paper.title}")
+            if paper.abstract:
+                context_parts.append(f"Abstract: {paper.abstract[:200]}...")
+            context_parts.append(
+                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}"
+            )
+            context_parts.append(
+                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}"
+            )
 
-            return "\n".join(context_parts)
-
-        except Exception as e:
-            return f"Error building context: {str(e)}"
+        # Join all context parts
+        return "\n".join(context_parts)
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
