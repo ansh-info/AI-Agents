@@ -188,29 +188,30 @@ class DashboardApp:
                 st.experimental_rerun()
 
     async def process_input(self, prompt: str):
-        """Process user input with debug logging"""
+        """Process user input with enhanced monitoring"""
         try:
-            self.add_debug_message(f"Processing input: {prompt}")
+            print(f"[DEBUG] Processing input: {prompt}")
 
             # Process command
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
 
-            self.add_debug_message(f"Command status: {state.status}")
-            if state.error_message:
-                self.add_debug_message(f"Error: {state.error_message}")
-
-            # Debug log for search results
-            if state.search_context and state.search_context.results:
-                self.add_debug_message(
-                    f"Found {len(state.search_context.results)} papers"
+            # Get debug info about the state
+            debug_info = (
+                await st.session_state.workflow_manager.workflow_graph.debug_state(
+                    state
                 )
-                for i, paper in enumerate(state.search_context.results, 1):
-                    self.add_debug_message(f"Paper {i}: {paper.title}")
+            )
+            print("[DEBUG] Current state info:")
+            print(json.dumps(debug_info, indent=2))
 
             # Update session state
             st.session_state.agent_state = state
+
+            if state.error_message:
+                print(f"[DEBUG] Error in state: {state.error_message}")
+                self.add_debug_message(f"Error: {state.error_message}")
 
             # Get and show response
             if state.memory and state.memory.messages:
@@ -218,37 +219,13 @@ class DashboardApp:
                     "role": "system",
                     "content": state.memory.messages[-1]["content"],
                 }
-
-                # Attach papers to message if search was successful
-                if (
-                    state.status == AgentStatus.SUCCESS
-                    and state.search_context
-                    and state.search_context.results
-                ):
-
-                    response_message["papers"] = state.search_context.results
-
-                    # Also add papers list to the message content
-                    papers_list = "\n\nFound papers:\n"
-                    for i, paper in enumerate(state.search_context.results, 1):
-                        papers_list += f"{i}. {paper.title} ({paper.year if paper.year else 'N/A'})\n"
-                        if paper.authors:
-                            authors = ", ".join(
-                                a.get("name", "") for a in paper.authors
-                            )
-                            papers_list += f"   Authors: {authors}\n"
-                        if paper.abstract:
-                            papers_list += f"   Abstract: {paper.abstract[:200]}...\n"
-                        papers_list += "\n"
-
-                    response_message["content"] += papers_list
-
                 st.session_state.messages.append(response_message)
 
             return state
 
         except Exception as e:
             error_msg = f"Error processing input: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
             self.add_debug_message(error_msg)
             st.session_state.messages.append(
                 {
@@ -256,6 +233,50 @@ class DashboardApp:
                     "content": f"I apologize, but I encountered an error: {str(e)}",
                 }
             )
+            return None
+
+    async def process_search(
+        self, query: str, year: str = None, citations: str = None, sort_by: str = None
+    ):
+        """Process search query with state monitoring"""
+        print(f"[DEBUG] Starting search for: {query}")
+        try:
+            cleaned_query = self.clean_search_query(query)
+            search_command = f"search {cleaned_query}"
+
+            # Add filters if provided
+            if year:
+                search_command += f" year:{year}"
+            if citations:
+                search_command += f" citations>{citations}"
+            if sort_by and sort_by != "Relevance":
+                search_command += f" sort:{sort_by.lower()}"
+
+            print(f"[DEBUG] Executing command: {search_command}")
+
+            state = await self.manager.process_command_async(search_command)
+
+            # Get and log debug info
+            debug_info = await self.manager.workflow_graph.debug_state(state)
+            print("[DEBUG] Search completed. State info:")
+            print(json.dumps(debug_info, indent=2))
+
+            if state.status == AgentStatus.SUCCESS:
+                st.session_state.current_results = state
+                if query not in st.session_state.search_history:
+                    st.session_state.search_history.append(query)
+                st.session_state.current_page = 1
+
+                # Store papers in context
+                if state.search_context and state.search_context.results:
+                    for paper in state.search_context.results:
+                        st.session_state.paper_context[paper.paperId] = paper
+
+            return state
+
+        except Exception as e:
+            print(f"[DEBUG] Search error: {str(e)}")
+            self.add_debug_message(f"Search error: {str(e)}")
             return None
 
     def render_chat_history(self):
