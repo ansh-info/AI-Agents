@@ -381,25 +381,26 @@ class DashboardApp:
             with st.chat_message(message["role"]):
                 if (
                     message["role"] == "system"
-                    and "Found" in message["content"]
-                    and "papers related to" in message["content"]
+                    and "# Search Results" in message["content"]
                 ):
 
-                    # Split content into header and papers
-                    parts = message["content"].split("\n\n")
-                    st.write(parts[0])  # Header
+                    # Split content into sections
+                    sections = message["content"].split("\n## ")
 
-                    # Process paper sections
-                    for part in parts[1:]:
-                        if part.startswith("Summary:"):
-                            st.markdown("### Summary")
-                            st.write(part.replace("Summary:", "").strip())
-                        else:
-                            # Format each paper section
-                            if part.strip():
-                                st.markdown("---")
-                                st.write(part.strip())
+                    # Display header
+                    st.markdown(sections[0])  # Main header
+
+                    # Process remaining sections
+                    for section in sections[1:]:
+                        if section.startswith("Summary"):
+                            # Display summary
+                            st.markdown(f"## {section}")
+                        elif section.strip():
+                            # Display paper entries
+                            paper_section = f"## {section}"
+                            st.markdown(paper_section)
                 else:
+                    # Regular message display
                     st.write(message["content"])
 
     def _render_paper_section(self, paper_text):
