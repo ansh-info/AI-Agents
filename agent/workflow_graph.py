@@ -291,42 +291,105 @@ class WorkflowGraph:
 
         return {"state": state, "next": "update_memory"}
 
-    async def _generate_summary(self, query: str, papers: List[Any]) -> str:
-        """Generate a summary of the search results"""
+    async def _generate_summary(self, query: str, papers: List[Dict]) -> str:
+        """Generate summary of search results"""
         try:
+            # Create a safe context for the LLM
             papers_info = []
-            for paper in papers:
+            for paper in papers[:10]:  # Limit to first 10 papers
                 papers_info.append(
                     {
-                        "title": paper.title,
-                        "year": paper.year,
-                        "citations": paper.citations,
-                        "abstract": (
-                            paper.abstract[:200]
-                            if paper.abstract
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year", "N/A"),
+                        "citations": paper.get("citations", 0),
+                        "abstract_preview": (
+                            paper.get("abstract", "")[:200]
+                            if paper.get("abstract")
                             else "No abstract available"
                         ),
                     }
                 )
 
-            summary_prompt = f"""Based on these {len(papers_info)} papers about "{query}", please provide a brief summary that:
-    1. Highlights the main research themes found in these papers
-    2. Notes any significant methodologies or approaches mentioned
-    3. Points out any trends in publication years or citation patterns
-    4. Identifies potential areas of interest based on these specific papers
+            summary_prompt = f"""Based on these papers about "{query}", please provide a brief summary of:
+    1. Main research themes found
+    2. Key methodologies mentioned
+    3. Notable findings or contributions
+    4. Any visible trends across the papers
 
-    Papers details:
-    {papers_info}"""
+    Papers: {json.dumps(papers_info, indent=2)}"""
 
-            summary = await self.ollama_client.generate(
+            # Generate summary
+            response = await self.conversation_agent.generate_response(
                 prompt=summary_prompt,
-                system_prompt="You are a helpful academic research assistant. Focus only on summarizing the specific papers provided.",
-                max_tokens=200,
+                system_prompt="You are a helpful academic research assistant. Focus on summarizing the specific papers provided.",
+                max_tokens=300,
             )
 
-            return summary
+            if response["status"] == "success":
+                return response["response"]
+            else:
+                return "Unable to generate summary - error in response generation"
+
         except Exception as e:
-            return f"Error generating summary: {str(e)}"
+            print(f"[DEBUG] Summary generation error: {str(e)}")
+            return "Unable to generate summary at this time."
+
+    async def _handle_search(self, query: str):
+        """Handle search with enhanced error handling"""
+        try:
+            print(f"[DEBUG] Processing search for query: '{query}'")
+
+            # Update state for search start
+            self.current_state.status = AgentStatus.PROCESSING
+            self.current_state.current_step = "search_started"
+            self.current_state.next_steps = ["process_search"]
+            self.current_state.last_update = datetime.now()
+
+            # Perform search
+            results = await self.search_agent.search_papers(query)
+
+            if not results or results.get("status") == "error":
+                raise Exception(
+                    f"Search failed: {results.get('error', 'Unknown error')}"
+                )
+
+            # Format results
+            formatted_response = [
+                "Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
+            ]
+
+            # Process each paper
+            for paper in results["papers"]:
+                paper_details = [
+                    f"\n{paper.title}",
+                    f"Authors: {', '.join(a.name for a in paper.authors)}",
+                    f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                    f"Abstract: {paper.abstract[:300] + '...' if paper.abstract else 'No abstract available'}",
+                    f"URL: {paper.url}\n",
+                ]
+                formatted_response.extend(paper_details)
+
+            # Generate and add summary
+            summary = await self._generate_summary(query, results["papers"])
+            formatted_response.extend(["\nSummary:", summary])
+
+            # Update state with success
+            self.current_state.add_message("system", "\n".join(formatted_response))
+            self.current_state.status = AgentStatus.SUCCESS
+            self.current_state.current_step = "search_completed"
+            self.current_state.next_steps = ["update_memory"]
+            self.current_state.last_update = datetime.now()
+
+        except Exception as e:
+            print(f"[DEBUG] Search handling error: {str(e)}")
+            self.current_state.status = AgentStatus.ERROR
+            self.current_state.error_message = str(e)
+            self.current_state.current_step = "error"
+            self.current_state.next_steps = ["update_memory"]
+            self.current_state.last_update = datetime.now()
+            self.current_state.add_message(
+                "system", f"I encountered an error while searching: {str(e)}"
+            )
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
@@ -510,25 +573,22 @@ Please provide a structured response that:
         return None
 
     def _clean_search_query(self, query: str) -> str:
-        """Clean search query to extract just the topic"""
-        # Remove common prefixes and phrases
+        """Clean search query for more accurate results"""
+        # Remove common prefixes
         prefixes_to_remove = [
             "can you search for papers on",
             "can you search for papers about",
             "can you search for papers",
             "can you search for",
             "can you search",
-            "can you find papers on",
-            "can you find papers about",
-            "can you find papers",
-            "can you find",
-            "can you",
             "search for papers on",
             "search for papers about",
             "search for papers",
             "search for",
             "papers on",
             "papers about",
+            "papers",
+            "search",
         ]
 
         query = query.lower().strip()
@@ -539,8 +599,9 @@ Please provide a structured response that:
                 query = query[len(prefix) :].strip()
                 break
 
-        # Remove question mark if present
+        # Clean up the query
         query = query.replace("?", "").strip()
+        query = " ".join(filter(None, query.split()))  # Remove empty spaces
 
         print(f"[DEBUG] Query cleaning:")
         print(f"  Original: '{query}'")
@@ -551,28 +612,34 @@ Please provide a structured response that:
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
         try:
-            # Update context history
-            if hasattr(state.memory, "context_history"):
-                context_entry = {
+            # Update state
+            state.current_step = "memory_updated"
+            state.next_steps = []
+            state.last_update = datetime.now()
+
+            # Update state history
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+
+            state.state_history.append(
+                {
                     "timestamp": datetime.now(),
                     "step": state.current_step,
-                    "focused_paper": (
-                        state.memory.focused_paper.paper_id
-                        if state.memory.focused_paper
-                        else None
+                    "status": state.status.value,
+                    "message_count": (
+                        len(state.memory.messages) if state.memory.messages else 0
                     ),
-                    "has_search_results": bool(state.search_context.results),
                 }
-                state.memory.context_history.append(context_entry)
-
-            if state.status != AgentStatus.ERROR:
-                state.status = AgentStatus.SUCCESS
+            )
 
             return {"state": state, "next": END}
 
         except Exception as e:
+            print(f"[DEBUG] Error in memory update: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = f"Error in memory update: {str(e)}"
+            state.current_step = "error"
+            state.last_update = datetime.now()
             return {"state": state, "next": END}
 
     def get_graph(self):
