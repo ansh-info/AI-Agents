@@ -226,10 +226,8 @@ class AgentState(BaseModel):
     memory: ConversationMemory = Field(default_factory=ConversationMemory)
     current_step: str = "initial"
     next_steps: List[str] = Field(default_factory=list)
-
-    # Enhanced state tracking
     state_history: List[Dict[str, Any]] = Field(default_factory=list)
-    last_update: Optional[datetime] = None
+    last_update: Optional[datetime] = Field(default_factory=datetime.now)
 
     def add_message(
         self, role: str, content: str, context: Optional[Dict[str, Any]] = None
@@ -237,6 +235,8 @@ class AgentState(BaseModel):
         """Add message with state tracking"""
         self.memory.add_message(role, content, context)
         self._track_state_change("message_added")
+        # Ensure state fields are updated
+        self.last_update = datetime.now()
 
     def update_search_results(self, papers: List[Dict[str, Any]], total_results: int):
         """Update search results with state tracking"""
@@ -297,6 +297,14 @@ class AgentState(BaseModel):
         }
         self.state_history.append(state_change)
         self.last_update = datetime.now()
+
+    def update_state(self, **kwargs):
+        """Update state fields safely"""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self.last_update = datetime.now()
+        self._track_state_change("state_updated")
 
     def clear(self):
         """Enhanced state reset with history preservation"""
