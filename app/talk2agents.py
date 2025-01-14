@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime
@@ -34,6 +35,8 @@ class DashboardApp:
             st.session_state.debug_messages = []
         if "messages" not in st.session_state:
             st.session_state.messages = []
+        if "health_status" not in st.session_state:
+            st.session_state.health_status = None
 
     def setup_page(self):
         """Setup page styling"""
@@ -93,15 +96,68 @@ class DashboardApp:
         st.session_state.debug_messages.append(f"[{timestamp}] {message}")
 
     def render_debug_panel(self):
-        """Render debug panel in the sidebar"""
+        """Render debug panel in the sidebar with health status"""
         with st.sidebar:
             st.markdown("### 🔍 Debug Panel")
+
+            # Add health check button
+            if st.button("Check System Health"):
+                with st.spinner("Checking system health..."):
+                    st.session_state.health_status = asyncio.run(
+                        st.session_state.workflow_manager.check_workflow_health()
+                    )
+
+            # Display health status if available
+            if st.session_state.health_status:
+                st.markdown("#### System Health")
+                health = st.session_state.health_status
+
+                # Display status with colored indicators
+                st.markdown("**Components Status:**")
+                st.markdown(
+                    f"- Workflow Graph: {'✅' if health['workflow_graph'] else '❌'}"
+                )
+                st.markdown(
+                    f"- Ollama Client: {'✅' if health['ollama_client'] else '❌'}"
+                )
+                st.markdown(
+                    f"- Semantic Scholar: {'✅' if health['semantic_scholar'] else '❌'}"
+                )
+                st.markdown(
+                    f"- Command Parser: {'✅' if health['command_parser'] else '❌'}"
+                )
+
+                # Display any errors
+                if health["errors"]:
+                    st.markdown("**Errors:**")
+                    for error in health["errors"]:
+                        st.error(error)
+
+            # Debug messages section
+            st.markdown("#### Debug Messages")
             if st.button("Clear Debug Log"):
                 st.session_state.debug_messages = []
 
-            st.markdown("#### Debug Messages")
             for msg in st.session_state.debug_messages:
                 st.text(msg)
+
+    async def initialize_system(self):
+        """Initialize system and check health"""
+        try:
+            # Check system health on startup
+            health_status = (
+                await st.session_state.workflow_manager.check_workflow_health()
+            )
+            st.session_state.health_status = health_status
+
+            # Log initialization status
+            self.add_debug_message("System initialized")
+            if not health_status["ollama_client"]:
+                self.add_debug_message("WARNING: Ollama client not responding")
+            if not health_status["semantic_scholar"]:
+                self.add_debug_message("WARNING: Semantic Scholar API not responding")
+        except Exception as e:
+            self.add_debug_message(f"Error during initialization: {str(e)}")
 
     def render_filters(self):
         """Render search filters"""
@@ -444,8 +500,17 @@ class DashboardApp:
                         st.rerun()  # Changed from experimental_rerun
 
     def run(self):
-        """Run the dashboard application"""
+        """Run the dashboard application with initialization"""
         self.setup_page()
+
+        # Initialize system asynchronously
+        if "initialized" not in st.session_state:
+            with st.spinner("Initializing system..."):
+                asyncio.run(self.initialize_system())
+                st.session_state.initialized = True
+
+        # Render debug panel with health status
+        self.render_debug_panel()
 
         # Main content container
         st.markdown("<div class='main-content'>", unsafe_allow_html=True)
