@@ -10,7 +10,6 @@ class OllamaClient:
     """Client for interacting with Ollama API"""
 
     def __init__(self, model_name: str = "llama3.2:1b"):
-        """Initialize Ollama client"""
         self.base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.model_name = model_name
         print(
@@ -46,21 +45,23 @@ class OllamaClient:
         temperature: float = 0.7,
     ) -> str:
         """Generate response from Ollama API"""
-        # Print debug info
         print(f"[DEBUG] Generating with prompt: {prompt[:100]}...")
         if system_prompt:
             print(f"[DEBUG] System prompt: {system_prompt[:100]}...")
 
+        # Combine system prompt and user prompt if both are provided
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\nUser: {prompt}\nAssistant:"
+        else:
+            full_prompt = prompt
+
         payload = {
             "model": self.model_name,
-            "prompt": prompt,
+            "prompt": full_prompt,
             "stream": False,
             "temperature": temperature,
-            "raw": True,  # Add raw mode for more consistent output
+            "raw": False,  # Changed from True to False
         }
-
-        if system_prompt:
-            payload["system"] = system_prompt
 
         try:
             async with aiohttp.ClientSession() as session:
