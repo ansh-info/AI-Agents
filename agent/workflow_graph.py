@@ -577,17 +577,66 @@ Please provide a structured response that:
         """Get the compiled graph"""
         return self.graph.compile()
 
+    async def debug_state(self, state: AgentState) -> Dict[str, Any]:
+        """Debug current state of the workflow"""
+        debug_info = {
+            "current_step": state.current_step,
+            "status": state.status.value,
+            "error_message": state.error_message,
+            "search_context": {
+                "query": state.search_context.query,
+                "total_results": state.search_context.total_results,
+                "current_page": state.search_context.current_page,
+                "num_results": (
+                    len(state.search_context.results)
+                    if state.search_context.results
+                    else 0
+                ),
+            },
+            "memory": {
+                "num_messages": (
+                    len(state.memory.messages) if state.memory.messages else 0
+                ),
+                "current_context": state.memory.current_context,
+                "focused_paper": (
+                    state.memory.focused_paper.paper_id
+                    if state.memory.focused_paper
+                    else None
+                ),
+                "conversation_topics": (
+                    list(state.memory.conversation_topics)
+                    if state.memory.conversation_topics
+                    else []
+                ),
+            },
+            "next_steps": state.next_steps,
+        }
+
+        print("[DEBUG] Current State Info:")
+        print(json.dumps(debug_info, indent=2))
+        return debug_info
+
     async def process_state(self, state: AgentState) -> AgentState:
-        """Process a state through the graph"""
+        """Process a state through the graph with debugging"""
         try:
+            # Debug before processing
+            print("\n[DEBUG] State before processing:")
+            await self.debug_state(state)
+
             graph_chain = self.get_graph()
             result = await graph_chain.ainvoke({"state": state})
 
+            # Debug after processing
+            print("\n[DEBUG] State after processing:")
             if isinstance(result, dict) and "state" in result:
+                await self.debug_state(result["state"])
                 return result["state"]
-            return result
+            else:
+                await self.debug_state(result)
+                return result
 
         except Exception as e:
+            print(f"[DEBUG] Error processing state: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = f"Error processing state: {str(e)}"
             return state
