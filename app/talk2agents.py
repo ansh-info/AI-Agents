@@ -185,41 +185,81 @@ class DashboardApp:
             st.info("No papers found. Try adjusting your search terms.")
             return
 
+        st.markdown("### Search Results")
+
         for i, paper in enumerate(papers, 1):
             with st.container():
-                # Title with numbering
-                st.markdown(f"### {i}. {paper.title}")
+                # Paper container with border and padding
+                st.markdown(
+                    """
+                    <style>
+                    .paper-container {
+                        border: 1px solid #ddd;
+                        border-radius: 8px;
+                        padding: 20px;
+                        margin-bottom: 20px;
+                        background-color: #ffffff;
+                    }
+                    .paper-title {
+                        font-size: 1.2rem;
+                        font-weight: bold;
+                        margin-bottom: 10px;
+                    }
+                    .paper-metadata {
+                        font-size: 0.9rem;
+                        color: #666;
+                        margin-bottom: 10px;
+                    }
+                    .paper-abstract {
+                        font-size: 0.95rem;
+                        margin: 10px 0;
+                    }
+                    .paper-url {
+                        font-size: 0.9rem;
+                    }
+                    </style>
+                """,
+                    unsafe_allow_html=True,
+                )
 
-                # Authors in a separate section
-                st.markdown("**Authors:**")
+                st.markdown('<div class="paper-container">', unsafe_allow_html=True)
+
+                # Title and number
+                st.markdown(
+                    f'<div class="paper-title">{i}. {paper.title}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Metadata
                 authors = ", ".join(author.get("name", "") for author in paper.authors)
-                st.write(authors)
+                st.markdown(
+                    f'<div class="paper-metadata">**Authors:** {authors}<br>'
+                    f'**Year:** {paper.year or "N/A"} | **Citations:** {paper.citations or 0}</div>',
+                    unsafe_allow_html=True,
+                )
 
-                # Publication details in columns
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**Year:**")
-                    st.write(paper.year or "N/A")
-                with col2:
-                    st.markdown("**Citations:**")
-                    st.write(paper.citations or 0)
-
-                # Abstract in an expander
+                # Abstract
                 if paper.abstract:
-                    with st.expander("View Abstract"):
-                        st.write(paper.abstract)
+                    with st.expander("Show Abstract"):
+                        st.markdown(
+                            f'<div class="paper-abstract">{paper.abstract}</div>',
+                            unsafe_allow_html=True,
+                        )
 
-                # URL as a button
+                # URL and actions
                 if paper.url:
-                    st.markdown(f"[View Paper]({paper.url})")
+                    st.markdown(
+                        f'<div class="paper-url">[View Paper]({paper.url})</div>',
+                        unsafe_allow_html=True,
+                    )
 
-                # Add view details button
-                if st.button("View Details", key=f"{context_prefix}_select_{i}"):
-                    st.session_state.selected_paper = paper.paper_id
-                    st.experimental_rerun()
+                col1, col2 = st.columns([4, 1])
+                with col2:
+                    if st.button("View Details", key=f"{context_prefix}_select_{i}"):
+                        st.session_state.selected_paper = paper.paper_id
+                        st.experimental_rerun()
 
-                # Separator between papers
-                st.divider()
+                st.markdown("</div>", unsafe_allow_html=True)
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
@@ -336,7 +376,7 @@ class DashboardApp:
             return None
 
     def render_chat_history(self):
-        """Render chat message history with enhanced paper formatting"""
+        """Render chat message history with enhanced formatting"""
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 if (
@@ -344,99 +384,22 @@ class DashboardApp:
                     and "Found" in message["content"]
                     and "papers related to" in message["content"]
                 ):
-                    # Split content into sections
-                    sections = message["content"].split("\n\n")
 
-                    # Display header (Found X papers...)
-                    st.write(sections[0])
+                    # Split content into header and papers
+                    parts = message["content"].split("\n\n")
+                    st.write(parts[0])  # Header
 
-                    # Process each paper section
-                    paper_sections = []
-                    current_section = []
-
-                    for section in sections[1:]:
-                        if section.strip().startswith(("Summary:", "Based on")):
-                            if current_section:
-                                paper_sections.append("\n".join(current_section))
+                    # Process paper sections
+                    for part in parts[1:]:
+                        if part.startswith("Summary:"):
                             st.markdown("### Summary")
-                            st.write(section.replace("Summary:", "").strip())
-                            break
-                        elif section.strip():
-                            current_section.append(section)
+                            st.write(part.replace("Summary:", "").strip())
                         else:
-                            if current_section:
-                                paper_sections.append("\n".join(current_section))
-                                current_section = []
-
-                    # Render each paper in a structured format
-                    for i, paper in enumerate(paper_sections, 1):
-                        with st.container():
-                            lines = paper.split("\n")
-
-                            # Extract title
-                            title = (
-                                lines[0].split("Authors:")[0].strip() if lines else ""
-                            )
-                            st.markdown(f"### {i}. {title}")
-
-                            # Create two columns for metadata
-                            col1, col2 = st.columns(2)
-
-                            with col1:
-                                # Extract and display authors
-                                authors = next(
-                                    (
-                                        l.split("Authors:")[1].strip()
-                                        for l in lines
-                                        if "Authors:" in l
-                                    ),
-                                    "",
-                                )
-                                st.markdown("**Authors**")
-                                st.write(authors)
-
-                            with col2:
-                                # Extract and display year/citations
-                                year_citations = next(
-                                    (
-                                        l
-                                        for l in lines
-                                        if "Year:" in l and "Citations:" in l
-                                    ),
-                                    "",
-                                )
-                                if year_citations:
-                                    st.markdown("**Publication Details**")
-                                    st.write(year_citations)
-
-                            # Display abstract in expander
-                            abstract = next(
-                                (
-                                    l.split("Abstract:")[1].strip()
-                                    for l in lines
-                                    if "Abstract:" in l
-                                ),
-                                "",
-                            )
-                            if abstract:
-                                with st.expander("View Abstract"):
-                                    st.write(abstract)
-
-                            # Display URL as link
-                            url = next(
-                                (
-                                    l.split("URL:")[1].strip()
-                                    for l in lines
-                                    if "URL:" in l
-                                ),
-                                "",
-                            )
-                            if url:
-                                st.markdown(f"[View Paper]({url})")
-
-                            st.divider()
+                            # Format each paper section
+                            if part.strip():
+                                st.markdown("---")
+                                st.write(part.strip())
                 else:
-                    # Display regular messages
                     st.write(message["content"])
 
     def _render_paper_section(self, paper_text):
