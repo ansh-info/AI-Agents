@@ -302,77 +302,92 @@ class EnhancedWorkflowManager:
         self.command_parser = CommandParser()
 
     async def process_command_async(self, command: str) -> AgentState:
-        """Process command with enhanced error handling and logging"""
+        """Process command with enhanced monitoring"""
         try:
-            print("\n[DEBUG] Starting command processing")
-            print(f"[DEBUG] Command received: {command}")
+            # Add command to state
+            print(f"\n[DEBUG] Processing command: {command}")
+            self.current_state.add_message("user", command)
 
             # Parse command intent
             parsed_command = self.command_parser.parse_command(command)
             print(f"[DEBUG] Parsed command intent: {parsed_command['intent']}")
 
-            # Add command to state
-            self.current_state.add_message("user", command)
+            # Get initial state debug info
+            print("\n[DEBUG] Initial state:")
+            initial_debug = await self.workflow_graph.debug_state(self.current_state)
+            print(json.dumps(initial_debug, indent=2))
 
+            # Process based on intent
             if parsed_command["intent"] == "search":
-                print("[DEBUG] Handling search intent")
                 await self._handle_search(parsed_command["query"])
-
-                # After search, check state
-                print(
-                    f"[DEBUG] After search - State status: {self.current_state.status}"
-                )
-                print(
-                    f"[DEBUG] Results count: {len(self.current_state.search_context.results)}"
-                )
-                print("[DEBUG] Checking memory messages:")
-                for msg in self.current_state.memory.messages[-3:]:
-                    print(f"  - {msg['role']}: {msg['content'][:100]}...")
-
-                if self.current_state.search_context.results:
-                    # Generate a summary response that includes the papers
-                    papers_summary = f"I found {len(self.current_state.search_context.results)} papers related to your query. Here are the results:\n\n"
-                    for i, paper in enumerate(
-                        self.current_state.search_context.results, 1
-                    ):
-                        papers_summary += f"{i}. {paper.title}\n"
-                        papers_summary += f"   Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
-                        if paper.year:
-                            papers_summary += f"   Year: {paper.year}\n"
-                        if paper.abstract:
-                            papers_summary += (
-                                f"   Abstract: {paper.abstract[:200]}...\n"
-                            )
-                        papers_summary += "\n"
-
-                    print("[DEBUG] Adding papers summary to state")
-                    self.current_state.add_message("system", papers_summary)
-
             elif parsed_command["intent"] == "paper_question":
-                print("[DEBUG] Handling paper question intent")
                 await self._handle_paper_question(
                     parsed_command["paper_reference"], command
                 )
-
             elif parsed_command["intent"] == "compare_papers":
-                print("[DEBUG] Handling paper comparison intent")
                 await self._handle_paper_comparison(parsed_command["paper_references"])
-
             else:
-                print("[DEBUG] Handling conversation intent")
                 await self._handle_conversation(command)
+
+            # Process through workflow graph
+            try:
+                print("\n[DEBUG] Processing state through workflow graph...")
+                self.current_state = await self.workflow_graph.process_state(
+                    self.current_state
+                )
+
+                # Get final state debug info
+                print("\n[DEBUG] Final state after processing:")
+                final_debug = await self.workflow_graph.debug_state(self.current_state)
+                print(json.dumps(final_debug, indent=2))
+
+            except Exception as e:
+                print(f"[DEBUG] Workflow error: {str(e)}")
+                self.current_state.status = AgentStatus.ERROR
+                self.current_state.error_message = f"Workflow error: {str(e)}"
 
             return self.current_state
 
         except Exception as e:
-            print(f"[DEBUG] Error in process_command_async: {str(e)}")
+            print(f"[DEBUG] Command processing error: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
-                "system",
-                f"I apologize, but I encountered an error: {str(e)}",
+                "system", f"I apologize, but I encountered an error: {str(e)}"
             )
             return self.current_state
+
+    async def check_workflow_health(self) -> Dict[str, Any]:
+        """Check the health of the workflow components"""
+        health_status = {
+            "workflow_graph": True,
+            "ollama_client": False,
+            "semantic_scholar": False,
+            "command_parser": True,
+            "errors": [],
+        }
+
+        try:
+            # Check Ollama
+            ollama_health = await self.ollama_client.check_model_availability()
+            health_status["ollama_client"] = ollama_health
+
+            # Check Semantic Scholar
+            s2_health = await self.s2_client.check_api_status()
+            health_status["semantic_scholar"] = s2_health
+
+            if not ollama_health:
+                health_status["errors"].append("Ollama client is not responding")
+            if not s2_health:
+                health_status["errors"].append("Semantic Scholar API is not responding")
+
+        except Exception as e:
+            health_status["errors"].append(f"Health check error: {str(e)}")
+
+        print("[DEBUG] Workflow health status:")
+        print(json.dumps(health_status, indent=2))
+
+        return health_status
 
     async def _handle_search(self, query: str):
         """Handle search with raw results preservation"""
