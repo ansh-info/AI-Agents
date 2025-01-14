@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -390,9 +391,15 @@ class EnhancedWorkflowManager:
         return health_status
 
     async def _handle_search(self, query: str):
-        """Handle search with raw results preservation"""
+        """Handle search with raw results preservation and proper state management"""
         try:
             print(f"[DEBUG] Processing search for query: '{query}'")
+
+            # Update initial state
+            self.current_state.status = AgentStatus.PROCESSING
+            self.current_state.current_step = "search_started"
+            self.current_state.next_steps = ["process_search"]
+            self.current_state.last_update = datetime.now()
 
             # Perform search
             search_result = await self.search_agent.search_papers(query)
@@ -426,7 +433,6 @@ class EnhancedWorkflowManager:
                     }
                     self.current_state.search_context.add_paper(paper_data)
                     raw_results.append(paper_data)
-
                     print(f"[DEBUG] Added paper to context: {paper.title}")
                 except Exception as e:
                     print(f"[DEBUG] Error processing paper: {str(e)}")
@@ -493,13 +499,30 @@ class EnhancedWorkflowManager:
             # Add summary to response
             raw_display.extend(["\nSummary:", summary])
 
-            # Update state with complete response
+            # Update final state
             self.current_state.add_message("system", "\n".join(raw_display))
+            self.current_state.current_step = "search_completed"
+            self.current_state.next_steps = ["update_memory"]
+            self.current_state.last_update = datetime.now()
+
+            if not hasattr(self.current_state, "state_history"):
+                self.current_state.state_history = []
+            self.current_state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "search_completed",
+                    "query": query,
+                    "results_count": len(raw_results),
+                }
+            )
 
         except Exception as e:
             print(f"[DEBUG] Search handling error: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
+            self.current_state.current_step = "error"
+            self.current_state.next_steps = ["update_memory"]
+            self.current_state.last_update = datetime.now()
             self.current_state.add_message(
                 "system", f"I encountered an error while searching: {str(e)}"
             )
