@@ -335,61 +335,137 @@ class WorkflowGraph:
             return "Unable to generate summary at this time."
 
     async def _handle_search(self, query: str):
-        """Handle search with enhanced error handling"""
+        """Handle search with proper state management"""
         try:
             print(f"[DEBUG] Processing search for query: '{query}'")
 
-            # Update state for search start
-            self.current_state.status = AgentStatus.PROCESSING
-            self.current_state.current_step = "search_started"
-            self.current_state.next_steps = ["process_search"]
-            self.current_state.last_update = datetime.now()
+            # Initialize state for search
+            self.current_state.update_state(
+                status=AgentStatus.PROCESSING,
+                current_step="search_started",
+                next_steps=["process_search"],
+                last_update=datetime.now(),
+            )
 
             # Perform search
-            results = await self.search_agent.search_papers(query)
+            search_result = await self.search_agent.search_papers(query)
 
-            if not results or results.get("status") == "error":
-                raise Exception(
-                    f"Search failed: {results.get('error', 'Unknown error')}"
-                )
+            if search_result["status"] == "error":
+                raise Exception(f"Search failed: {search_result['error']}")
 
-            # Format results
-            formatted_response = [
-                "Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
+            results = search_result["results"]
+
+            # Format results with proper structure
+            formatted_papers = []
+            for i, paper in enumerate(results.papers, 1):
+                formatted_paper = {
+                    "number": i,
+                    "title": paper.title,
+                    "authors": ", ".join(a.name for a in paper.authors),
+                    "year": paper.year,
+                    "citations": paper.citations,
+                    "abstract": (
+                        paper.abstract[:300] + "..."
+                        if paper.abstract
+                        else "No abstract available"
+                    ),
+                    "url": paper.url,
+                }
+                formatted_papers.append(formatted_paper)
+
+                # Add to search context
+                paper_data = {
+                    "paperId": paper.paperId,
+                    "title": paper.title,
+                    "abstract": paper.abstract,
+                    "year": paper.year,
+                    "authors": [
+                        {"name": a.name, "authorId": a.authorId} for a in paper.authors
+                    ],
+                    "citations": paper.citations,
+                    "url": paper.url,
+                }
+                self.current_state.search_context.add_paper(paper_data)
+
+            # Build message content with markdown formatting
+            message_parts = [
+                f"# Search Results\nFound {results.total} papers related to '{query}'.\n"
             ]
 
-            # Process each paper
-            for paper in results["papers"]:
-                paper_details = [
-                    f"\n{paper.title}",
-                    f"Authors: {', '.join(a.name for a in paper.authors)}",
-                    f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
-                    f"Abstract: {paper.abstract[:300] + '...' if paper.abstract else 'No abstract available'}",
-                    f"URL: {paper.url}\n",
-                ]
-                formatted_response.extend(paper_details)
+            # Add each paper with proper formatting
+            for paper in formatted_papers:
+                message_parts.extend(
+                    [
+                        f"## {paper['number']}. {paper['title']}",
+                        f"**Authors:** {paper['authors']}",
+                        f"**Year:** {paper['year'] or 'N/A'} | **Citations:** {paper['citations'] or 0}",
+                        "",
+                        f"**Abstract:** {paper['abstract']}",
+                        f"[View Paper]({paper['url']})\n",
+                        "---\n",
+                    ]
+                )
 
             # Generate and add summary
-            summary = await self._generate_summary(query, results["papers"])
-            formatted_response.extend(["\nSummary:", summary])
+            summary_context = [
+                {
+                    "title": paper["title"],
+                    "year": paper["year"],
+                    "citations": paper["citations"],
+                    "abstract_preview": (
+                        paper["abstract"][:200] if paper["abstract"] else "No abstract"
+                    ),
+                }
+                for paper in formatted_papers
+            ]
 
-            # Update state with success
-            self.current_state.add_message("system", "\n".join(formatted_response))
-            self.current_state.status = AgentStatus.SUCCESS
-            self.current_state.current_step = "search_completed"
-            self.current_state.next_steps = ["update_memory"]
-            self.current_state.last_update = datetime.now()
+            try:
+                summary_response = await self.conversation_agent.generate_response(
+                    prompt=f"""Based on these papers about "{query}", please provide a brief summary of:
+                    1. Main research areas covered
+                    2. Key methodologies mentioned
+                    3. Notable findings
+                    4. Visible trends
+                    
+                    Papers: {json.dumps(summary_context)}""",
+                    max_tokens=300,
+                )
+
+                if summary_response["status"] == "success":
+                    summary = summary_response["response"]
+                    message_parts.extend(["\n## Summary", summary])
+                else:
+                    message_parts.append("\n*Unable to generate summary at this time.*")
+            except Exception as e:
+                print(f"[DEBUG] Summary generation error: {str(e)}")
+                message_parts.append("\n*Unable to generate summary at this time.*")
+
+            # Update state
+            self.current_state.update_state(
+                status=AgentStatus.SUCCESS,
+                current_step="search_completed",
+                next_steps=["update_memory"],
+                last_update=datetime.now(),
+            )
+
+            # Add the formatted message
+            self.current_state.add_message("system", "\n".join(message_parts))
+
+            return {"state": self.current_state, "next": "update_memory"}
 
         except Exception as e:
             print(f"[DEBUG] Search handling error: {str(e)}")
-            self.current_state.status = AgentStatus.ERROR
-            self.current_state.error_message = str(e)
-            self.current_state.current_step = "error"
-            self.current_state.next_steps = ["update_memory"]
-            self.current_state.last_update = datetime.now()
+            self.current_state.update_state(
+                status=AgentStatus.ERROR,
+                error_message=str(e),
+                current_step="error",
+                next_steps=["update_memory"],
+                last_update=datetime.now(),
+            )
             self.current_state.add_message(
                 "system", f"I encountered an error while searching: {str(e)}"
             )
+            return {"state": self.current_state, "next": "update_memory"}
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
