@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -302,81 +303,104 @@ class EnhancedWorkflowManager:
         self.command_parser = CommandParser()
 
     async def process_command_async(self, command: str) -> AgentState:
-        """Process command with enhanced error handling and logging"""
+        """Process command with enhanced monitoring"""
         try:
-            print("\n[DEBUG] Starting command processing")
-            print(f"[DEBUG] Command received: {command}")
+            # Add command to state
+            print(f"\n[DEBUG] Processing command: {command}")
+            self.current_state.add_message("user", command)
 
             # Parse command intent
             parsed_command = self.command_parser.parse_command(command)
             print(f"[DEBUG] Parsed command intent: {parsed_command['intent']}")
 
-            # Add command to state
-            self.current_state.add_message("user", command)
+            # Get initial state debug info
+            print("\n[DEBUG] Initial state:")
+            initial_debug = await self.workflow_graph.debug_state(self.current_state)
+            print(json.dumps(initial_debug, indent=2))
 
+            # Process based on intent
             if parsed_command["intent"] == "search":
-                print("[DEBUG] Handling search intent")
                 await self._handle_search(parsed_command["query"])
-
-                # After search, check state
-                print(
-                    f"[DEBUG] After search - State status: {self.current_state.status}"
-                )
-                print(
-                    f"[DEBUG] Results count: {len(self.current_state.search_context.results)}"
-                )
-                print("[DEBUG] Checking memory messages:")
-                for msg in self.current_state.memory.messages[-3:]:
-                    print(f"  - {msg['role']}: {msg['content'][:100]}...")
-
-                if self.current_state.search_context.results:
-                    # Generate a summary response that includes the papers
-                    papers_summary = f"I found {len(self.current_state.search_context.results)} papers related to your query. Here are the results:\n\n"
-                    for i, paper in enumerate(
-                        self.current_state.search_context.results, 1
-                    ):
-                        papers_summary += f"{i}. {paper.title}\n"
-                        papers_summary += f"   Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
-                        if paper.year:
-                            papers_summary += f"   Year: {paper.year}\n"
-                        if paper.abstract:
-                            papers_summary += (
-                                f"   Abstract: {paper.abstract[:200]}...\n"
-                            )
-                        papers_summary += "\n"
-
-                    print("[DEBUG] Adding papers summary to state")
-                    self.current_state.add_message("system", papers_summary)
-
             elif parsed_command["intent"] == "paper_question":
-                print("[DEBUG] Handling paper question intent")
                 await self._handle_paper_question(
                     parsed_command["paper_reference"], command
                 )
-
             elif parsed_command["intent"] == "compare_papers":
-                print("[DEBUG] Handling paper comparison intent")
                 await self._handle_paper_comparison(parsed_command["paper_references"])
-
             else:
-                print("[DEBUG] Handling conversation intent")
                 await self._handle_conversation(command)
+
+            # Process through workflow graph
+            try:
+                print("\n[DEBUG] Processing state through workflow graph...")
+                self.current_state = await self.workflow_graph.process_state(
+                    self.current_state
+                )
+
+                # Get final state debug info
+                print("\n[DEBUG] Final state after processing:")
+                final_debug = await self.workflow_graph.debug_state(self.current_state)
+                print(json.dumps(final_debug, indent=2))
+
+            except Exception as e:
+                print(f"[DEBUG] Workflow error: {str(e)}")
+                self.current_state.status = AgentStatus.ERROR
+                self.current_state.error_message = f"Workflow error: {str(e)}"
 
             return self.current_state
 
         except Exception as e:
-            print(f"[DEBUG] Error in process_command_async: {str(e)}")
+            print(f"[DEBUG] Command processing error: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
-                "system",
-                f"I apologize, but I encountered an error: {str(e)}",
+                "system", f"I apologize, but I encountered an error: {str(e)}"
             )
             return self.current_state
 
-    async def _handle_search(self, query: str):
-        """Handle search with error recovery"""
+    async def check_workflow_health(self) -> Dict[str, Any]:
+        """Check the health of the workflow components"""
+        health_status = {
+            "workflow_graph": True,
+            "ollama_client": False,
+            "semantic_scholar": False,
+            "command_parser": True,
+            "errors": [],
+        }
+
         try:
+            # Check Ollama
+            ollama_health = await self.ollama_client.check_model_availability()
+            health_status["ollama_client"] = ollama_health
+
+            # Check Semantic Scholar
+            s2_health = await self.s2_client.check_api_status()
+            health_status["semantic_scholar"] = s2_health
+
+            if not ollama_health:
+                health_status["errors"].append("Ollama client is not responding")
+            if not s2_health:
+                health_status["errors"].append("Semantic Scholar API is not responding")
+
+        except Exception as e:
+            health_status["errors"].append(f"Health check error: {str(e)}")
+
+        print("[DEBUG] Workflow health status:")
+        print(json.dumps(health_status, indent=2))
+
+        return health_status
+
+    async def _handle_search(self, query: str):
+        """Handle search with raw results preservation and proper state management"""
+        try:
+            print(f"[DEBUG] Processing search for query: '{query}'")
+
+            # Update initial state
+            self.current_state.status = AgentStatus.PROCESSING
+            self.current_state.current_step = "search_started"
+            self.current_state.next_steps = ["process_search"]
+            self.current_state.last_update = datetime.now()
+
             # Perform search
             search_result = await self.search_agent.search_papers(query)
 
@@ -390,12 +414,8 @@ class EnhancedWorkflowManager:
             results = search_result["results"]
             self.current_state.search_context.total_results = results.total
 
-            # Build response message
-            response_parts = [
-                f"Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
-            ]
-
-            # Process papers
+            # Store raw results first
+            raw_results = []
             for paper in results.papers:
                 try:
                     # Add to search context
@@ -412,70 +432,100 @@ class EnhancedWorkflowManager:
                         "url": paper.url,
                     }
                     self.current_state.search_context.add_paper(paper_data)
-
-                    # Add to response
-                    response_parts.append(f"\n{paper.title}")
-                    response_parts.append(
-                        f"Authors: {', '.join(a.name for a in paper.authors)}"
-                    )
-                    response_parts.append(
-                        f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}"
-                    )
-                    if paper.abstract:
-                        response_parts.append(f"Abstract: {paper.abstract[:300]}...")
-                    response_parts.append(f"URL: {paper.url}\n")
-
+                    raw_results.append(paper_data)
+                    print(f"[DEBUG] Added paper to context: {paper.title}")
                 except Exception as e:
                     print(f"[DEBUG] Error processing paper: {str(e)}")
                     continue
 
-            # Generate summary using papers context
-            papers_context = [
-                {
-                    "title": p.title,
-                    "year": p.year,
-                    "citations": p.citations,
-                    "abstract": p.abstract[:200] if p.abstract else "No abstract",
-                }
-                for p in results.papers
+            # Format raw results display
+            raw_display = [
+                f"Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
             ]
 
-            summary_prompt = f"""Based on these papers about "{query}":
-    {papers_context}
-
-    Please provide a brief summary that:
-    1. Outlines the main research areas covered
-    2. Highlights key methodologies used
-    3. Notes significant findings
-    4. Identifies any trends
-    Keep the summary focused on these specific papers."""
-
-            # Generate summary
-            summary_response = await self.conversation_agent.generate_response(
-                prompt=summary_prompt, max_tokens=200
-            )
-
-            if summary_response["status"] == "error":
-                raise Exception(
-                    f"Response generation failed: {summary_response['error']}"
+            for i, paper in enumerate(raw_results, 1):
+                raw_display.extend(
+                    [
+                        f"\n{i}. {paper['title']}",
+                        f"Authors: {', '.join(a['name'] for a in paper['authors'])}",
+                        f"Year: {paper['year'] or 'N/A'} | Citations: {paper['citations'] or 0}",
+                        f"Abstract: {paper['abstract'][:300] + '...' if paper['abstract'] else 'No abstract available'}",
+                        f"URL: {paper['url']}\n",
+                    ]
                 )
 
+            # Generate summary using a safe subset of data
+            summary_context = []
+            for paper in raw_results:
+                summary_context.append(
+                    {
+                        "title": paper["title"],
+                        "year": paper["year"],
+                        "citations": paper["citations"],
+                        "abstract_preview": (
+                            paper["abstract"][:200]
+                            if paper["abstract"]
+                            else "No abstract"
+                        ),
+                    }
+                )
+
+            summary_prompt = f"""Based on these papers about "{query}", please provide a brief summary of the main research themes and findings. 
+            Paper details: {json.dumps(summary_context)}
+            
+            Please focus on:
+            1. Main research areas covered
+            2. Key methodologies mentioned
+            3. Notable findings
+            4. Any visible trends
+            Keep it concise and focused on these specific papers."""
+
+            try:
+                summary_response = await self.conversation_agent.generate_response(
+                    prompt=summary_prompt, max_tokens=200
+                )
+
+                if summary_response["status"] == "error":
+                    print(
+                        f"[DEBUG] Summary generation error: {summary_response['error']}"
+                    )
+                    summary = "Unable to generate summary at this time."
+                else:
+                    summary = summary_response["response"]
+            except Exception as e:
+                print(f"[DEBUG] Summary generation failed: {str(e)}")
+                summary = "Unable to generate summary at this time."
+
             # Add summary to response
-            response_parts.append("\nSummary:")
-            response_parts.append(summary_response["response"])
+            raw_display.extend(["\nSummary:", summary])
 
-            # Update state with complete response
-            self.current_state.add_message("system", "\n".join(response_parts))
+            # Update final state
+            self.current_state.add_message("system", "\n".join(raw_display))
+            self.current_state.current_step = "search_completed"
+            self.current_state.next_steps = ["update_memory"]
+            self.current_state.last_update = datetime.now()
 
-        except Exception as e:
-            self.current_state.status = AgentStatus.ERROR
-            self.current_state.error_message = str(e)
-            self.current_state.add_message(
-                "system",
-                f"I apologize, but I encountered an error while searching: {str(e)}",
+            if not hasattr(self.current_state, "state_history"):
+                self.current_state.state_history = []
+            self.current_state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "search_completed",
+                    "query": query,
+                    "results_count": len(raw_results),
+                }
             )
 
-        return {"state": self.current_state, "next": "update_memory"}
+        except Exception as e:
+            print(f"[DEBUG] Search handling error: {str(e)}")
+            self.current_state.status = AgentStatus.ERROR
+            self.current_state.error_message = str(e)
+            self.current_state.current_step = "error"
+            self.current_state.next_steps = ["update_memory"]
+            self.current_state.last_update = datetime.now()
+            self.current_state.add_message(
+                "system", f"I encountered an error while searching: {str(e)}"
+            )
 
     async def _handle_paper_question(self, paper_reference: str, question: str):
         """Handle paper-specific questions"""

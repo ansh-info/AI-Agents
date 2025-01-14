@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime
@@ -34,6 +35,8 @@ class DashboardApp:
             st.session_state.debug_messages = []
         if "messages" not in st.session_state:
             st.session_state.messages = []
+        if "health_status" not in st.session_state:
+            st.session_state.health_status = None
 
     def setup_page(self):
         """Setup page styling"""
@@ -93,15 +96,68 @@ class DashboardApp:
         st.session_state.debug_messages.append(f"[{timestamp}] {message}")
 
     def render_debug_panel(self):
-        """Render debug panel in the sidebar"""
+        """Render debug panel in the sidebar with health status"""
         with st.sidebar:
             st.markdown("### 🔍 Debug Panel")
+
+            # Add health check button
+            if st.button("Check System Health"):
+                with st.spinner("Checking system health..."):
+                    st.session_state.health_status = asyncio.run(
+                        st.session_state.workflow_manager.check_workflow_health()
+                    )
+
+            # Display health status if available
+            if st.session_state.health_status:
+                st.markdown("#### System Health")
+                health = st.session_state.health_status
+
+                # Display status with colored indicators
+                st.markdown("**Components Status:**")
+                st.markdown(
+                    f"- Workflow Graph: {'✅' if health['workflow_graph'] else '❌'}"
+                )
+                st.markdown(
+                    f"- Ollama Client: {'✅' if health['ollama_client'] else '❌'}"
+                )
+                st.markdown(
+                    f"- Semantic Scholar: {'✅' if health['semantic_scholar'] else '❌'}"
+                )
+                st.markdown(
+                    f"- Command Parser: {'✅' if health['command_parser'] else '❌'}"
+                )
+
+                # Display any errors
+                if health["errors"]:
+                    st.markdown("**Errors:**")
+                    for error in health["errors"]:
+                        st.error(error)
+
+            # Debug messages section
+            st.markdown("#### Debug Messages")
             if st.button("Clear Debug Log"):
                 st.session_state.debug_messages = []
 
-            st.markdown("#### Debug Messages")
             for msg in st.session_state.debug_messages:
                 st.text(msg)
+
+    async def initialize_system(self):
+        """Initialize system and check health"""
+        try:
+            # Check system health on startup
+            health_status = (
+                await st.session_state.workflow_manager.check_workflow_health()
+            )
+            st.session_state.health_status = health_status
+
+            # Log initialization status
+            self.add_debug_message("System initialized")
+            if not health_status["ollama_client"]:
+                self.add_debug_message("WARNING: Ollama client not responding")
+            if not health_status["semantic_scholar"]:
+                self.add_debug_message("WARNING: Semantic Scholar API not responding")
+        except Exception as e:
+            self.add_debug_message(f"Error during initialization: {str(e)}")
 
     def render_filters(self):
         """Render search filters"""
@@ -129,41 +185,81 @@ class DashboardApp:
             st.info("No papers found. Try adjusting your search terms.")
             return
 
+        st.markdown("### Search Results")
+
         for i, paper in enumerate(papers, 1):
             with st.container():
-                # Title with numbering
-                st.markdown(f"### {i}. {paper.title}")
+                # Paper container with border and padding
+                st.markdown(
+                    """
+                    <style>
+                    .paper-container {
+                        border: 1px solid #ddd;
+                        border-radius: 8px;
+                        padding: 20px;
+                        margin-bottom: 20px;
+                        background-color: #ffffff;
+                    }
+                    .paper-title {
+                        font-size: 1.2rem;
+                        font-weight: bold;
+                        margin-bottom: 10px;
+                    }
+                    .paper-metadata {
+                        font-size: 0.9rem;
+                        color: #666;
+                        margin-bottom: 10px;
+                    }
+                    .paper-abstract {
+                        font-size: 0.95rem;
+                        margin: 10px 0;
+                    }
+                    .paper-url {
+                        font-size: 0.9rem;
+                    }
+                    </style>
+                """,
+                    unsafe_allow_html=True,
+                )
 
-                # Authors in a separate section
-                st.markdown("**Authors:**")
+                st.markdown('<div class="paper-container">', unsafe_allow_html=True)
+
+                # Title and number
+                st.markdown(
+                    f'<div class="paper-title">{i}. {paper.title}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # Metadata
                 authors = ", ".join(author.get("name", "") for author in paper.authors)
-                st.write(authors)
+                st.markdown(
+                    f'<div class="paper-metadata">**Authors:** {authors}<br>'
+                    f'**Year:** {paper.year or "N/A"} | **Citations:** {paper.citations or 0}</div>',
+                    unsafe_allow_html=True,
+                )
 
-                # Publication details in columns
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**Year:**")
-                    st.write(paper.year or "N/A")
-                with col2:
-                    st.markdown("**Citations:**")
-                    st.write(paper.citations or 0)
-
-                # Abstract in an expander
+                # Abstract
                 if paper.abstract:
-                    with st.expander("View Abstract"):
-                        st.write(paper.abstract)
+                    with st.expander("Show Abstract"):
+                        st.markdown(
+                            f'<div class="paper-abstract">{paper.abstract}</div>',
+                            unsafe_allow_html=True,
+                        )
 
-                # URL as a button
+                # URL and actions
                 if paper.url:
-                    st.markdown(f"[View Paper]({paper.url})")
+                    st.markdown(
+                        f'<div class="paper-url">[View Paper]({paper.url})</div>',
+                        unsafe_allow_html=True,
+                    )
 
-                # Add view details button
-                if st.button("View Details", key=f"{context_prefix}_select_{i}"):
-                    st.session_state.selected_paper = paper.paper_id
-                    st.experimental_rerun()
+                col1, col2 = st.columns([4, 1])
+                with col2:
+                    if st.button("View Details", key=f"{context_prefix}_select_{i}"):
+                        st.session_state.selected_paper = paper.paper_id
+                        st.experimental_rerun()
 
-                # Separator between papers
-                st.divider()
+                st.markdown("</div>", unsafe_allow_html=True)
 
     def render_paper_details(self, paper: PaperContext):
         """Render detailed paper view"""
@@ -188,29 +284,30 @@ class DashboardApp:
                 st.experimental_rerun()
 
     async def process_input(self, prompt: str):
-        """Process user input with debug logging"""
+        """Process user input with enhanced monitoring"""
         try:
-            self.add_debug_message(f"Processing input: {prompt}")
+            print(f"[DEBUG] Processing input: {prompt}")
 
             # Process command
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
 
-            self.add_debug_message(f"Command status: {state.status}")
-            if state.error_message:
-                self.add_debug_message(f"Error: {state.error_message}")
-
-            # Debug log for search results
-            if state.search_context and state.search_context.results:
-                self.add_debug_message(
-                    f"Found {len(state.search_context.results)} papers"
+            # Get debug info about the state
+            debug_info = (
+                await st.session_state.workflow_manager.workflow_graph.debug_state(
+                    state
                 )
-                for i, paper in enumerate(state.search_context.results, 1):
-                    self.add_debug_message(f"Paper {i}: {paper.title}")
+            )
+            print("[DEBUG] Current state info:")
+            print(json.dumps(debug_info, indent=2))
 
             # Update session state
             st.session_state.agent_state = state
+
+            if state.error_message:
+                print(f"[DEBUG] Error in state: {state.error_message}")
+                self.add_debug_message(f"Error: {state.error_message}")
 
             # Get and show response
             if state.memory and state.memory.messages:
@@ -218,37 +315,13 @@ class DashboardApp:
                     "role": "system",
                     "content": state.memory.messages[-1]["content"],
                 }
-
-                # Attach papers to message if search was successful
-                if (
-                    state.status == AgentStatus.SUCCESS
-                    and state.search_context
-                    and state.search_context.results
-                ):
-
-                    response_message["papers"] = state.search_context.results
-
-                    # Also add papers list to the message content
-                    papers_list = "\n\nFound papers:\n"
-                    for i, paper in enumerate(state.search_context.results, 1):
-                        papers_list += f"{i}. {paper.title} ({paper.year if paper.year else 'N/A'})\n"
-                        if paper.authors:
-                            authors = ", ".join(
-                                a.get("name", "") for a in paper.authors
-                            )
-                            papers_list += f"   Authors: {authors}\n"
-                        if paper.abstract:
-                            papers_list += f"   Abstract: {paper.abstract[:200]}...\n"
-                        papers_list += "\n"
-
-                    response_message["content"] += papers_list
-
                 st.session_state.messages.append(response_message)
 
             return state
 
         except Exception as e:
             error_msg = f"Error processing input: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
             self.add_debug_message(error_msg)
             st.session_state.messages.append(
                 {
@@ -258,108 +331,76 @@ class DashboardApp:
             )
             return None
 
+    async def process_search(
+        self, query: str, year: str = None, citations: str = None, sort_by: str = None
+    ):
+        """Process search query with state monitoring"""
+        print(f"[DEBUG] Starting search for: {query}")
+        try:
+            cleaned_query = self.clean_search_query(query)
+            search_command = f"search {cleaned_query}"
+
+            # Add filters if provided
+            if year:
+                search_command += f" year:{year}"
+            if citations:
+                search_command += f" citations>{citations}"
+            if sort_by and sort_by != "Relevance":
+                search_command += f" sort:{sort_by.lower()}"
+
+            print(f"[DEBUG] Executing command: {search_command}")
+
+            state = await self.manager.process_command_async(search_command)
+
+            # Get and log debug info
+            debug_info = await self.manager.workflow_graph.debug_state(state)
+            print("[DEBUG] Search completed. State info:")
+            print(json.dumps(debug_info, indent=2))
+
+            if state.status == AgentStatus.SUCCESS:
+                st.session_state.current_results = state
+                if query not in st.session_state.search_history:
+                    st.session_state.search_history.append(query)
+                st.session_state.current_page = 1
+
+                # Store papers in context
+                if state.search_context and state.search_context.results:
+                    for paper in state.search_context.results:
+                        st.session_state.paper_context[paper.paperId] = paper
+
+            return state
+
+        except Exception as e:
+            print(f"[DEBUG] Search error: {str(e)}")
+            self.add_debug_message(f"Search error: {str(e)}")
+            return None
+
     def render_chat_history(self):
-        """Render chat message history with enhanced paper formatting"""
+        """Render chat message history with enhanced formatting"""
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 if (
                     message["role"] == "system"
-                    and "Found" in message["content"]
-                    and "papers related to" in message["content"]
+                    and "# Search Results" in message["content"]
                 ):
+
                     # Split content into sections
-                    sections = message["content"].split("\n\n")
+                    sections = message["content"].split("\n## ")
 
-                    # Display header (Found X papers...)
-                    st.write(sections[0])
+                    # Display header
+                    st.markdown(sections[0])  # Main header
 
-                    # Process each paper section
-                    paper_sections = []
-                    current_section = []
-
+                    # Process remaining sections
                     for section in sections[1:]:
-                        if section.strip().startswith(("Summary:", "Based on")):
-                            if current_section:
-                                paper_sections.append("\n".join(current_section))
-                            st.markdown("### Summary")
-                            st.write(section.replace("Summary:", "").strip())
-                            break
+                        if section.startswith("Summary"):
+                            # Display summary
+                            st.markdown(f"## {section}")
                         elif section.strip():
-                            current_section.append(section)
-                        else:
-                            if current_section:
-                                paper_sections.append("\n".join(current_section))
-                                current_section = []
-
-                    # Render each paper in a structured format
-                    for i, paper in enumerate(paper_sections, 1):
-                        with st.container():
-                            lines = paper.split("\n")
-
-                            # Extract title
-                            title = (
-                                lines[0].split("Authors:")[0].strip() if lines else ""
-                            )
-                            st.markdown(f"### {i}. {title}")
-
-                            # Create two columns for metadata
-                            col1, col2 = st.columns(2)
-
-                            with col1:
-                                # Extract and display authors
-                                authors = next(
-                                    (
-                                        l.split("Authors:")[1].strip()
-                                        for l in lines
-                                        if "Authors:" in l
-                                    ),
-                                    "",
-                                )
-                                st.markdown("**Authors**")
-                                st.write(authors)
-
-                            with col2:
-                                # Extract and display year/citations
-                                year_citations = next(
-                                    (
-                                        l
-                                        for l in lines
-                                        if "Year:" in l and "Citations:" in l
-                                    ),
-                                    "",
-                                )
-                                if year_citations:
-                                    st.markdown("**Publication Details**")
-                                    st.write(year_citations)
-
-                            # Display abstract in expander
-                            abstract = next(
-                                (
-                                    l.split("Abstract:")[1].strip()
-                                    for l in lines
-                                    if "Abstract:" in l
-                                ),
-                                "",
-                            )
-                            if abstract:
-                                with st.expander("View Abstract"):
-                                    st.write(abstract)
-
-                            # Display URL as link
-                            url = next(
-                                (
-                                    l.split("URL:")[1].strip()
-                                    for l in lines
-                                    if "URL:" in l
-                                ),
-                                "",
-                            )
-                            if url:
-                                st.markdown(f"[View Paper]({url})")
-
-                            st.divider()
+                            # Display paper entries
+                            paper_section = f"## {section}"
+                            st.markdown(paper_section)
                 else:
-                    # Display regular messages
+                    # Regular message display
                     st.write(message["content"])
 
     def _render_paper_section(self, paper_text):
@@ -423,8 +464,17 @@ class DashboardApp:
                         st.rerun()  # Changed from experimental_rerun
 
     def run(self):
-        """Run the dashboard application"""
+        """Run the dashboard application with initialization"""
         self.setup_page()
+
+        # Initialize system asynchronously
+        if "initialized" not in st.session_state:
+            with st.spinner("Initializing system..."):
+                asyncio.run(self.initialize_system())
+                st.session_state.initialized = True
+
+        # Render debug panel with health status
+        self.render_debug_panel()
 
         # Main content container
         st.markdown("<div class='main-content'>", unsafe_allow_html=True)
