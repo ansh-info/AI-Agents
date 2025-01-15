@@ -151,134 +151,58 @@ class SemanticScholarClient:
         self.last_request_time = time.time()
 
     async def search_papers(
-        self,
-        query: str,
-        filters: Optional[SearchFilters] = None,
-        offset: int = 0,
-        limit: int = 10,
-        fields: Optional[List[str]] = None,
-        sort_by: Optional[str] = None,
+        self, query: str, filters: Optional[SearchFilters] = None
     ) -> SearchResults:
         """Enhanced paper search with comprehensive options"""
-        if fields is None:
-            fields = [
-                "paperId",
-                "title",
-                "abstract",
-                "year",
-                "authors",
-                "venue",
-                "citationCount",
-                "referenceCount",
-                "fieldsOfStudy",
-                "isOpenAccess",
-                "url",
-            ]
+        try:
+            response = await self._make_request(
+                f"{self.base_url}/paper/search", {"query": query, "limit": 10}
+            )
 
-        # Build query parameters
-        params = {
-            "query": query,
-            "offset": offset,
-            "limit": min(limit, 10),  # API limit is 100, but we're limiting to 10
-            "fields": ",".join(fields),
-        }
+            if not response or "data" not in response:
+                raise Exception("Invalid response format from Semantic Scholar API")
 
-        # Add filters if provided
-        if filters:
-            params.update(filters.to_params())
+            papers = []
+            for paper_data in response.get("data", []):
+                if not paper_data:
+                    continue
 
-        # Add sorting if specified
-        if sort_by:
-            params["sort"] = sort_by
-
-        start_time = time.time()
-        retry_count = 0
-
-        while retry_count < self.max_retries:
-            try:
-                # Apply rate limiting
-                await self._wait_for_rate_limit()
-
-                async with aiohttp.ClientSession(headers=self.headers) as session:
-                    async with session.get(
-                        f"{self.base_url}/paper/search",
-                        params=params,
-                        timeout=self.timeout,
-                    ) as response:
-                        if response.status == 429:  # Too Many Requests
-                            retry_after = float(
-                                response.headers.get("Retry-After", 1.0)
+                # Safe data extraction with defaults
+                authors = []
+                for author in paper_data.get("authors", []):
+                    if author:
+                        authors.append(
+                            Author(
+                                authorId=author.get("authorId"),
+                                name=author.get("name", "Unknown Author"),
+                                url=author.get("url"),
+                                affiliations=author.get("affiliations", []),
                             )
-                            await asyncio.sleep(retry_after)
-                            retry_count += 1
-                            continue
-
-                        if response.status != 200:
-                            error_text = await response.text()
-                            raise Exception(
-                                f"API error ({response.status}): {error_text}"
-                            )
-
-                        data = await response.json()
-                        papers = []
-
-                        for paper_data in data.get("data", []):
-                            # Convert authors data
-                            authors = [
-                                Author(
-                                    authorId=author.get("authorId"),
-                                    name=author.get("name", ""),
-                                    url=author.get("url"),
-                                    affiliations=author.get("affiliations", []),
-                                )
-                                for author in paper_data.get("authors", [])
-                            ]
-
-                            # Create paper metadata
-                            paper = PaperMetadata(
-                                paperId=paper_data.get("paperId", ""),
-                                title=paper_data.get("title", ""),
-                                abstract=paper_data.get("abstract"),
-                                year=paper_data.get("year"),
-                                authors=authors,
-                                venue=paper_data.get("venue"),
-                                citations=paper_data.get("citationCount"),
-                                references=paper_data.get("referenceCount"),
-                                url=paper_data.get("url"),
-                                topics=paper_data.get("topics", []),
-                                fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
-                                isOpenAccess=paper_data.get("isOpenAccess"),
-                                tldr=paper_data.get("tldr", {}).get("text"),
-                            )
-                            papers.append(paper)
-
-                        # Calculate query time
-                        query_time = time.time() - start_time
-
-                        return SearchResults(
-                            total=data.get("total", 0),
-                            offset=data.get("offset", 0),
-                            next=data.get("next"),
-                            papers=papers,
-                            query_time=query_time,
-                            filters_applied=filters.dict() if filters else {},
                         )
 
-            except aiohttp.ClientError as e:
-                retry_count += 1
-                if retry_count == self.max_retries:
-                    raise Exception(
-                        f"Network error after {retry_count} attempts: {str(e)}"
-                    )
-                await asyncio.sleep(1.0 * retry_count)
+                paper = PaperMetadata(
+                    paperId=paper_data.get("paperId", ""),
+                    title=paper_data.get("title", "Untitled Paper"),
+                    abstract=paper_data.get("abstract"),
+                    year=paper_data.get("year"),
+                    authors=authors,
+                    citations=paper_data.get("citationCount", 0),
+                    references=paper_data.get("referenceCount", 0),
+                    url=paper_data.get("url"),
+                    fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
+                )
+                papers.append(paper)
 
-            except Exception as e:
-                retry_count += 1
-                if retry_count == self.max_retries:
-                    raise Exception(f"Error after {retry_count} attempts: {str(e)}")
-                await asyncio.sleep(1.0 * retry_count)
+            return SearchResults(
+                total=response.get("total", 0),
+                offset=response.get("offset", 0),
+                papers=papers,
+                query_time=time.time(),
+            )
 
-        raise Exception(f"Failed to get response after {self.max_retries} attempts")
+        except Exception as e:
+            print(f"[DEBUG] Search error: {str(e)}")
+            raise
 
     async def get_paper_details(self, paper_id: str) -> PaperMetadata:
         """Get detailed information about a specific paper"""
