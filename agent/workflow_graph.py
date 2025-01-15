@@ -166,35 +166,44 @@ class WorkflowGraph:
             if state.memory.focused_paper:
                 next_node = "process_paper_question"
 
-            # Check for paper references
-            elif state.search_context.results and any(
-                ref in message
-                for ref in [
-                    "paper",
-                    "study",
-                    "research",
-                    "article",
-                    "tell me about",
-                    "what is",
-                    "compare",
-                ]
-            ):
-                next_node = "process_paper_question"
-
             # Check for search intent
             elif any(
                 term in message
-                for term in ["search", "find", "look for", "papers about", "papers on"]
+                for term in [
+                    "search",
+                    "find",
+                    "look for",
+                    "papers about",
+                    "papers on",
+                    "fetch",
+                ]
             ):
                 next_node = "process_search"
 
+            # Update state with required fields
             state.current_step = "routed"
+            state.last_update = datetime.now()
+            state.next_steps = [next_node]
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {"timestamp": datetime.now(), "step": "routing", "next_node": next_node}
+            )
+
             return {"state": state, "next": next_node}
 
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error_message = f"Error in message routing: {str(e)}"
-            return {"state": state, "next": END}
+            state.current_step = "error"
+            state.last_update = datetime.now()
+            state.next_steps = ["update_memory"]
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
+            )
+            return {"state": state, "next": "update_memory"}
 
     async def _process_search(self, state: AgentState) -> Dict:
         """Process search request with direct S2 integration"""
