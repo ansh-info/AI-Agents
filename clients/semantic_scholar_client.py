@@ -151,7 +151,7 @@ class SemanticScholarClient:
         self.last_request_time = time.time()
 
     async def search_papers(
-        self, query: str, filters: Optional[SearchFilters] = None
+        self, query: str, filters: Optional[SearchFilters] = None, limit: int = 10
     ) -> SearchResults:
         """Perform paper search with enhanced error handling"""
         try:
@@ -164,7 +164,7 @@ class SemanticScholarClient:
             params = {
                 "query": clean_query,
                 "offset": 0,
-                "limit": 10,
+                "limit": limit,
             }
 
             # Add any fields parameter if needed
