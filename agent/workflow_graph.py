@@ -805,6 +805,7 @@ Please provide a structured response that:
     async def process_state(self, state: AgentState) -> AgentState:
         """Process state through the graph with enhanced state management"""
         try:
+            # Initialize required fields if not present
             if not hasattr(state, "current_step"):
                 state.current_step = "initial"
             if not hasattr(state, "next_steps"):
@@ -812,7 +813,10 @@ Please provide a structured response that:
             if not hasattr(state, "state_history"):
                 state.state_history = []
 
-            # Create initial state history entry
+            # Always update last_update when processing state
+            state.last_update = datetime.now()
+
+            # Add history entry for state processing start
             state.state_history.append(
                 {
                     "timestamp": datetime.now(),
@@ -825,13 +829,23 @@ Please provide a structured response that:
             graph_chain = self.get_graph()
             result = await graph_chain.ainvoke({"state": state})
 
-            # Update final state
+            # Extract final state from result
             final_state = (
                 result["state"]
                 if isinstance(result, dict) and "state" in result
                 else result
             )
+
+            # Ensure all required fields are updated
             final_state.last_update = datetime.now()
+            if not final_state.current_step:
+                final_state.current_step = "completed"
+            if not hasattr(final_state, "next_steps"):
+                final_state.next_steps = []
+
+            # Add final history entry
+            if not hasattr(final_state, "state_history"):
+                final_state.state_history = []
             final_state.state_history.append(
                 {
                     "timestamp": datetime.now(),
@@ -848,6 +862,8 @@ Please provide a structured response that:
             state.error_message = str(e)
             state.current_step = "error"
             state.last_update = datetime.now()
+            if not hasattr(state, "state_history"):
+                state.state_history = []
             state.state_history.append(
                 {
                     "timestamp": datetime.now(),
