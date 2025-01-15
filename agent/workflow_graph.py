@@ -166,130 +166,92 @@ class WorkflowGraph:
             if state.memory.focused_paper:
                 next_node = "process_paper_question"
 
-            # Check for paper references
-            elif state.search_context.results and any(
-                ref in message
-                for ref in [
-                    "paper",
-                    "study",
-                    "research",
-                    "article",
-                    "tell me about",
-                    "what is",
-                    "compare",
-                ]
-            ):
-                next_node = "process_paper_question"
-
             # Check for search intent
             elif any(
                 term in message
-                for term in ["search", "find", "look for", "papers about", "papers on"]
+                for term in [
+                    "search",
+                    "find",
+                    "look for",
+                    "papers about",
+                    "papers on",
+                    "fetch",
+                ]
             ):
                 next_node = "process_search"
 
+            # Update state with required fields
             state.current_step = "routed"
+            state.last_update = datetime.now()
+            state.next_steps = [next_node]
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {"timestamp": datetime.now(), "step": "routing", "next_node": next_node}
+            )
+
             return {"state": state, "next": next_node}
 
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error_message = f"Error in message routing: {str(e)}"
-            return {"state": state, "next": END}
+            state.current_step = "error"
+            state.last_update = datetime.now()
+            state.next_steps = ["update_memory"]
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
+            )
+            return {"state": state, "next": "update_memory"}
 
-    async def _process_search(self, state: AgentState) -> Dict:
-        """Process search request with direct S2 integration"""
+    def _process_search(self, state: AgentState) -> Dict:
+        """Process search operation with proper state updates"""
         try:
-            # Extract and clean search query
-            latest_message = state.memory.messages[-1]["content"]
-            query = self._clean_search_query(latest_message)
-            print(f"[DEBUG] Processing search for cleaned query: '{query}'")
-
-            # Perform search
-            results = await self.s2_client.search_papers(query=query, limit=10)
-            print(
-                f"[DEBUG] Retrieved {len(results.papers)} papers from total {results.total}"
+            # Initialize state for search
+            state.update_state(
+                status=AgentStatus.PROCESSING,
+                current_step="search_started",
+                next_steps=["update_memory"],
+                last_update=datetime.now(),
             )
 
-            if not results or not results.papers:
-                state.add_message("system", "No results found for your search.")
-                return {"state": state, "next": "update_memory"}
+            # Ensure state_history exists and is updated
+            if not hasattr(state, "state_history"):
+                state.state_history = []
 
-            # Update state
-            state.search_context.query = query
-            state.search_context.total_results = results.total
-            state.search_context.results = []
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "search_started",
+                    "query": state.search_context.query if state.search_context else "",
+                }
+            )
 
-            # Format the response with markdown
-            response_parts = [
-                f"Found {results.total:,} papers related to '{query}'. Here are the most relevant papers:\n"
-            ]
+            # Ensure all required fields are set
+            if not state.error_message:
+                state.error_message = None
+            if not state.memory:
+                state.memory = ConversationMemory()
+            if not state.search_context:
+                state.search_context = SearchContext()
 
-            # Build detailed paper information and add to state
-            for i, paper in enumerate(results.papers, 1):
-                try:
-                    # Add to state
-                    paper_data = {
-                        "paperId": paper.paperId,
-                        "title": paper.title,
-                        "abstract": paper.abstract,
-                        "year": paper.year,
-                        "authors": [
-                            {"name": a.name, "authorId": a.authorId}
-                            for a in paper.authors
-                        ],
-                        "citations": paper.citations,
-                        "url": paper.url,
-                    }
-                    state.search_context.add_paper(paper_data)
-
-                    # Format paper details with clear sections
-                    paper_info = [
-                        f"### {i}. {paper.title}",
-                        "",
-                        "**Authors:**",
-                        f"{', '.join(a.name for a in paper.authors)}",
-                        "",
-                        "**Publication Details:**",
-                        f"- Year: {paper.year or 'N/A'}",
-                        f"- Citations: {paper.citations or 0}",
-                        "",
-                    ]
-
-                    if paper.abstract:
-                        paper_info.extend(["**Abstract:**", f"{paper.abstract}", ""])
-
-                    paper_info.extend(
-                        ["**Link:**", f"[View Paper]({paper.url})", "", "---", ""]
-                    )
-
-                    response_parts.extend(paper_info)
-                    print(f"[DEBUG] Processed paper {i}: {paper.title}")
-
-                except Exception as e:
-                    print(f"[DEBUG] Error processing paper {i}: {str(e)}")
-                    continue
-
-            # Generate summary using the actual papers
-            summary_text = await self._generate_summary(query, results.papers)
-
-            # Add summary section
-            response_parts.extend(["### Summary", "", summary_text])
-
-            # Update state with complete response
-            state.add_message("system", "\n".join(response_parts))
-            state.current_step = "search_processed"
-            state.status = AgentStatus.SUCCESS
-
+            return {"state": state, "next": "update_memory"}
         except Exception as e:
-            print(f"[DEBUG] Search processing error: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Search processing error: {str(e)}"
-            state.add_message(
-                "system",
-                "I apologize, but I encountered an error while searching. Please try again.",
+            print(f"[DEBUG] Error in search processing: {str(e)}")
+            state.update_state(
+                status=AgentStatus.ERROR,
+                error_message=str(e),
+                current_step="error",
+                next_steps=["update_memory"],
+                last_update=datetime.now(),
             )
-
-        return {"state": state, "next": "update_memory"}
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
+            )
+            return {"state": state, "next": "update_memory"}
 
     async def _generate_summary(self, query: str, papers: List[Dict]) -> str:
         """Generate summary of search results"""
@@ -716,15 +678,19 @@ Please provide a structured response that:
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
         try:
-            # Update state
-            state.current_step = "memory_updated"
-            state.next_steps = []
-            state.last_update = datetime.now()
+            # Ensure all required fields are updated
+            state.update_state(
+                current_step="memory_updated",
+                next_steps=[],  # Clear next steps as this is the end
+                last_update=datetime.now(),
+                status=state.status,  # Preserve existing status
+            )
 
-            # Update state history
+            # Ensure state_history exists
             if not hasattr(state, "state_history"):
                 state.state_history = []
 
+            # Add state history entry
             state.state_history.append(
                 {
                     "timestamp": datetime.now(),
@@ -740,10 +706,26 @@ Please provide a structured response that:
 
         except Exception as e:
             print(f"[DEBUG] Error in memory update: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Error in memory update: {str(e)}"
-            state.current_step = "error"
-            state.last_update = datetime.now()
+            state.update_state(
+                status=AgentStatus.ERROR,
+                error_message=f"Error in memory update: {str(e)}",
+                current_step="error",
+                next_steps=[],
+                last_update=datetime.now(),
+            )
+
+            # Always add history entry even in error case
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "error",
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
+
             return {"state": state, "next": END}
 
     def get_graph(self):
@@ -790,23 +772,19 @@ Please provide a structured response that:
         return debug_info
 
     async def process_state(self, state: AgentState) -> AgentState:
-        """Process a state through the graph with enhanced error handling"""
+        """Process state through the graph with enhanced state management"""
         try:
-            # Debug before processing
-            print("\n[DEBUG] State before processing:")
-            await self.debug_state(state)
-
-            # Ensure state has required fields
             if not hasattr(state, "current_step"):
                 state.current_step = "initial"
             if not hasattr(state, "next_steps"):
                 state.next_steps = []
             if not hasattr(state, "state_history"):
                 state.state_history = []
-            if not hasattr(state, "last_update"):
-                state.last_update = datetime.now()
 
-            # Update state history before processing
+            # Always update last_update when processing state
+            state.last_update = datetime.now()
+
+            # Add history entry for state processing start
             state.state_history.append(
                 {
                     "timestamp": datetime.now(),
@@ -815,24 +793,43 @@ Please provide a structured response that:
                 }
             )
 
+            # Process through graph
             graph_chain = self.get_graph()
             result = await graph_chain.ainvoke({"state": state})
 
-            # Update final state
-            if isinstance(result, dict) and "state" in result:
-                final_state = result["state"]
-            else:
-                final_state = result
+            # Extract final state from result
+            final_state = result.get("state") if isinstance(result, dict) else result
 
-            # Ensure final state is updated
+            # Ensure all required fields are updated
             final_state.last_update = datetime.now()
-            await self.debug_state(final_state)
+            final_state.current_step = final_state.current_step or "completed"
+            final_state.next_steps = getattr(final_state, "next_steps", [])
+            final_state.state_history = getattr(final_state, "state_history", [])
+
+            # Add final history entry
+            final_state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": final_state.current_step,
+                    "status": final_state.status.value,
+                }
+            )
+
             return final_state
 
         except Exception as e:
             print(f"[DEBUG] Error processing state: {str(e)}")
             state.status = AgentStatus.ERROR
-            state.error_message = f"Error processing state: {str(e)}"
+            state.error_message = str(e)
             state.current_step = "error"
             state.last_update = datetime.now()
+            state.state_history = getattr(state, "state_history", [])
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "error",
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
             return state

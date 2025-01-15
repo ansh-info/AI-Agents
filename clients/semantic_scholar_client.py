@@ -151,134 +151,97 @@ class SemanticScholarClient:
         self.last_request_time = time.time()
 
     async def search_papers(
-        self,
-        query: str,
-        filters: Optional[SearchFilters] = None,
-        offset: int = 0,
-        limit: int = 10,
-        fields: Optional[List[str]] = None,
-        sort_by: Optional[str] = None,
+        self, query: str, filters: Optional[SearchFilters] = None, limit: int = 10
     ) -> SearchResults:
-        """Enhanced paper search with comprehensive options"""
-        if fields is None:
+        """Perform paper search with enhanced error handling"""
+        try:
+            # Clean query
+            clean_query = query.replace("?", "").strip()
+            if not clean_query:
+                raise ValueError("Empty search query")
+
+            # Build parameters
+            params = {
+                "query": clean_query,
+                "offset": 0,
+                "limit": limit,
+            }
+
+            # Add any fields parameter if needed
             fields = [
                 "paperId",
                 "title",
                 "abstract",
                 "year",
                 "authors",
-                "venue",
                 "citationCount",
-                "referenceCount",
-                "fieldsOfStudy",
-                "isOpenAccess",
                 "url",
             ]
+            params["fields"] = ",".join(fields)
 
-        # Build query parameters
-        params = {
-            "query": query,
-            "offset": offset,
-            "limit": min(limit, 10),  # API limit is 100, but we're limiting to 10
-            "fields": ",".join(fields),
-        }
+            # Add filters if provided
+            if filters:
+                params.update(filters.to_params())
 
-        # Add filters if provided
-        if filters:
-            params.update(filters.to_params())
+            # Remove any None values
+            params = {k: v for k, v in params.items() if v is not None}
 
-        # Add sorting if specified
-        if sort_by:
-            params["sort"] = sort_by
+            print(f"[DEBUG] Making request with params: {params}")
 
-        start_time = time.time()
-        retry_count = 0
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                url = f"{self.base_url}/paper/search"
+                async with session.get(
+                    url, params=params, timeout=self.timeout
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"API error ({response.status}): {error_text}")
 
-        while retry_count < self.max_retries:
-            try:
-                # Apply rate limiting
-                await self._wait_for_rate_limit()
+                    data = await response.json()
+                    if not isinstance(data, dict):
+                        raise ValueError(f"Invalid response format: {data}")
 
-                async with aiohttp.ClientSession(headers=self.headers) as session:
-                    async with session.get(
-                        f"{self.base_url}/paper/search",
-                        params=params,
-                        timeout=self.timeout,
-                    ) as response:
-                        if response.status == 429:  # Too Many Requests
-                            retry_after = float(
-                                response.headers.get("Retry-After", 1.0)
-                            )
-                            await asyncio.sleep(retry_after)
-                            retry_count += 1
+                    papers = []
+                    for paper_data in data.get("data", []):
+                        if not paper_data:
                             continue
 
-                        if response.status != 200:
-                            error_text = await response.text()
-                            raise Exception(
-                                f"API error ({response.status}): {error_text}"
-                            )
-
-                        data = await response.json()
-                        papers = []
-
-                        for paper_data in data.get("data", []):
-                            # Convert authors data
-                            authors = [
-                                Author(
-                                    authorId=author.get("authorId"),
-                                    name=author.get("name", ""),
-                                    url=author.get("url"),
-                                    affiliations=author.get("affiliations", []),
+                        # Safely extract author information
+                        authors = []
+                        for author in paper_data.get("authors", []):
+                            if author and isinstance(author, dict):
+                                authors.append(
+                                    Author(
+                                        authorId=author.get("authorId"),
+                                        name=author.get("name", "Unknown Author"),
+                                        url=author.get("url"),
+                                        affiliations=author.get("affiliations", []),
+                                    )
                                 )
-                                for author in paper_data.get("authors", [])
-                            ]
 
-                            # Create paper metadata
-                            paper = PaperMetadata(
-                                paperId=paper_data.get("paperId", ""),
-                                title=paper_data.get("title", ""),
-                                abstract=paper_data.get("abstract"),
-                                year=paper_data.get("year"),
-                                authors=authors,
-                                venue=paper_data.get("venue"),
-                                citations=paper_data.get("citationCount"),
-                                references=paper_data.get("referenceCount"),
-                                url=paper_data.get("url"),
-                                topics=paper_data.get("topics", []),
-                                fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
-                                isOpenAccess=paper_data.get("isOpenAccess"),
-                                tldr=paper_data.get("tldr", {}).get("text"),
-                            )
-                            papers.append(paper)
-
-                        # Calculate query time
-                        query_time = time.time() - start_time
-
-                        return SearchResults(
-                            total=data.get("total", 0),
-                            offset=data.get("offset", 0),
-                            next=data.get("next"),
-                            papers=papers,
-                            query_time=query_time,
-                            filters_applied=filters.dict() if filters else {},
+                        # Create paper metadata with safe defaults
+                        paper = PaperMetadata(
+                            paperId=paper_data.get("paperId", ""),
+                            title=paper_data.get("title", "Untitled Paper"),
+                            abstract=paper_data.get("abstract"),
+                            year=paper_data.get("year"),
+                            authors=authors,
+                            citations=paper_data.get("citationCount", 0),
+                            references=paper_data.get("referenceCount", 0),
+                            url=paper_data.get("url"),
                         )
+                        papers.append(paper)
 
-            except aiohttp.ClientError as e:
-                retry_count += 1
-                if retry_count == self.max_retries:
-                    raise Exception(
-                        f"Network error after {retry_count} attempts: {str(e)}"
+                    return SearchResults(
+                        total=data.get("total", 0),
+                        offset=data.get("offset", 0),
+                        papers=papers,
+                        query_time=0.0,
                     )
-                await asyncio.sleep(1.0 * retry_count)
 
-            except Exception as e:
-                retry_count += 1
-                if retry_count == self.max_retries:
-                    raise Exception(f"Error after {retry_count} attempts: {str(e)}")
-                await asyncio.sleep(1.0 * retry_count)
-
-        raise Exception(f"Failed to get response after {self.max_retries} attempts")
+        except Exception as e:
+            print(f"Search error: {str(e)}")
+            raise
 
     async def get_paper_details(self, paper_id: str) -> PaperMetadata:
         """Get detailed information about a specific paper"""
