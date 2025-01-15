@@ -716,15 +716,15 @@ Please provide a structured response that:
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
         try:
-            # Update state
+            # Always update these required fields
             state.current_step = "memory_updated"
             state.next_steps = []
             state.last_update = datetime.now()
 
-            # Update state history
             if not hasattr(state, "state_history"):
                 state.state_history = []
 
+            # Add state history entry
             state.state_history.append(
                 {
                     "timestamp": datetime.now(),
@@ -744,6 +744,19 @@ Please provide a structured response that:
             state.error_message = f"Error in memory update: {str(e)}"
             state.current_step = "error"
             state.last_update = datetime.now()
+
+            # Always add history entry even in error case
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "error",
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
+
             return {"state": state, "next": END}
 
     def get_graph(self):
