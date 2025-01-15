@@ -151,57 +151,73 @@ class SemanticScholarClient:
         self.last_request_time = time.time()
 
     async def search_papers(
-        self, query: str, filters: Optional[SearchFilters] = None
+        self,
+        query: str,
+        filters: Optional[SearchFilters] = None,
+        offset: int = 0,
+        limit: int = 10,  # Add limit parameter
+        fields: Optional[List[str]] = None,
     ) -> SearchResults:
         """Enhanced paper search with comprehensive options"""
         try:
-            response = await self._make_request(
-                f"{self.base_url}/paper/search", {"query": query, "limit": 10}
-            )
+            # Build query parameters
+            params = {
+                "query": query,
+                "offset": offset,
+                "limit": limit,  # Include limit in params
+                "fields": ",".join(fields) if fields else None,
+            }
 
-            if not response or "data" not in response:
-                raise Exception("Invalid response format from Semantic Scholar API")
+            # Add filters if provided
+            if filters:
+                params.update(filters.to_params())
 
-            papers = []
-            for paper_data in response.get("data", []):
-                if not paper_data:
-                    continue
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                async with session.get(
+                    f"{self.base_url}/paper/search", params=params, timeout=self.timeout
+                ) as response:
+                    if response.status != 200:
+                        raise Exception(f"API error ({response.status})")
 
-                # Safe data extraction with defaults
-                authors = []
-                for author in paper_data.get("authors", []):
-                    if author:
-                        authors.append(
-                            Author(
-                                authorId=author.get("authorId"),
-                                name=author.get("name", "Unknown Author"),
-                                url=author.get("url"),
-                                affiliations=author.get("affiliations", []),
+                    data = await response.json()
+                    papers = []
+                    for paper_data in data.get("data", []):
+                        try:
+                            # Convert authors data
+                            authors = [
+                                Author(
+                                    authorId=author.get("authorId"),
+                                    name=author.get("name", "Unknown Author"),
+                                    url=author.get("url"),
+                                    affiliations=author.get("affiliations", []),
+                                )
+                                for author in paper_data.get("authors", [])
+                            ]
+
+                            paper = PaperMetadata(
+                                paperId=paper_data.get("paperId", ""),
+                                title=paper_data.get("title", "Untitled"),
+                                abstract=paper_data.get("abstract"),
+                                year=paper_data.get("year"),
+                                authors=authors,
+                                citations=paper_data.get("citationCount", 0),
+                                references=paper_data.get("referenceCount", 0),
+                                url=paper_data.get("url"),
+                                fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
                             )
-                        )
+                            papers.append(paper)
+                        except Exception as e:
+                            print(f"Error processing paper: {str(e)}")
+                            continue
 
-                paper = PaperMetadata(
-                    paperId=paper_data.get("paperId", ""),
-                    title=paper_data.get("title", "Untitled Paper"),
-                    abstract=paper_data.get("abstract"),
-                    year=paper_data.get("year"),
-                    authors=authors,
-                    citations=paper_data.get("citationCount", 0),
-                    references=paper_data.get("referenceCount", 0),
-                    url=paper_data.get("url"),
-                    fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
-                )
-                papers.append(paper)
-
-            return SearchResults(
-                total=response.get("total", 0),
-                offset=response.get("offset", 0),
-                papers=papers,
-                query_time=time.time(),
-            )
+                    return SearchResults(
+                        total=data.get("total", 0),
+                        offset=data.get("offset", 0),
+                        papers=papers,
+                    )
 
         except Exception as e:
-            print(f"[DEBUG] Search error: {str(e)}")
+            print(f"Search error: {str(e)}")
             raise
 
     async def get_paper_details(self, paper_id: str) -> PaperMetadata:
