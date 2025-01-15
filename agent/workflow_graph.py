@@ -790,23 +790,16 @@ Please provide a structured response that:
         return debug_info
 
     async def process_state(self, state: AgentState) -> AgentState:
-        """Process a state through the graph with enhanced error handling"""
+        """Process state through the graph with enhanced state management"""
         try:
-            # Debug before processing
-            print("\n[DEBUG] State before processing:")
-            await self.debug_state(state)
-
-            # Ensure state has required fields
             if not hasattr(state, "current_step"):
                 state.current_step = "initial"
             if not hasattr(state, "next_steps"):
                 state.next_steps = []
             if not hasattr(state, "state_history"):
                 state.state_history = []
-            if not hasattr(state, "last_update"):
-                state.last_update = datetime.now()
 
-            # Update state history before processing
+            # Create initial state history entry
             state.state_history.append(
                 {
                     "timestamp": datetime.now(),
@@ -815,24 +808,39 @@ Please provide a structured response that:
                 }
             )
 
+            # Process through graph
             graph_chain = self.get_graph()
             result = await graph_chain.ainvoke({"state": state})
 
             # Update final state
-            if isinstance(result, dict) and "state" in result:
-                final_state = result["state"]
-            else:
-                final_state = result
-
-            # Ensure final state is updated
+            final_state = (
+                result["state"]
+                if isinstance(result, dict) and "state" in result
+                else result
+            )
             final_state.last_update = datetime.now()
-            await self.debug_state(final_state)
+            final_state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": final_state.current_step,
+                    "status": final_state.status.value,
+                }
+            )
+
             return final_state
 
         except Exception as e:
             print(f"[DEBUG] Error processing state: {str(e)}")
             state.status = AgentStatus.ERROR
-            state.error_message = f"Error processing state: {str(e)}"
+            state.error_message = str(e)
             state.current_step = "error"
             state.last_update = datetime.now()
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "error",
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
             return state
