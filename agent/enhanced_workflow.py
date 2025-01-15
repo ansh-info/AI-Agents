@@ -146,22 +146,29 @@ class SearchAgent:
     async def search_papers(
         self, query: str, filters: Optional[SearchFilters] = None
     ) -> Dict[str, Any]:
-        """Perform paper search with error handling"""
+        """Perform paper search with enhanced error handling"""
         try:
             print(f"[DEBUG] SearchAgent: Starting search with query: {query}")
+            if not query.strip():
+                return {
+                    "status": "error",
+                    "results": None,
+                    "error": "Empty search query",
+                }
+
             results = await self.client.search_papers(
                 query=query, filters=filters, limit=10
             )
 
-            print(f"[DEBUG] SearchAgent: Got {results.total} total results")
-            print("[DEBUG] SearchAgent: First paper details:")
-            if results.papers:
-                first_paper = results.papers[0]
-                print(f"  - paperId: {first_paper.paperId}")
-                print(f"  - title: {first_paper.title}")
-                print(f"  - authors: {[a.name for a in first_paper.authors]}")
+            if not results or not results.papers:
+                return {
+                    "status": "success",
+                    "results": SearchResults(total=0, offset=0, papers=[]),
+                    "error": None,
+                }
 
             return {"status": "success", "results": results, "error": None}
+
         except Exception as e:
             print(f"[DEBUG] SearchAgent: Error during search: {str(e)}")
             return {"status": "error", "results": None, "error": str(e)}
