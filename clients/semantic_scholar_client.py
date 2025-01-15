@@ -151,69 +151,92 @@ class SemanticScholarClient:
         self.last_request_time = time.time()
 
     async def search_papers(
-        self,
-        query: str,
-        filters: Optional[SearchFilters] = None,
-        offset: int = 0,
-        limit: int = 10,  # Add limit parameter
-        fields: Optional[List[str]] = None,
+        self, query: str, filters: Optional[SearchFilters] = None
     ) -> SearchResults:
-        """Enhanced paper search with comprehensive options"""
+        """Perform paper search with enhanced error handling"""
         try:
-            # Build query parameters
+            # Clean query
+            clean_query = query.replace("?", "").strip()
+            if not clean_query:
+                raise ValueError("Empty search query")
+
+            # Build parameters
             params = {
-                "query": query,
-                "offset": offset,
-                "limit": limit,  # Include limit in params
-                "fields": ",".join(fields) if fields else None,
+                "query": clean_query,
+                "offset": 0,
+                "limit": 10,
             }
+
+            # Add any fields parameter if needed
+            fields = [
+                "paperId",
+                "title",
+                "abstract",
+                "year",
+                "authors",
+                "citationCount",
+                "url",
+            ]
+            params["fields"] = ",".join(fields)
 
             # Add filters if provided
             if filters:
                 params.update(filters.to_params())
 
+            # Remove any None values
+            params = {k: v for k, v in params.items() if v is not None}
+
+            print(f"[DEBUG] Making request with params: {params}")
+
             async with aiohttp.ClientSession(headers=self.headers) as session:
+                url = f"{self.base_url}/paper/search"
                 async with session.get(
-                    f"{self.base_url}/paper/search", params=params, timeout=self.timeout
+                    url, params=params, timeout=self.timeout
                 ) as response:
                     if response.status != 200:
-                        raise Exception(f"API error ({response.status})")
+                        error_text = await response.text()
+                        raise Exception(f"API error ({response.status}): {error_text}")
 
                     data = await response.json()
+                    if not isinstance(data, dict):
+                        raise ValueError(f"Invalid response format: {data}")
+
                     papers = []
                     for paper_data in data.get("data", []):
-                        try:
-                            # Convert authors data
-                            authors = [
-                                Author(
-                                    authorId=author.get("authorId"),
-                                    name=author.get("name", "Unknown Author"),
-                                    url=author.get("url"),
-                                    affiliations=author.get("affiliations", []),
-                                )
-                                for author in paper_data.get("authors", [])
-                            ]
-
-                            paper = PaperMetadata(
-                                paperId=paper_data.get("paperId", ""),
-                                title=paper_data.get("title", "Untitled"),
-                                abstract=paper_data.get("abstract"),
-                                year=paper_data.get("year"),
-                                authors=authors,
-                                citations=paper_data.get("citationCount", 0),
-                                references=paper_data.get("referenceCount", 0),
-                                url=paper_data.get("url"),
-                                fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
-                            )
-                            papers.append(paper)
-                        except Exception as e:
-                            print(f"Error processing paper: {str(e)}")
+                        if not paper_data:
                             continue
+
+                        # Safely extract author information
+                        authors = []
+                        for author in paper_data.get("authors", []):
+                            if author and isinstance(author, dict):
+                                authors.append(
+                                    Author(
+                                        authorId=author.get("authorId"),
+                                        name=author.get("name", "Unknown Author"),
+                                        url=author.get("url"),
+                                        affiliations=author.get("affiliations", []),
+                                    )
+                                )
+
+                        # Create paper metadata with safe defaults
+                        paper = PaperMetadata(
+                            paperId=paper_data.get("paperId", ""),
+                            title=paper_data.get("title", "Untitled Paper"),
+                            abstract=paper_data.get("abstract"),
+                            year=paper_data.get("year"),
+                            authors=authors,
+                            citations=paper_data.get("citationCount", 0),
+                            references=paper_data.get("referenceCount", 0),
+                            url=paper_data.get("url"),
+                        )
+                        papers.append(paper)
 
                     return SearchResults(
                         total=data.get("total", 0),
                         offset=data.get("offset", 0),
                         papers=papers,
+                        query_time=0.0,
                     )
 
         except Exception as e:
