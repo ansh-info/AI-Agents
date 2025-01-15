@@ -81,38 +81,35 @@ class CommandParser:
         return {"intent": "conversation", "query": command}
 
     @staticmethod
-    def _clean_search_query(self, query: str) -> str:
-        """Clean search query by removing common prefixes and noise words"""
+    def _clean_search_query(query: str) -> str:
+        """Clean search query for proper searching"""
+        print(f"[DEBUG] Cleaning query: {query}")
+
         # List of phrases to remove
         clean_phrases = [
-            "search for",
-            "find me",
-            "look for",
-            "papers about",
-            "papers on",
-            "research on",
-            "can you find",
+            "can you search for papers on",
+            "can you search for papers about",
             "can you search for",
             "can you search",
+            "search for papers on",
+            "search for papers about",
+            "search for papers",
+            "search for",
+            "papers on",
+            "papers about",
             "can you",
-            "please",
-            "i want",
-            "i need",
+            "papers",
+            "search",
         ]
 
-        # Convert to lowercase for consistent processing
         cleaned = query.lower()
-
-        # Remove each phrase
-        for phrase in clean_phrases:
+        # Remove phrases in order (longest first to prevent partial matches)
+        for phrase in sorted(clean_phrases, key=len, reverse=True):
             cleaned = cleaned.replace(phrase, "")
 
         # Clean up extra whitespace
         cleaned = " ".join(cleaned.split())
-
-        print(f"[DEBUG] Original query: {query}")
-        print(f"[DEBUG] Cleaned query: {cleaned}")
-
+        print(f"[DEBUG] Cleaned query result: {cleaned}")
         return cleaned
 
     @staticmethod
