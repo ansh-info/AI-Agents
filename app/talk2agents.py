@@ -26,17 +26,15 @@ st.set_page_config(
 
 class DashboardApp:
     def __init__(self):
-        """Initialize the dashboard application"""
+        """Initialize the dashboard application with new workflow"""
         if "workflow_manager" not in st.session_state:
             st.session_state.workflow_manager = EnhancedWorkflowManager()
         if "agent_state" not in st.session_state:
             st.session_state.agent_state = AgentState()
-        if "debug_messages" not in st.session_state:
-            st.session_state.debug_messages = []
         if "messages" not in st.session_state:
             st.session_state.messages = []
-        if "health_status" not in st.session_state:
-            st.session_state.health_status = None
+        if "debug_messages" not in st.session_state:
+            st.session_state.debug_messages = []
 
     def setup_page(self):
         """Setup page styling"""
@@ -284,32 +282,19 @@ class DashboardApp:
                 st.experimental_rerun()
 
     async def process_input(self, prompt: str):
-        """Process user input with enhanced monitoring"""
+        """Process user input using new workflow manager"""
         try:
             print(f"[DEBUG] Processing input: {prompt}")
 
-            # Process command
+            # Process through new workflow
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
 
-            # Get debug info about the state
-            debug_info = (
-                await st.session_state.workflow_manager.workflow_graph.debug_state(
-                    state
-                )
-            )
-            print("[DEBUG] Current state info:")
-            print(json.dumps(debug_info, indent=2))
-
             # Update session state
             st.session_state.agent_state = state
 
-            if state.error_message:
-                print(f"[DEBUG] Error in state: {state.error_message}")
-                self.add_debug_message(f"Error: {state.error_message}")
-
-            # Get and show response
+            # Add response to messages
             if state.memory and state.memory.messages:
                 response_message = {
                     "role": "system",
@@ -330,6 +315,23 @@ class DashboardApp:
                 }
             )
             return None
+
+    def render_chat_interface(self):
+        """Render chat interface with new workflow integration"""
+        # Display chat history
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+        # Chat input
+        if prompt := st.chat_input("Ask me anything about research papers..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+
+            # Process input
+            with st.spinner("Processing..."):
+                asyncio.run(self.process_input(prompt))
+
+            st.experimental_rerun()
 
     async def process_search(
         self, query: str, year: str = None, citations: str = None, sort_by: str = None
@@ -464,46 +466,23 @@ class DashboardApp:
                         st.rerun()  # Changed from experimental_rerun
 
     def run(self):
-        """Run the dashboard application with initialization"""
-        self.setup_page()
+        """Run the dashboard application"""
+        st.title("Talk2Papers - Academic Research Assistant")
 
-        # Initialize system asynchronously
-        if "initialized" not in st.session_state:
-            with st.spinner("Initializing system..."):
-                asyncio.run(self.initialize_system())
-                st.session_state.initialized = True
+        # Render chat interface
+        self.render_chat_interface()
 
-        # Render debug panel with health status
-        self.render_debug_panel()
+        # Render debug panel
+        if st.sidebar.checkbox("Show Debug Panel"):
+            with st.sidebar:
+                st.markdown("### 🔍 Debug Panel")
 
-        # Main content container
-        st.markdown("<div class='main-content'>", unsafe_allow_html=True)
-
-        # Only render chat history once
-        for idx, message in enumerate(st.session_state.messages):
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
-                # Only render papers for system messages with search results
-                if (
-                    message["role"] == "system"
-                    and hasattr(message, "papers")
-                    and message.get("papers")
-                ):
-                    self.render_papers(message["papers"], context_prefix=f"chat_{idx}")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # Fixed chat input at bottom
-        with st.container():
-            if prompt := st.chat_input("Ask about research papers..."):
-                # Add user message
-                st.session_state.messages.append({"role": "user", "content": prompt})
-
-                # Process command
-                with st.spinner("Processing..."):
-                    response_state = asyncio.run(self.process_input(prompt))
-
-                st.rerun()
+                if st.button("Check System Health"):
+                    with st.spinner("Checking system health..."):
+                        health_status = asyncio.run(
+                            st.session_state.workflow_manager.check_workflow_health()
+                        )
+                        st.json(health_status)
 
 
 def main():
