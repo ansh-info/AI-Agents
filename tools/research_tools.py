@@ -1,14 +1,19 @@
 from typing import Annotated, Any, Dict, List, Optional
 
+from agent_state import AgentState
 from langchain_core.tools import tool
+from ollama_tool import OllamaTool
 from semantic_scholar_tool import SemanticScholarTool
+from state_tool import StateTool
 
 
 class ResearchTools:
     """Collection of research-related tools for the agent."""
 
-    def __init__(self):
+    def __init__(self, state: AgentState):
         self.s2_tool = SemanticScholarTool()
+        self.ollama_tool = OllamaTool()
+        self.state_tool = StateTool(state)
 
     @tool
     async def search_papers(
@@ -34,10 +39,41 @@ class ResearchTools:
         return await self.s2_tool.get_paper_details(paper_id)
 
     @tool
-    async def advanced_search(
+    async def analyze_paper(
         self,
-        filters: Annotated[Dict[str, Any], "Advanced search filters"],
-        limit: Annotated[int, "Maximum number of results"] = 10,
+        paper_id: Annotated[str, "ID of the paper to analyze"],
+        question: Annotated[str, "Question about the paper"],
     ) -> str:
-        """Perform advanced search with custom filters."""
-        return await self.s2_tool.search_by_filters(filters, limit)
+        """Analyze a paper using LLM."""
+        paper_context = await self.state_tool.get_paper_context(paper_id)
+        prompt = f"""Based on this paper:
+{paper_context}
+
+Question: {question}
+
+Please provide a detailed analysis addressing the question."""
+
+        return await self.ollama_tool.generate_response(prompt=prompt, temperature=0.7)
+
+    @tool
+    async def compare_papers(
+        self, paper_ids: Annotated[List[str], "List of paper IDs to compare"]
+    ) -> str:
+        """Compare multiple papers."""
+        papers_context = []
+        for pid in paper_ids:
+            context = await self.state_tool.get_paper_context(pid)
+            papers_context.append(context)
+
+        prompt = f"""Compare these papers:
+{'\n---\n'.join(papers_context)}
+
+Consider:
+1. Main findings and contributions
+2. Methodological approaches
+3. Key differences and similarities
+4. Impact and significance
+
+Provide a structured comparison."""
+
+        return await self.ollama_tool.generate_response(prompt=prompt, temperature=0.7)
