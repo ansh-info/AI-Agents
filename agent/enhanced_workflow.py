@@ -284,21 +284,16 @@ Please provide a comprehensive response that:
 
 
 class EnhancedWorkflowManager:
-    """Main workflow manager with enhanced integration"""
+    """Enhanced workflow manager that integrates with the new hierarchical system"""
 
-    def __init__(self, model_name: str = "llama3.2:1b"):
-        """Initialize workflow components"""
+    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
+        """Initialize with both old and new components for gradual transition"""
+        # Initialize new workflow manager
+        self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
+
+        # Keep old clients for backward compatibility during transition
         self.ollama_client = OllamaClient(model_name=model_name)
         self.s2_client = SemanticScholarClient()
-
-        # Initialize agents
-        self.search_agent = SearchAgent(self.s2_client)
-        self.conversation_agent = ConversationAgent(self.ollama_client)
-
-        # Initialize workflow
-        self.workflow_graph = WorkflowGraph(
-            ollama_client=self.ollama_client, s2_client=self.s2_client
-        )
 
         # Initialize state
         self.current_state = AgentState()
@@ -307,92 +302,49 @@ class EnhancedWorkflowManager:
         self.command_parser = CommandParser()
 
     async def process_command_async(self, command: str) -> AgentState:
-        """Process command with enhanced monitoring"""
+        """Process commands using new workflow manager"""
         try:
-            # Add command to state
-            print(f"\n[DEBUG] Processing command: {command}")
-            self.current_state.add_message("user", command)
+            print(f"\n[DEBUG] Processing command through new workflow: {command}")
 
-            # Parse command intent
-            parsed_command = self.command_parser.parse_command(command)
-            print(f"[DEBUG] Parsed command intent: {parsed_command['intent']}")
+            # Process through new workflow manager
+            state = await self.workflow_manager.process_message(command)
 
-            # Get initial state debug info
-            print("\n[DEBUG] Initial state:")
-            initial_debug = await self.workflow_graph.debug_state(self.current_state)
-            print(json.dumps(initial_debug, indent=2))
+            # Update current state
+            self.current_state = state
 
-            # Process based on intent
-            if parsed_command["intent"] == "search":
-                await self._handle_search(parsed_command["query"])
-            elif parsed_command["intent"] == "paper_question":
-                await self._handle_paper_question(
-                    parsed_command["paper_reference"], command
-                )
-            elif parsed_command["intent"] == "compare_papers":
-                await self._handle_paper_comparison(parsed_command["paper_references"])
-            else:
-                await self._handle_conversation(command)
-
-            # Process through workflow graph
-            try:
-                print("\n[DEBUG] Processing state through workflow graph...")
-                self.current_state = await self.workflow_graph.process_state(
-                    self.current_state
-                )
-
-                # Get final state debug info
-                print("\n[DEBUG] Final state after processing:")
-                final_debug = await self.workflow_graph.debug_state(self.current_state)
-                print(json.dumps(final_debug, indent=2))
-
-            except Exception as e:
-                print(f"[DEBUG] Workflow error: {str(e)}")
-                self.current_state.status = AgentStatus.ERROR
-                self.current_state.error_message = f"Workflow error: {str(e)}"
-
-            return self.current_state
+            return state
 
         except Exception as e:
-            print(f"[DEBUG] Command processing error: {str(e)}")
+            print(f"[DEBUG] Error in workflow: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
-            self.current_state.add_message(
-                "system", f"I apologize, but I encountered an error: {str(e)}"
-            )
             return self.current_state
 
     async def check_workflow_health(self) -> Dict[str, Any]:
-        """Check the health of the workflow components"""
-        health_status = {
-            "workflow_graph": True,
-            "ollama_client": False,
-            "semantic_scholar": False,
-            "command_parser": True,
-            "errors": [],
-        }
-
+        """Enhanced health check including new components"""
         try:
-            # Check Ollama
+            # Check new workflow components
+            workflow_health = await self.workflow_manager.check_health()
+
+            # Check old components
             ollama_health = await self.ollama_client.check_model_availability()
-            health_status["ollama_client"] = ollama_health
 
-            # Check Semantic Scholar
-            s2_health = await self.s2_client.check_api_status()
-            health_status["semantic_scholar"] = s2_health
-
-            if not ollama_health:
-                health_status["errors"].append("Ollama client is not responding")
-            if not s2_health:
-                health_status["errors"].append("Semantic Scholar API is not responding")
+            return {
+                "workflow_graph": True,
+                "ollama_client": ollama_health,
+                "semantic_scholar": workflow_health.get("semantic_scholar", False),
+                "command_parser": True,
+                "errors": workflow_health.get("errors", []),
+            }
 
         except Exception as e:
-            health_status["errors"].append(f"Health check error: {str(e)}")
-
-        print("[DEBUG] Workflow health status:")
-        print(json.dumps(health_status, indent=2))
-
-        return health_status
+            return {
+                "workflow_graph": False,
+                "ollama_client": False,
+                "semantic_scholar": False,
+                "command_parser": False,
+                "errors": [str(e)],
+            }
 
     async def _handle_search(self, query: str):
         """Handle search with proper state management"""
