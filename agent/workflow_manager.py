@@ -1,9 +1,9 @@
 from typing import Any, Dict, Optional
 
-from agent_state import AgentState, AgentStatus
-from agent_tools import ResearchTools
-from main_agent import MainAgent
-from semantic_scholar_client import SemanticScholarClient
+from agent.main_agent import MainAgent
+from clients.semantic_scholar_client import SemanticScholarClient
+from state.agent_state import AgentState, AgentStatus
+from tools.research_tools import ResearchTools
 
 
 class ResearchWorkflowManager:
@@ -14,7 +14,7 @@ class ResearchWorkflowManager:
         self.s2_client = SemanticScholarClient()
 
         # Initialize tools
-        self.research_tools = ResearchTools(self.s2_client)
+        self.research_tools = ResearchTools()
 
         # Create tools list
         self.tools = [

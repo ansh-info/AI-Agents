@@ -1,19 +1,20 @@
 from typing import Annotated, Any, Dict, List, Optional
 
-from agent_state import AgentState
 from langchain_core.tools import tool
-from ollama_tool import OllamaTool
-from semantic_scholar_tool import SemanticScholarTool
-from state_tool import StateTool
+
+from state.agent_state import AgentState
+from tools.ollama_tool import OllamaTool
+from tools.semantic_scholar_tool import SemanticScholarTool
+from tools.state_tool import StateTool
 
 
 class ResearchTools:
     """Collection of research-related tools for the agent."""
 
-    def __init__(self, state: AgentState):
+    def __init__(self, state: AgentState = None):
         self.s2_tool = SemanticScholarTool()
         self.ollama_tool = OllamaTool()
-        self.state_tool = StateTool(state)
+        self.state_tool = StateTool(state) if state else None
 
     @tool
     async def search_papers(

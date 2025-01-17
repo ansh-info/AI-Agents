@@ -1,7 +1,8 @@
 from typing import Annotated, Any, Dict, Optional
 
-from agent_state import AgentState, PaperContext
 from langchain_core.tools import BaseTool, tool
+
+from state.agent_state import AgentState, PaperContext  # Updated import path
 
 
 class StateTool(BaseTool):

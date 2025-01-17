@@ -1,10 +1,11 @@
 from typing import Any, Dict, List, Optional
 
-from agent_state import AgentState, AgentStatus
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import MessagesState, StateGraph
+
+from state.agent_state import AgentState, AgentStatus
 
 
 class MainAgent:

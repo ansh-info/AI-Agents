@@ -9,8 +9,8 @@ import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
-
 from agent.enhanced_workflow import EnhancedWorkflowManager
+from agent.workflow_manager import ResearchWorkflowManager
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, PaperContext
