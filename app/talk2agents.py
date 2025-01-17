@@ -284,7 +284,7 @@ class DashboardApp:
     async def process_input(self, prompt: str):
         """Process user input using new workflow manager"""
         try:
-            print(f"[DEBUG] Processing input: {prompt}")
+            print(f"[DEBUG] Dashboard processing input: {prompt}")
 
             # Process through new workflow
             state = await st.session_state.workflow_manager.process_command_async(
@@ -295,12 +295,26 @@ class DashboardApp:
             st.session_state.agent_state = state
 
             # Add response to messages
-            if state.memory and state.memory.messages:
-                response_message = {
-                    "role": "system",
-                    "content": state.memory.messages[-1]["content"],
-                }
-                st.session_state.messages.append(response_message)
+            if state and state.memory and state.memory.messages:
+                # Get the last system message
+                last_system_message = next(
+                    (
+                        msg
+                        for msg in reversed(state.memory.messages)
+                        if msg["role"] == "system"
+                    ),
+                    None,
+                )
+
+                if last_system_message:
+                    response_message = {
+                        "role": "assistant",
+                        "content": last_system_message["content"],
+                    }
+                    st.session_state.messages.append(response_message)
+                    print(
+                        f"[DEBUG] Added response: {response_message['content'][:200]}..."
+                    )
 
             return state
 
@@ -310,7 +324,7 @@ class DashboardApp:
             self.add_debug_message(error_msg)
             st.session_state.messages.append(
                 {
-                    "role": "system",
+                    "role": "assistant",
                     "content": f"I apologize, but I encountered an error: {str(e)}",
                 }
             )
@@ -329,13 +343,12 @@ class DashboardApp:
         if prompt := st.chat_input("Ask me anything about research papers..."):
             # Add user message
             st.chat_message("user").write(prompt)
-            st.session_state.messages.append({"role": "user", "content": prompt})
 
             # Process input
-            with st.spinner("Thinking..."):
+            with st.spinner("Processing your request..."):
                 asyncio.run(self.process_input(prompt))
 
-            # Use the newer rerun() method
+            # Use rerun to update the UI
             st.rerun()
 
     async def process_search(
