@@ -1,7 +1,7 @@
 from typing import Annotated, Any, Dict, Optional, Type
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from clients.ollama_client import OllamaClient
 
@@ -21,11 +21,12 @@ class OllamaTool(BaseTool):
     name: str = "ollama_tool"
     description: str = "Tool for interacting with the Ollama LLM"
     args_schema: Type[BaseModel] = GenerateResponseSchema
+    _client: OllamaClient = PrivateAttr()  # Use PrivateAttr for non-serialized fields
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize the tool with a specific model"""
         super().__init__()
-        self.client = OllamaClient(model_name=model_name)
+        self._client = OllamaClient(model_name=model_name)
 
     async def _arun(
         self,
@@ -36,7 +37,7 @@ class OllamaTool(BaseTool):
     ) -> str:
         """Asynchronously generate a response using the Ollama LLM."""
         try:
-            response = await self.client.generate(
+            response = await self._client.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 max_tokens=max_tokens,
