@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional, Type
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from clients.semantic_scholar_client import (PaperMetadata, SearchFilters,
                                              SemanticScholarClient)
@@ -22,11 +22,14 @@ class SemanticScholarTool(BaseTool):
     name: str = "semantic_scholar_tool"
     description: str = "Tool for searching and retrieving academic papers"
     args_schema: Type[BaseModel] = SearchPapersSchema
+    _client: SemanticScholarClient = (
+        PrivateAttr()
+    )  # Use PrivateAttr for non-serialized fields
 
     def __init__(self):
         """Initialize the tool"""
         super().__init__()
-        self.client = SemanticScholarClient()
+        self._client = SemanticScholarClient()
 
     async def _arun(
         self,
@@ -41,7 +44,7 @@ class SemanticScholarTool(BaseTool):
                 year_start=year_start, year_end=year_end, min_citations=min_citations
             )
 
-            results = await self.client.search_papers(query=query, filters=filters)
+            results = await self._client.search_papers(query=query, filters=filters)
 
             return self._format_search_results(results)
         except Exception as e:
