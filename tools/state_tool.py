@@ -1,22 +1,38 @@
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional, Type
 
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
 
-from state.agent_state import AgentState, PaperContext  # Updated import path
+from state.agent_state import AgentState, PaperContext
+
+
+class GetPaperContextSchema(BaseModel):
+    """Schema for get_paper_context parameters"""
+
+    paper_id: str = Field(..., description="ID of the paper to retrieve from state")
 
 
 class StateTool(BaseTool):
     """Tool for managing agent state operations"""
 
-    def __init__(self, state: AgentState):
-        self.state = state
-        super().__init__()
+    name: str = "state_tool"
+    description: str = "Tool for managing and accessing agent state"
+    args_schema: Type[BaseModel] = GetPaperContextSchema
 
-    @tool
-    def get_paper_context(
-        self, paper_id: Annotated[str, "ID of the paper to retrieve from state"]
-    ) -> str:
-        """Get paper context from state."""
+    def __init__(self, state: AgentState):
+        super().__init__()
+        self.state = state
+
+    async def _arun(self, paper_id: str) -> str:
+        """Get paper context from state asynchronously."""
+        return self._get_paper_context(paper_id)
+
+    def _run(self, paper_id: str) -> str:
+        """Get paper context from state synchronously."""
+        return self._get_paper_context(paper_id)
+
+    def _get_paper_context(self, paper_id: str) -> str:
+        """Internal method to get paper context."""
         try:
             paper = self.state.search_context.get_paper_by_id(paper_id)
             if paper:
