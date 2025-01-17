@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -19,9 +19,9 @@ class SearchPapersSchema(BaseModel):
 class SemanticScholarTool(BaseTool):
     """Tool for Semantic Scholar interactions"""
 
-    name = "semantic_scholar_tool"
-    description = "Tool for searching and retrieving academic papers"
-    args_schema = SearchPapersSchema
+    name: str = "semantic_scholar_tool"
+    description: str = "Tool for searching and retrieving academic papers"
+    args_schema: Type[BaseModel] = SearchPapersSchema
 
     def __init__(self):
         """Initialize the tool"""

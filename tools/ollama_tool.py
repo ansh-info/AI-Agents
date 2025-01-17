@@ -1,4 +1,4 @@
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -18,9 +18,9 @@ class GenerateResponseSchema(BaseModel):
 class OllamaTool(BaseTool):
     """Tool for interacting with Ollama LLM"""
 
-    name = "ollama_tool"
-    description = "Tool for interacting with the Ollama LLM"
-    args_schema = GenerateResponseSchema
+    name: str = "ollama_tool"
+    description: str = "Tool for interacting with the Ollama LLM"
+    args_schema: Type[BaseModel] = GenerateResponseSchema
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize the tool with a specific model"""
