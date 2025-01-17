@@ -1,80 +1,117 @@
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Type
 
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
-from state.agent_state import AgentState
+from state.agent_state import AgentState, PaperContext
 from tools.ollama_tool import OllamaTool
 from tools.semantic_scholar_tool import SemanticScholarTool
 from tools.state_tool import StateTool
 
 
-class ResearchTools:
-    """Collection of research-related tools for the agent."""
+class GetPaperContextSchema(BaseModel):
+    """Schema for get_paper_context parameters"""
 
-    def __init__(self, state: AgentState = None):
-        self.s2_tool = SemanticScholarTool()
-        self.ollama_tool = OllamaTool()
-        self.state_tool = StateTool(state) if state else None
+    paper_id: str = Field(..., description="ID of the paper to retrieve from state")
 
-    @tool
-    async def search_papers(
+
+class UpdatePaperReferenceSchema(BaseModel):
+    """Schema for update_paper_reference parameters"""
+
+    paper_id: str = Field(..., description="ID of the paper to update")
+    reference_count: Optional[int] = Field(None, description="New reference count")
+    discussed_aspects: Optional[list] = Field(
+        None, description="List of discussed aspects"
+    )
+
+
+class StateTool(BaseTool):
+    """Tool for managing agent state operations"""
+
+    name: str = "state_tool"
+    description: str = "Tool for managing and accessing agent state"
+    args_schema: Type[BaseModel] = GetPaperContextSchema
+
+    def __init__(self, state: AgentState):
+        super().__init__()
+        self.state = state
+
+    async def _arun(
         self,
-        query: Annotated[str, "Search query for academic papers"],
-        year_start: Annotated[Optional[int], "Start year filter"] = None,
-        year_end: Annotated[Optional[int], "End year filter"] = None,
-        min_citations: Annotated[Optional[int], "Minimum citations filter"] = None,
+        paper_id: str,
+        reference_count: Optional[int] = None,
+        discussed_aspects: Optional[list] = None,
     ) -> str:
-        """Search for academic papers using Semantic Scholar."""
-        return await self.s2_tool.search_papers(
-            query=query,
-            year_start=year_start,
-            year_end=year_end,
-            min_citations=min_citations,
-        )
+        """Get paper context from state asynchronously."""
+        return self._get_paper_context(paper_id)
 
-    @tool
-    async def get_paper_details(
-        self, paper_id: Annotated[str, "The ID of the paper to retrieve details for"]
-    ) -> str:
-        """Get detailed information about a specific paper."""
-        return await self.s2_tool.get_paper_details(paper_id)
-
-    @tool
-    async def analyze_paper(
+    def _run(
         self,
-        paper_id: Annotated[str, "ID of the paper to analyze"],
-        question: Annotated[str, "Question about the paper"],
+        paper_id: str,
+        reference_count: Optional[int] = None,
+        discussed_aspects: Optional[list] = None,
     ) -> str:
-        """Analyze a paper using LLM."""
-        paper_context = await self.state_tool.get_paper_context(paper_id)
-        prompt = f"""Based on this paper:
-{paper_context}
+        """Get paper context from state synchronously."""
+        return self._get_paper_context(paper_id)
 
-Question: {question}
+    def _get_paper_context(self, paper_id: str) -> str:
+        """Get paper context from state."""
+        try:
+            paper = self.state.search_context.get_paper_by_id(paper_id)
+            if paper:
+                return f"""
+Title: {paper.title}
+Authors: {', '.join(a.get('name', '') for a in paper.authors)}
+Year: {paper.year or 'N/A'}
+Citations: {paper.citations or 0}
+Abstract: {paper.abstract or 'No abstract available'}
+"""
+            return "Paper not found in current context"
+        except Exception as e:
+            return f"Error retrieving paper context: {str(e)}"
 
-Please provide a detailed analysis addressing the question."""
-
-        return await self.ollama_tool.generate_response(prompt=prompt, temperature=0.7)
-
-    @tool
-    async def compare_papers(
-        self, paper_ids: Annotated[List[str], "List of paper IDs to compare"]
+    def update_paper_reference(
+        self,
+        paper_id: str,
+        reference_count: Optional[int] = None,
+        discussed_aspects: Optional[list] = None,
     ) -> str:
-        """Compare multiple papers."""
-        papers_context = []
-        for pid in paper_ids:
-            context = await self.state_tool.get_paper_context(pid)
-            papers_context.append(context)
+        """Update paper reference information in state."""
+        try:
+            paper = self.state.search_context.get_paper_by_id(paper_id)
+            if paper:
+                if reference_count is not None:
+                    paper.reference_count = reference_count
+                if discussed_aspects:
+                    paper.discussed_aspects.update(discussed_aspects)
+                return "Paper reference updated successfully"
+            return "Paper not found in current context"
+        except Exception as e:
+            return f"Error updating paper reference: {str(e)}"
 
-        prompt = f"""Compare these papers:
-{'\n---\n'.join(papers_context)}
+    def get_conversation_context(self) -> str:
+        """Get current conversation context."""
+        try:
+            messages = (
+                self.state.memory.messages[-5:] if self.state.memory.messages else []
+            )
+            context = "\n".join(
+                [f"{msg['role']}: {msg['content']}" for msg in messages]
+            )
+            return f"Recent conversation context:\n{context}"
+        except Exception as e:
+            return f"Error retrieving conversation context: {str(e)}"
 
-Consider:
-1. Main findings and contributions
-2. Methodological approaches
-3. Key differences and similarities
-4. Impact and significance
-
-Provide a structured comparison."""
-
-        return await self.ollama_tool.generate_response(prompt=prompt, temperature=0.7)
+    def get_state_summary(self) -> str:
+        """Get a summary of current state."""
+        try:
+            return f"""
+State Summary:
+Status: {self.state.status}
+Current Step: {self.state.current_step}
+Error (if any): {self.state.error_message or 'None'}
+Search Results: {len(self.state.search_context.results) if self.state.search_context else 0}
+Messages: {len(self.state.memory.messages) if self.state.memory else 0}
+"""
+        except Exception as e:
+            return f"Error getting state summary: {str(e)}"
