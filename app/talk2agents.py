@@ -89,7 +89,7 @@ class DashboardApp:
         )
 
     def add_debug_message(self, message: str):
-        """Add a debug message that will be displayed in the UI"""
+        """Add a debug message to the UI"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state.debug_messages.append(f"[{timestamp}] {message}")
 
@@ -318,6 +318,8 @@ class DashboardApp:
 
     def render_chat_interface(self):
         """Render chat interface with new workflow integration"""
+        st.title("Talk2Papers - Academic Research Assistant")
+
         # Display chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
@@ -325,13 +327,16 @@ class DashboardApp:
 
         # Chat input
         if prompt := st.chat_input("Ask me anything about research papers..."):
+            # Add user message
+            st.chat_message("user").write(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
 
             # Process input
-            with st.spinner("Processing..."):
+            with st.spinner("Thinking..."):
                 asyncio.run(self.process_input(prompt))
 
-            st.experimental_rerun()
+            # Use the newer rerun() method
+            st.rerun()
 
     async def process_search(
         self, query: str, year: str = None, citations: str = None, sort_by: str = None
@@ -467,8 +472,6 @@ class DashboardApp:
 
     def run(self):
         """Run the dashboard application"""
-        st.title("Talk2Papers - Academic Research Assistant")
-
         # Render chat interface
         self.render_chat_interface()
 
@@ -483,6 +486,12 @@ class DashboardApp:
                             st.session_state.workflow_manager.check_workflow_health()
                         )
                         st.json(health_status)
+
+                # Display debug messages
+                if st.session_state.debug_messages:
+                    st.markdown("### Debug Messages")
+                    for msg in st.session_state.debug_messages:
+                        st.text(msg)
 
 
 def main():
