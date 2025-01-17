@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Optional
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
 
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from langgraph.graph import END, StateGraph
 
 from clients.ollama_client import OllamaClient

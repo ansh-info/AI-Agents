@@ -1,10 +1,12 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from agent_state import AgentState, AgentStatus
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from langgraph.graph import MessagesState, StateGraph
+from langgraph.graph import END, START, MessagesState, StateGraph
+
+from clients.ollama_client import OllamaClient
+from state.agent_state import AgentState, AgentStatus
 
 
 class MainAgent:
@@ -36,14 +38,14 @@ class MainAgent:
     - Highlight important findings
     - Make recommendations when appropriate
     
-    Always think step by step and explain your reasoning when using tools.
-    """
+    Always think step by step and explain your reasoning when using tools."""
 
     def __init__(
         self, tools: List[BaseTool], model_name: str = "llama3.2:1b-instruct-q3_K_M"
     ):
+        """Initialize the agent with tools and model."""
         self.tools = tools
-        self.llm = ChatOpenAI(model=model_name)
+        self.llm = OllamaClient(model_name=model_name)
         self.graph = self._create_graph()
 
     def _create_graph(self) -> StateGraph:
@@ -58,11 +60,16 @@ class MainAgent:
         workflow.add_node("update_memory", self._update_memory)
 
         # Add edges
+        workflow.add_edge(START, "start")
         workflow.add_edge("start", "router")
         workflow.add_edge("router", "process_search")
         workflow.add_edge("router", "process_details")
         workflow.add_edge("process_search", "update_memory")
         workflow.add_edge("process_details", "update_memory")
+        workflow.add_edge("update_memory", END)
+
+        # Set entry point
+        workflow.set_entry_point("start")
 
         return workflow.compile()
 
@@ -88,24 +95,100 @@ class MainAgent:
 
         # Determine intent through LLM
         system_prompt = "Determine if this request is about: 1) searching for papers, or 2) getting paper details."
-        response = self.llm.invoke([system_prompt, last_message])
+        try:
+            response = self.llm.generate(
+                prompt=last_message, system_prompt=system_prompt, max_tokens=50
+            )
 
-        if "search" in response.content.lower():
+            if "search" in response.lower():
+                return {"next": "process_search"}
+            else:
+                return {"next": "process_details"}
+        except Exception as e:
+            # Default to search if there's an error
             return {"next": "process_search"}
-        else:
-            return {"next": "process_details"}
 
-    def _process_search(self, state: MessagesState) -> Dict:
+    async def _process_search(self, state: MessagesState) -> Dict:
         """Process paper search requests."""
-        # Implementation here
-        pass
+        try:
+            message = state["messages"][-1].content
+            print(f"[DEBUG] Processing search request: {message}")
 
-    def _process_details(self, state: MessagesState) -> Dict:
+            # Use search tool
+            for tool in self.tools:
+                if hasattr(tool, "search_papers"):
+                    result = await tool.search_papers(query=message)
+                    print(
+                        f"[DEBUG] Search result: {result[:200]}..."
+                    )  # Print first 200 chars
+                    return {
+                        "messages": state["messages"] + [HumanMessage(content=result)],
+                        "next": "update_memory",
+                    }
+
+            print("[DEBUG] Search tool not found")
+            return {
+                "messages": state["messages"]
+                + [HumanMessage(content="Search tool not available")],
+                "next": "update_memory",
+            }
+        except Exception as e:
+            print(f"[DEBUG] Search error: {str(e)}")
+            return {
+                "messages": state["messages"]
+                + [HumanMessage(content=f"Error in search: {str(e)}")],
+                "next": "update_memory",
+            }
+
+    async def _route_request(self, state: MessagesState) -> Dict:
+        """Route the request to appropriate handler based on user intent."""
+        last_message = state["messages"][-1].content.lower()
+        print(f"[DEBUG] Routing message: {last_message}")
+
+        # Check for search intent
+        search_terms = ["search", "find", "look for", "papers about", "papers on"]
+        if any(term in last_message for term in search_terms):
+            print("[DEBUG] Routing to search")
+            return {"next": "process_search"}
+
+        # Default to conversation
+        print("[DEBUG] Routing to details")
+        return {"next": "process_details"}
+
+    async def _process_details(self, state: MessagesState) -> Dict:
         """Process paper details requests."""
-        # Implementation here
-        pass
+        try:
+            message = state["messages"][-1].content
+
+            # Use details tool
+            for tool in self.tools:
+                if tool.name == "get_paper_details":
+                    result = await tool._arun(message)
+                    return {
+                        "messages": state["messages"] + [HumanMessage(content=result)],
+                        "next": "update_memory",
+                    }
+
+            return {
+                "messages": state["messages"]
+                + [HumanMessage(content="Details tool not available")],
+                "next": "update_memory",
+            }
+        except Exception as e:
+            return {
+                "messages": state["messages"]
+                + [HumanMessage(content=f"Error getting details: {str(e)}")],
+                "next": "update_memory",
+            }
 
     def _update_memory(self, state: MessagesState) -> Dict:
         """Update conversation memory and state."""
-        # Implementation here
-        pass
+        try:
+            # Add any final processing here
+            return {"messages": state["messages"], "next": END}
+        except Exception as e:
+            return {
+                "messages": state["messages"]
+                + [HumanMessage(content=f"Error updating memory: {str(e)}")],
+                "next": END,
+            }

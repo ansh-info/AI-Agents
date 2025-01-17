@@ -1,9 +1,9 @@
 from typing import Any, Dict, Optional
 
-from agent_state import AgentState, AgentStatus
-from agent_tools import ResearchTools
-from main_agent import MainAgent
-from semantic_scholar_client import SemanticScholarClient
+from agent.main_agent import MainAgent
+from clients.semantic_scholar_client import SemanticScholarClient
+from state.agent_state import AgentState, AgentStatus
+from tools.research_tools import ResearchTools
 
 
 class ResearchWorkflowManager:
@@ -14,7 +14,7 @@ class ResearchWorkflowManager:
         self.s2_client = SemanticScholarClient()
 
         # Initialize tools
-        self.research_tools = ResearchTools(self.s2_client)
+        self.research_tools = ResearchTools()
 
         # Create tools list
         self.tools = [
@@ -31,17 +31,25 @@ class ResearchWorkflowManager:
     async def process_message(self, message: str) -> AgentState:
         """Process a user message through the workflow."""
         try:
+            print(f"[DEBUG] WorkflowManager processing message: {message}")
+
             # Update state with new message
             self.current_state.add_message("user", message)
 
             # Process through main agent
-            self.current_state = await self.main_agent.process_request(
-                self.current_state
-            )
+            state = await self.main_agent.process_request(self.current_state)
 
-            return self.current_state
+            # If no response was generated, add a default response
+            if len(state.memory.messages) == len(self.current_state.memory.messages):
+                state.add_message(
+                    "system",
+                    "I understand you're trying to search for research papers. Could you please specify what topic you'd like to search for?",
+                )
+
+            return state
 
         except Exception as e:
+            print(f"[DEBUG] Error in workflow: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(

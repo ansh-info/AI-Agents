@@ -9,8 +9,8 @@ import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
-
 from agent.enhanced_workflow import EnhancedWorkflowManager
+from agent.workflow_manager import ResearchWorkflowManager
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, PaperContext
@@ -89,7 +89,7 @@ class DashboardApp:
         )
 
     def add_debug_message(self, message: str):
-        """Add a debug message that will be displayed in the UI"""
+        """Add a debug message to the UI"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state.debug_messages.append(f"[{timestamp}] {message}")
 
@@ -284,7 +284,7 @@ class DashboardApp:
     async def process_input(self, prompt: str):
         """Process user input using new workflow manager"""
         try:
-            print(f"[DEBUG] Processing input: {prompt}")
+            print(f"[DEBUG] Dashboard processing input: {prompt}")
 
             # Process through new workflow
             state = await st.session_state.workflow_manager.process_command_async(
@@ -295,12 +295,26 @@ class DashboardApp:
             st.session_state.agent_state = state
 
             # Add response to messages
-            if state.memory and state.memory.messages:
-                response_message = {
-                    "role": "system",
-                    "content": state.memory.messages[-1]["content"],
-                }
-                st.session_state.messages.append(response_message)
+            if state and state.memory and state.memory.messages:
+                # Get the last system message
+                last_system_message = next(
+                    (
+                        msg
+                        for msg in reversed(state.memory.messages)
+                        if msg["role"] == "system"
+                    ),
+                    None,
+                )
+
+                if last_system_message:
+                    response_message = {
+                        "role": "assistant",
+                        "content": last_system_message["content"],
+                    }
+                    st.session_state.messages.append(response_message)
+                    print(
+                        f"[DEBUG] Added response: {response_message['content'][:200]}..."
+                    )
 
             return state
 
@@ -310,7 +324,7 @@ class DashboardApp:
             self.add_debug_message(error_msg)
             st.session_state.messages.append(
                 {
-                    "role": "system",
+                    "role": "assistant",
                     "content": f"I apologize, but I encountered an error: {str(e)}",
                 }
             )
@@ -318,6 +332,8 @@ class DashboardApp:
 
     def render_chat_interface(self):
         """Render chat interface with new workflow integration"""
+        st.title("Talk2Papers - Academic Research Assistant")
+
         # Display chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
@@ -325,13 +341,15 @@ class DashboardApp:
 
         # Chat input
         if prompt := st.chat_input("Ask me anything about research papers..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            # Add user message
+            st.chat_message("user").write(prompt)
 
             # Process input
-            with st.spinner("Processing..."):
+            with st.spinner("Processing your request..."):
                 asyncio.run(self.process_input(prompt))
 
-            st.experimental_rerun()
+            # Use rerun to update the UI
+            st.rerun()
 
     async def process_search(
         self, query: str, year: str = None, citations: str = None, sort_by: str = None
@@ -467,8 +485,6 @@ class DashboardApp:
 
     def run(self):
         """Run the dashboard application"""
-        st.title("Talk2Papers - Academic Research Assistant")
-
         # Render chat interface
         self.render_chat_interface()
 
@@ -483,6 +499,12 @@ class DashboardApp:
                             st.session_state.workflow_manager.check_workflow_health()
                         )
                         st.json(health_status)
+
+                # Display debug messages
+                if st.session_state.debug_messages:
+                    st.markdown("### Debug Messages")
+                    for msg in st.session_state.debug_messages:
+                        st.text(msg)
 
 
 def main():
