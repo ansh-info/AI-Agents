@@ -2,17 +2,10 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
-
-from langgraph.graph import END, StateGraph
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
-
-import asyncio
-import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from langgraph.graph import END, StateGraph
 from ollama_client import OllamaClient
 from semantic_scholar_client import (PaperMetadata, SearchFilters,
                                      SemanticScholarClient)
@@ -307,9 +300,6 @@ class EnhancedWorkflowManager:
 
         # Initialize state
         self.current_state = AgentState()
-
-        # Command parser
-        self.command_parser = CommandParser()
 
     async def process_command_async(self, command: str) -> AgentState:
         """Process commands using new workflow manager"""
@@ -666,6 +656,19 @@ class EnhancedWorkflowManager:
                 "semantic_scholar_status": False,
                 "all_healthy": False,
             }
+
+    async def reload_clients(self) -> bool:
+        """Attempt to reload clients if they're not responding"""
+        try:
+            # Reinitialize clients
+            self.ollama_client = OllamaClient()
+            self.s2_client = SemanticScholarClient()
+
+            # Check health
+            health = await self.check_clients_health()
+            return health["all_healthy"]
+        except Exception:
+            return False
 
     async def reload_clients(self) -> bool:
         """Attempt to reload clients if they're not responding"""
