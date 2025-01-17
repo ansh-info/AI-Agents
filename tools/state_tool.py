@@ -1,7 +1,7 @@
 from typing import Annotated, Any, Dict, Optional, Type
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from state.agent_state import AgentState, PaperContext
 
@@ -18,10 +18,11 @@ class StateTool(BaseTool):
     name: str = "state_tool"
     description: str = "Tool for managing and accessing agent state"
     args_schema: Type[BaseModel] = GetPaperContextSchema
+    _state: AgentState = PrivateAttr()  # Use PrivateAttr for non-serialized fields
 
     def __init__(self, state: AgentState):
         super().__init__()
-        self.state = state
+        self._state = state
 
     async def _arun(self, paper_id: str) -> str:
         """Get paper context from state asynchronously."""
@@ -32,9 +33,9 @@ class StateTool(BaseTool):
         return self._get_paper_context(paper_id)
 
     def _get_paper_context(self, paper_id: str) -> str:
-        """Internal method to get paper context."""
+        """Get paper context from state."""
         try:
-            paper = self.state.search_context.get_paper_by_id(paper_id)
+            paper = self._state.search_context.get_paper_by_id(paper_id)
             if paper:
                 return f"""
 Title: {paper.title}
