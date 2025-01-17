@@ -112,27 +112,48 @@ class MainAgent:
         """Process paper search requests."""
         try:
             message = state["messages"][-1].content
+            print(f"[DEBUG] Processing search request: {message}")
 
             # Use search tool
             for tool in self.tools:
-                if tool.name == "search_papers":
-                    result = await tool._arun(query=message)
+                if hasattr(tool, "search_papers"):
+                    result = await tool.search_papers(query=message)
+                    print(
+                        f"[DEBUG] Search result: {result[:200]}..."
+                    )  # Print first 200 chars
                     return {
                         "messages": state["messages"] + [HumanMessage(content=result)],
                         "next": "update_memory",
                     }
 
+            print("[DEBUG] Search tool not found")
             return {
                 "messages": state["messages"]
                 + [HumanMessage(content="Search tool not available")],
                 "next": "update_memory",
             }
         except Exception as e:
+            print(f"[DEBUG] Search error: {str(e)}")
             return {
                 "messages": state["messages"]
                 + [HumanMessage(content=f"Error in search: {str(e)}")],
                 "next": "update_memory",
             }
+
+    async def _route_request(self, state: MessagesState) -> Dict:
+        """Route the request to appropriate handler based on user intent."""
+        last_message = state["messages"][-1].content.lower()
+        print(f"[DEBUG] Routing message: {last_message}")
+
+        # Check for search intent
+        search_terms = ["search", "find", "look for", "papers about", "papers on"]
+        if any(term in last_message for term in search_terms):
+            print("[DEBUG] Routing to search")
+            return {"next": "process_search"}
+
+        # Default to conversation
+        print("[DEBUG] Routing to details")
+        return {"next": "process_details"}
 
     async def _process_details(self, state: MessagesState) -> Dict:
         """Process paper details requests."""
