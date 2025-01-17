@@ -1,16 +1,51 @@
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from langchain_core.tools import BaseTool, tool
-from semantic_scholar_client import (PaperMetadata, SearchFilters,
-                                     SearchResults, SemanticScholarClient)
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from clients.semantic_scholar_client import (PaperMetadata, SearchFilters,
+                                             SemanticScholarClient)
+
+
+class SearchPapersSchema(BaseModel):
+    """Schema for search_papers parameters"""
+
+    query: str = Field(..., description="The search query for finding papers")
+    year_start: Optional[int] = Field(None, description="Start year filter")
+    year_end: Optional[int] = Field(None, description="End year filter")
+    min_citations: Optional[int] = Field(None, description="Minimum citations")
 
 
 class SemanticScholarTool(BaseTool):
-    """Enhanced tool for Semantic Scholar interactions"""
+    """Tool for Semantic Scholar interactions"""
+
+    name = "semantic_scholar_tool"
+    description = "Tool for searching and retrieving academic papers"
+    args_schema = SearchPapersSchema
 
     def __init__(self):
-        self.client = SemanticScholarClient()
+        """Initialize the tool"""
         super().__init__()
+        self.client = SemanticScholarClient()
+
+    async def _arun(
+        self,
+        query: str,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+        min_citations: Optional[int] = None,
+    ) -> str:
+        """Asynchronously search for papers."""
+        try:
+            filters = SearchFilters(
+                year_start=year_start, year_end=year_end, min_citations=min_citations
+            )
+
+            results = await self.client.search_papers(query=query, filters=filters)
+
+            return self._format_search_results(results)
+        except Exception as e:
+            return f"Error searching papers: {str(e)}"
 
     @tool
     async def search_papers(
@@ -23,14 +58,8 @@ class SemanticScholarTool(BaseTool):
             Optional[bool], "Filter for open access papers"
         ] = None,
     ) -> str:
-        """
-        Search for academic papers on Semantic Scholar with advanced filtering options.
-        Returns formatted results including titles, authors, citations, and abstracts.
-        """
+        """Search for academic papers on Semantic Scholar."""
         try:
-            print(f"[DEBUG] Searching papers with query: {query}")
-
-            # Create filters
             filters = SearchFilters(
                 year_start=year_start,
                 year_end=year_end,
@@ -38,8 +67,13 @@ class SemanticScholarTool(BaseTool):
                 is_open_access=is_open_access,
             )
 
-            # Perform search
             results = await self.client.search_papers(query=query, filters=filters)
+
+            return self._format_search_results(results)
+
+        except Exception as e:
+            print(f"[DEBUG] Search error: {str(e)}")
+            return f"Error searching papers: {str(e)}"
 
             # Format results for agent consumption
             papers_info = []
@@ -148,8 +182,12 @@ class SemanticScholarTool(BaseTool):
             print(f"[DEBUG] Filter search error: {str(e)}")
             return f"Error in filtered search: {str(e)}"
 
-    def _format_search_results(self, results: SearchResults) -> str:
-        """Helper method to format search results consistently"""
+    def _run(self, *args, **kwargs) -> str:
+        """Synchronously search (not implemented)."""
+        raise NotImplementedError("This tool only supports async execution")
+
+    def _format_search_results(self, results) -> str:
+        """Format search results into a readable string."""
         if not results.papers:
             return "No papers found matching the criteria."
 
