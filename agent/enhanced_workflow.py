@@ -306,18 +306,37 @@ class EnhancedWorkflowManager:
         try:
             print(f"\n[DEBUG] Processing command through new workflow: {command}")
 
-            # Process through new workflow manager
-            state = await self.workflow_manager.process_message(command)
+            # Parse command to determine intent
+            command_info = CommandParser.parse_command(command)
+            print(f"[DEBUG] Parsed command intent: {command_info['intent']}")
 
-            # Update current state
-            self.current_state = state
+            # Update state with intent
+            self.current_state.memory.last_command = command
 
-            return state
+            # Process based on intent
+            if command_info["intent"] == "search":
+                result = await self._handle_search(command_info["query"])
+                return result["state"]
+            elif command_info["intent"] == "paper_question":
+                await self._handle_paper_question(
+                    command_info["paper_reference"], command
+                )
+                return self.current_state
+            elif command_info["intent"] == "compare_papers":
+                await self._handle_paper_comparison(command_info["paper_references"])
+                return self.current_state
+            else:
+                # Handle conversation
+                await self._handle_conversation(command)
+                return self.current_state
 
         except Exception as e:
             print(f"[DEBUG] Error in workflow: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
+            self.current_state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
             return self.current_state
 
     async def check_workflow_health(self) -> Dict[str, Any]:
