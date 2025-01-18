@@ -142,18 +142,45 @@ class MainAgent:
 
     async def _route_request(self, state: MessagesState) -> Dict:
         """Route the request to appropriate handler based on user intent."""
-        last_message = state["messages"][-1].content.lower()
-        print(f"[DEBUG] Routing message: {last_message}")
+        try:
+            last_message = state["messages"][-1].content
+            print(f"[DEBUG] Routing message: {last_message}")
 
-        # Check for search intent
-        search_terms = ["search", "find", "look for", "papers about", "papers on"]
-        if any(term in last_message for term in search_terms):
-            print("[DEBUG] Routing to search")
-            return {"next": "process_search"}
+            # Use LLM to determine intent
+            intent_prompt = f"""Analyze this message and determine the user's intent:
+Message: {last_message}
 
-        # Default to conversation
-        print("[DEBUG] Routing to details")
-        return {"next": "process_details"}
+Classify the intent as one of:
+1. search - User wants to find papers on a topic
+2. paper_question - User is asking about a specific paper
+3. comparison - User wants to compare papers
+4. conversation - General conversation or other intent
+
+Respond with just the intent category."""
+
+            intent_response = await self.llm.generate(
+                prompt=intent_prompt,
+                system_prompt="You are a research assistant intent classifier. Respond with only the intent category.",
+                max_tokens=50,
+            )
+
+            print(f"[DEBUG] Detected intent: {intent_response.strip()}")
+
+            # Route based on intent
+            intent = intent_response.strip().lower()
+            if "search" in intent:
+                return {"next": "process_search"}
+            elif "paper_question" in intent:
+                return {"next": "process_details"}
+            elif "comparison" in intent:
+                return {"next": "process_comparison"}
+            else:
+                return {"next": "process_conversation"}
+
+        except Exception as e:
+            print(f"[DEBUG] Error in route_request: {str(e)}")
+            # Default to conversation on error
+            return {"next": "process_conversation"}
 
     async def _process_details(self, state: MessagesState) -> Dict:
         """Process paper details requests."""
