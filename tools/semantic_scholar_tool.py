@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Optional, Type
 
 from langchain_core.tools import BaseTool
@@ -39,67 +40,64 @@ class SemanticScholarTool(BaseTool):
     _client: SemanticScholarClient = PrivateAttr()
 
     def __init__(self):
-        """Initialize the tool with a Semantic Scholar client"""
+        """Initialize the tool"""
         super().__init__()
+        print("[DEBUG] Initializing SemanticScholarTool")
         self._client = SemanticScholarClient()
+        print("[DEBUG] SemanticScholarTool initialized with client")
 
-    async def _arun(
-        self,
-        query: str,
-        year_start: Optional[int] = None,
-        year_end: Optional[int] = None,
-        min_citations: Optional[int] = None,
-        max_results: int = 10,
-    ) -> str:
-        """Run the tool asynchronously"""
+    async def _arun(self, query: str, **kwargs) -> str:
+        """Asynchronously search for papers."""
         try:
-            # Create search filters
-            filters = SearchFilters(
-                year_start=year_start, year_end=year_end, min_citations=min_citations
+            print(f"[DEBUG] SemanticScholarTool: Starting search with query: '{query}'")
+
+            filters = SearchFilters(**kwargs)
+            print(f"[DEBUG] Applied filters: {filters.dict()}")
+
+            results = await self._client.search_papers(query=query, filters=filters)
+
+            print(
+                f"[DEBUG] Retrieved {len(results.papers)} papers from total {results.total}"
             )
 
-            # Perform search
-            results = await self._client.search_papers(
-                query=query, filters=filters, limit=max_results
-            )
+            formatted_response = self._format_results(results)
+            print(f"[DEBUG] Formatted response length: {len(formatted_response)}")
 
-            # Format results
-            return self._format_results(results)
+            return formatted_response
 
         except Exception as e:
-            return f"Error performing search: {str(e)}"
+            error_msg = f"Error in SemanticScholarTool search: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
 
     def _run(self, query: str, **kwargs) -> str:
         """Synchronous run is not supported"""
         raise NotImplementedError("This tool only supports async execution")
 
     def _format_results(self, results) -> str:
-        """Format search results into a clear response"""
-        if not results.papers:
-            return "No papers found matching your criteria."
+        """Format search results with logging"""
+        try:
+            if not results.papers:
+                print("[DEBUG] No papers found in results")
+                return "No papers found matching your criteria."
 
-        formatted_parts = [
-            f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant:\n"
-        ]
-
-        for i, paper in enumerate(results.papers, 1):
-            paper_details = [
-                f"\n{i}. {paper.title}",
-                f"Authors: {', '.join(a.name for a in paper.authors)}",
-                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+            print(f"[DEBUG] Formatting {len(results.papers)} papers")
+            formatted_parts = [
+                f"Found {results.total} papers. Here are the most relevant ones:\n"
             ]
 
-            if paper.abstract:
-                paper_details.append(
-                    f"Abstract: {paper.abstract[:300]}..."
-                    if len(paper.abstract) > 300
-                    else f"Abstract: {paper.abstract}"
-                )
+            for i, paper in enumerate(results.papers, 1):
+                print(f"[DEBUG] Formatting paper {i}: {paper.title[:50]}...")
+                # Rest of your formatting code...
 
-            paper_details.append(f"URL: {paper.url or 'Not available'}\n")
-            formatted_parts.extend(paper_details)
+            response = "\n".join(formatted_parts)
+            print(f"[DEBUG] Formatted response created, length: {len(response)}")
+            return response
 
-        return "\n".join(formatted_parts)
+        except Exception as e:
+            error_msg = f"Error formatting results: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
 
     async def get_paper_details(self, paper_id: str) -> str:
         """Get detailed information about a specific paper"""
