@@ -6,9 +6,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
-from ollama_client import OllamaClient
-from semantic_scholar_client import (PaperMetadata, SearchFilters,
-                                     SemanticScholarClient)
 
 from agent.workflow_graph import WorkflowGraph
 from agent.workflow_manager import ResearchWorkflowManager
@@ -28,6 +25,28 @@ class CommandParser:
         """Parse command and identify intent"""
         print(f"[DEBUG] Parsing command: {command}")
         command_lower = command.lower()
+
+        # Check for greetings and general conversation
+        conversation_triggers = [
+            "hi",
+            "hello",
+            "hey",
+            "how are you",
+            "what can you do",
+            "help",
+            "explain",
+            "tell me about",
+            "what are you",
+        ]
+        if (
+            any(trigger in command_lower for trigger in conversation_triggers)
+            or len(command_lower.split()) < 4
+        ):
+            print(f"[DEBUG] Detected conversation intent")
+            return {
+                "intent": "conversation",
+                "query": command,
+            }
 
         # Check for search intent
         if any(
@@ -86,8 +105,6 @@ class CommandParser:
     @staticmethod
     def _clean_search_query(query: str) -> str:
         """Clean search query for proper searching"""
-        print(f"[DEBUG] Cleaning query: {query}")
-
         # List of phrases to remove
         clean_phrases = [
             "can you search for papers on",
@@ -163,7 +180,7 @@ class SearchAgent:
             if not results or not results.papers:
                 return {
                     "status": "success",
-                    "results": SearchResults(total=0, offset=0, papers=[]),
+                    "results": [],
                     "error": None,
                 }
 
@@ -198,14 +215,14 @@ class ConversationAgent:
             if context:
                 print(f"[DEBUG] Context: {context[:200]}...")
 
-            # Build system context
+            # Build system prompt
             system_prompt = """You are a helpful academic research assistant. 
-    When presenting search results:
-    1. Always summarize papers that are provided in the context
-    2. Focus on the specific papers mentioned, not general knowledge
-    3. Highlight key findings from the actual papers
-    4. Mention specific methodologies used in these papers
-    5. Point out patterns across the provided papers"""
+When presenting search results:
+1. Always summarize papers that are provided in the context
+2. Focus on the specific papers mentioned, not general knowledge
+3. Highlight key findings from the actual papers
+4. Mention specific methodologies used in these papers
+5. Point out patterns across the provided papers"""
 
             if context:
                 system_prompt += f"\n\nAdditional context: {context}"
@@ -291,12 +308,16 @@ class EnhancedWorkflowManager:
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize with both old and new components for gradual transition"""
-        # Initialize new workflow manager
-        self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
-
-        # Keep old clients for backward compatibility during transition
+        # Initialize clients
         self.ollama_client = OllamaClient(model_name=model_name)
         self.s2_client = SemanticScholarClient()
+
+        # Initialize agents
+        self.conversation_agent = ConversationAgent(self.ollama_client)
+        self.search_agent = SearchAgent(self.s2_client)
+
+        # Initialize workflow manager
+        self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
 
         # Initialize state
         self.current_state = AgentState()
@@ -590,24 +611,37 @@ class EnhancedWorkflowManager:
     async def _handle_conversation(self, command: str):
         """Handle general conversation"""
         try:
-            # Build conversation context
-            context = self._build_conversation_context()
+            if "hi" in command.lower() or "hello" in command.lower():
+                response = "Hello! I'm your research assistant. I can help you search for academic papers, analyze them, and answer questions about them. What would you like to know?"
+            elif "what can you do" in command.lower():
+                response = """I can help you with several tasks:
+1. Search for academic papers on any topic
+2. Analyze and explain specific papers
+3. Compare different papers
+4. Answer questions about research topics
+5. Provide paper summaries and insights
 
-            response = await self.conversation_agent.generate_response(
-                prompt=command, context=context
-            )
+What would you like me to help you with?"""
+            else:
+                # Build conversation context
+                context = self._build_conversation_context()
+                response_data = await self.conversation_agent.generate_response(
+                    prompt=command, context=context
+                )
+                if response_data["status"] == "error":
+                    raise Exception(
+                        f"Response generation failed: {response_data['error']}"
+                    )
+                response = response_data["response"]
 
-            if response["status"] == "error":
-                raise Exception(f"Response generation failed: {response['error']}")
-
-            self.current_state.add_message("system", response["response"])
+            self.current_state.add_message("system", response)
             self.current_state.status = AgentStatus.SUCCESS
 
         except Exception as e:
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
-                "system", f"I apologize, but I encountered an error: {str(e)}"
+                "system", "I apologize, but I encountered an error. Please try again."
             )
 
     def _get_paper_by_reference(self, reference: str) -> Optional[PaperMetadata]:
