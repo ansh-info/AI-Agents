@@ -105,7 +105,6 @@ class CommandParser:
     @staticmethod
     def _clean_search_query(query: str) -> str:
         """Clean search query for proper searching"""
-        # List of phrases to remove
         clean_phrases = [
             "can you search for papers on",
             "can you search for papers about",
@@ -123,11 +122,8 @@ class CommandParser:
         ]
 
         cleaned = query.lower()
-        # Remove phrases in order (longest first to prevent partial matches)
         for phrase in sorted(clean_phrases, key=len, reverse=True):
             cleaned = cleaned.replace(phrase, "")
-
-        # Clean up extra whitespace
         cleaned = " ".join(cleaned.split())
         print(f"[DEBUG] Cleaned query result: {cleaned}")
         return cleaned
@@ -154,56 +150,11 @@ class CommandParser:
         return references
 
 
-class SearchAgent:
-    """Handles paper search operations"""
-
-    def __init__(self, s2_client: SemanticScholarClient):
-        self.client = s2_client
-
-    async def search_papers(
-        self, query: str, filters: Optional[SearchFilters] = None
-    ) -> Dict[str, Any]:
-        """Perform paper search with enhanced error handling"""
-        try:
-            print(f"[DEBUG] SearchAgent: Starting search with query: {query}")
-            if not query.strip():
-                return {
-                    "status": "error",
-                    "results": None,
-                    "error": "Empty search query",
-                }
-
-            results = await self.client.search_papers(
-                query=query, filters=filters, limit=10
-            )
-
-            if not results or not results.papers:
-                return {
-                    "status": "success",
-                    "results": [],
-                    "error": None,
-                }
-
-            return {"status": "success", "results": results, "error": None}
-
-        except Exception as e:
-            print(f"[DEBUG] SearchAgent: Error during search: {str(e)}")
-            return {"status": "error", "results": None, "error": str(e)}
-
-    async def get_paper_details(self, paper_id: str) -> Dict[str, Any]:
-        """Get detailed paper information"""
-        try:
-            details = await self.client.get_paper_details(paper_id)
-            return {"status": "success", "paper": details, "error": None}
-        except Exception as e:
-            return {"status": "error", "paper": None, "error": str(e)}
-
-
 class ConversationAgent:
     """Handles LLM-based conversations"""
 
     def __init__(self, ollama_client: OllamaClient):
-        """Initialize conversation agent with Ollama client"""
+        """Initialize conversation agent"""
         try:
             print("[DEBUG] Initializing ConversationAgent")
             if not ollama_client:
@@ -224,7 +175,6 @@ class ConversationAgent:
             if context:
                 print(f"[DEBUG] Context: {context[:200]}...")
 
-            # Build system prompt
             system_prompt = """You are a helpful academic research assistant. 
 When presenting search results:
 1. Always summarize papers that are provided in the context
@@ -243,7 +193,6 @@ When presenting search results:
             )
 
             print(f"[DEBUG] Generated response: {response[:200]}...")
-
             return {"status": "success", "response": response, "error": None}
 
         except Exception as e:
@@ -275,8 +224,7 @@ Please provide a comprehensive response that:
 4. Mentions any uncertainties or limitations
 5. Suggests related aspects to consider"""
 
-            response = await self.generate_response(prompt)
-            return response
+            return await self.generate_response(prompt)
 
         except Exception as e:
             return {"status": "error", "response": None, "error": str(e)}
@@ -286,7 +234,6 @@ Please provide a comprehensive response that:
     ) -> Dict[str, Any]:
         """Generate paper comparison"""
         try:
-            # Build context for all papers
             context = "Papers to compare:\n\n"
             for i, paper in enumerate(papers, 1):
                 context += f"Paper {i}:\n"
@@ -305,11 +252,56 @@ Please provide a comprehensive response that:
 
 {context}"""
 
-            response = await self.generate_response(prompt, max_tokens=500)
-            return response
+            return await self.generate_response(prompt, max_tokens=500)
 
         except Exception as e:
             return {"status": "error", "response": None, "error": str(e)}
+
+
+class SearchAgent:
+    """Handles paper search operations"""
+
+    def __init__(self, s2_client: SemanticScholarClient):
+        """Initialize search agent"""
+        try:
+            print("[DEBUG] Initializing SearchAgent")
+            if not s2_client:
+                raise ValueError("SemanticScholarClient cannot be None")
+            self.client = s2_client
+            print("[DEBUG] SearchAgent initialized successfully")
+        except Exception as e:
+            print(f"[DEBUG] Error initializing SearchAgent: {str(e)}")
+            raise
+
+    async def search_papers(
+        self, query: str, filters: Optional[SearchFilters] = None
+    ) -> Dict[str, Any]:
+        """Perform paper search with enhanced error handling"""
+        try:
+            print(f"[DEBUG] SearchAgent: Starting search with query: {query}")
+            if not query.strip():
+                return {
+                    "status": "error",
+                    "results": None,
+                    "error": "Empty search query",
+                }
+
+            results = await self.client.search_papers(
+                query=query, filters=filters, limit=10
+            )
+
+            if not results or not results.papers:
+                return {
+                    "status": "success",
+                    "results": [],
+                    "error": None,
+                }
+
+            return {"status": "success", "results": results, "error": None}
+
+        except Exception as e:
+            print(f"[DEBUG] SearchAgent: Error during search: {str(e)}")
+            return {"status": "error", "results": None, "error": str(e)}
 
 
 class EnhancedWorkflowManager:
@@ -388,31 +380,58 @@ class EnhancedWorkflowManager:
             )
             return self.current_state
 
-    async def check_workflow_health(self) -> Dict[str, Any]:
-        """Enhanced health check including new components"""
+    async def _handle_conversation(self, command: str):
+        """Handle general conversation"""
         try:
-            # Check new workflow components
-            workflow_health = await self.workflow_manager.check_health()
+            print(f"[DEBUG] Handling conversation command: {command}")
 
-            # Check old components
-            ollama_health = await self.ollama_client.check_model_availability()
+            if not hasattr(self, "conversation_agent"):
+                print("[DEBUG] conversation_agent not found, reinitializing...")
+                self.conversation_agent = ConversationAgent(
+                    ollama_client=self.ollama_client
+                )
 
-            return {
-                "workflow_graph": True,
-                "ollama_client": ollama_health,
-                "semantic_scholar": workflow_health.get("semantic_scholar", False),
-                "command_parser": True,
-                "errors": workflow_health.get("errors", []),
-            }
+            if "hi" in command.lower() or "hello" in command.lower():
+                print("[DEBUG] Detected greeting")
+                response = "Hello! I'm your research assistant. I can help you search for academic papers, analyze them, and answer questions about them. What would you like to know?"
+            elif "what can you do" in command.lower():
+                print("[DEBUG] Detected capabilities question")
+                response = """I can help you with several tasks:
+1. Search for academic papers on any topic
+2. Analyze and explain specific papers
+3. Compare different papers
+4. Answer questions about research topics
+5. Provide paper summaries and insights
+
+What would you like me to help you with?"""
+            else:
+                print("[DEBUG] Processing general conversation")
+                context = self._build_conversation_context()
+                print(f"[DEBUG] Built context: {context[:100]}...")
+
+                response_data = await self.conversation_agent.generate_response(
+                    prompt=command, context=context
+                )
+                print(f"[DEBUG] Generated response data: {response_data}")
+
+                if response_data["status"] == "error":
+                    raise Exception(
+                        f"Response generation failed: {response_data['error']}"
+                    )
+                response = response_data["response"]
+
+            print("[DEBUG] Adding response to state")
+            self.current_state.add_message("system", response)
+            self.current_state.status = AgentStatus.SUCCESS
 
         except Exception as e:
-            return {
-                "workflow_graph": False,
-                "ollama_client": False,
-                "semantic_scholar": False,
-                "command_parser": False,
-                "errors": [str(e)],
-            }
+            print(f"[DEBUG] Error in _handle_conversation: {str(e)}")
+            self.current_state.status = AgentStatus.ERROR
+            self.current_state.error_message = str(e)
+            self.current_state.add_message(
+                "system",
+                f"I apologize, but I encountered an error while processing your message: {str(e)}",
+            )
 
     async def _handle_search(self, query: str):
         """Handle search with proper state management"""
@@ -500,23 +519,22 @@ class EnhancedWorkflowManager:
                     "title": paper["title"],
                     "year": paper["year"],
                     "citations": paper["citations"],
-                    "abstract_preview": (
-                        paper["abstract"][:200] if paper["abstract"] else "No abstract"
-                    ),
+                    "abstract_preview": paper["abstract"][:200],
                 }
                 for paper in formatted_papers
             ]
 
             try:
-                summary_response = await self.conversation_agent.generate_response(
-                    prompt=f"""Based on these papers about "{clean_query}", please provide a brief summary of:
+                summary_prompt = f"""Based on these papers about "{clean_query}", please provide a brief summary of:
                     1. Main research areas covered
                     2. Key methodologies mentioned
                     3. Notable findings
                     4. Visible trends
                     
-                    Papers: {json.dumps(summary_context)}""",
-                    max_tokens=300,
+                    Papers: {json.dumps(summary_context)}"""
+
+                summary_response = await self.conversation_agent.generate_response(
+                    prompt=summary_prompt, max_tokens=300
                 )
 
                 if summary_response["status"] == "success":
@@ -539,18 +557,7 @@ class EnhancedWorkflowManager:
             # Add the formatted message
             self.current_state.add_message("system", "\n".join(message_parts))
 
-            # Ensure state history is updated
-            if not hasattr(self.current_state, "state_history"):
-                self.current_state.state_history = []
-            self.current_state.state_history.append(
-                {
-                    "timestamp": datetime.now(),
-                    "step": "search_completed",
-                    "query": clean_query,
-                    "results_count": len(results.papers),
-                }
-            )
-
+            # Return state with next steps
             return {"state": self.current_state, "next": "update_memory"}
 
         except Exception as e:
@@ -562,14 +569,6 @@ class EnhancedWorkflowManager:
                 next_steps=["update_memory"],
                 last_update=datetime.now(),
             )
-
-            # Ensure state history is updated even in error case
-            if not hasattr(self.current_state, "state_history"):
-                self.current_state.state_history = []
-            self.current_state.state_history.append(
-                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
-            )
-
             self.current_state.add_message(
                 "system", f"I encountered an error while searching: {str(e)}"
             )
@@ -578,6 +577,8 @@ class EnhancedWorkflowManager:
     async def _handle_paper_question(self, paper_reference: str, question: str):
         """Handle paper-specific questions"""
         try:
+            print(f"[DEBUG] Processing paper question for reference: {paper_reference}")
+
             # Get paper from context
             paper = self._get_paper_by_reference(paper_reference)
             if not paper:
@@ -600,6 +601,7 @@ class EnhancedWorkflowManager:
             self.current_state.status = AgentStatus.SUCCESS
 
         except Exception as e:
+            print(f"[DEBUG] Error in paper question handling: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
@@ -610,6 +612,10 @@ class EnhancedWorkflowManager:
     async def _handle_paper_comparison(self, paper_references: List[str]):
         """Handle paper comparison requests"""
         try:
+            print(
+                f"[DEBUG] Processing paper comparison for references: {paper_references}"
+            )
+
             papers = [self._get_paper_by_reference(ref) for ref in paper_references]
             papers = [p for p in papers if p]  # Filter None values
 
@@ -629,64 +635,12 @@ class EnhancedWorkflowManager:
             self.current_state.status = AgentStatus.SUCCESS
 
         except Exception as e:
+            print(f"[DEBUG] Error in paper comparison: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
                 "system",
                 f"I apologize, but I encountered an error while comparing the papers: {str(e)}",
-            )
-
-    async def _handle_conversation(self, command: str):
-        """Handle general conversation"""
-        try:
-            print(f"[DEBUG] Handling conversation command: {command}")
-
-            if not hasattr(self, "conversation_agent"):
-                print("[DEBUG] conversation_agent not found, reinitializing...")
-                self.conversation_agent = ConversationAgent(
-                    ollama_client=self.ollama_client
-                )
-
-            if "hi" in command.lower() or "hello" in command.lower():
-                print("[DEBUG] Detected greeting")
-                response = "Hello! I'm your research assistant. I can help you search for academic papers, analyze them, and answer questions about them. What would you like to know?"
-            elif "what can you do" in command.lower():
-                print("[DEBUG] Detected capabilities question")
-                response = """I can help you with several tasks:
-1. Search for academic papers on any topic
-2. Analyze and explain specific papers
-3. Compare different papers
-4. Answer questions about research topics
-5. Provide paper summaries and insights
-
-What would you like me to help you with?"""
-            else:
-                print("[DEBUG] Processing general conversation")
-                context = self._build_conversation_context()
-                print(f"[DEBUG] Built context: {context[:100]}...")
-
-                response_data = await self.conversation_agent.generate_response(
-                    prompt=command, context=context
-                )
-                print(f"[DEBUG] Generated response data: {response_data}")
-
-                if response_data["status"] == "error":
-                    raise Exception(
-                        f"Response generation failed: {response_data['error']}"
-                    )
-                response = response_data["response"]
-
-            print("[DEBUG] Adding response to state")
-            self.current_state.add_message("system", response)
-            self.current_state.status = AgentStatus.SUCCESS
-
-        except Exception as e:
-            print(f"[DEBUG] Error in _handle_conversation: {str(e)}")
-            self.current_state.status = AgentStatus.ERROR
-            self.current_state.error_message = str(e)
-            self.current_state.add_message(
-                "system",
-                f"I apologize, but I encountered an error while processing your message: {str(e)}",
             )
 
     def _get_paper_by_reference(self, reference: str) -> Optional[PaperMetadata]:
@@ -697,7 +651,8 @@ What would you like me to help you with?"""
                 if 0 <= index < len(self.current_state.search_context.results):
                     return self.current_state.search_context.results[index]
             return None
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Error getting paper reference: {str(e)}")
             return None
 
     def _build_conversation_context(self) -> str:
@@ -726,61 +681,21 @@ What would you like me to help you with?"""
 
         return "\n".join(context_parts)
 
-    def get_state(self) -> AgentState:
-        """Get current state"""
-        return self.current_state
-
-    def reset_state(self):
-        """Reset state to initial values"""
-        self.current_state = AgentState()
-
-    async def check_clients_health(self) -> Dict[str, bool]:
-        """Check if all clients are healthy and responding"""
+    async def check_workflow_health(self) -> Dict[str, Any]:
+        """Check health of all workflow components"""
         try:
-            # Check Ollama
-            ollama_health = await self.ollama_client.check_model_availability()
-
-            # Check Semantic Scholar
-            s2_health = await self.s2_client.check_api_status()
-
             return {
-                "ollama_status": ollama_health,
-                "semantic_scholar_status": s2_health,
-                "all_healthy": ollama_health and s2_health,
+                "workflow_graph": True,
+                "ollama_client": await self.ollama_client.check_model_availability(),
+                "semantic_scholar": await self.s2_client.check_api_status(),
+                "command_parser": True,
+                "errors": [],
             }
-        except Exception:
+        except Exception as e:
             return {
-                "ollama_status": False,
-                "semantic_scholar_status": False,
-                "all_healthy": False,
+                "workflow_graph": False,
+                "ollama_client": False,
+                "semantic_scholar": False,
+                "command_parser": False,
+                "errors": [str(e)],
             }
-
-    async def reload_clients(self) -> bool:
-        """Attempt to reload clients if they're not responding"""
-        try:
-            # Reinitialize clients
-            self.ollama_client = OllamaClient()
-            self.s2_client = SemanticScholarClient()
-
-            # Check health
-            health = await self.check_clients_health()
-            return health["all_healthy"]
-        except Exception:
-            return False
-
-    async def reload_clients(self) -> bool:
-        """Attempt to reload clients if they're not responding"""
-        try:
-            # Reinitialize clients
-            self.ollama_client = OllamaClient()
-            self.s2_client = SemanticScholarClient()
-
-            # Reinitialize agents
-            self.search_agent = SearchAgent(self.s2_client)
-            self.conversation_agent = ConversationAgent(self.ollama_client)
-
-            # Check health
-            health = await self.check_clients_health()
-            return health["all_healthy"]
-        except Exception:
-            return False
