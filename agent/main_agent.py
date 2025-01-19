@@ -58,6 +58,16 @@ class MainAgent:
     Current state: {state}
     """
 
+    CHAT_RESPONSES = {
+        "greeting": "Hello! I'm Talk2Papers, your research assistant. I can help you find and understand academic papers. What would you like to know?",
+        "capabilities": """I can help you with:
+1. Finding academic papers on any topic
+2. Getting detailed information about specific papers
+3. Understanding paper content and relationships
+What would you like to explore?""",
+        "farewell": "Goodbye! Feel free to return whenever you need help with research papers.",
+    }
+
     def __init__(self, tools: List[Any]):
         """Initialize the agent with tools and model."""
         self.tools = tools
@@ -72,6 +82,25 @@ class MainAgent:
 
             messages = state["messages"]
             current_state = state.get("current_state", AgentState())
+
+            # Check if this is a conversation message first
+            last_message = messages[-1].content
+            if any(
+                trigger in last_message.lower()
+                for trigger in [
+                    "hi",
+                    "hello",
+                    "hey",
+                    "what can you do",
+                    "bye",
+                    "goodbye",
+                ]
+            ):
+                response = self._handle_conversation(last_message)
+                return {
+                    "messages": messages + [HumanMessage(content=response)],
+                    "next": "__end__",  # End here for conversation
+                }
 
             print(f"[DEBUG] Current message count: {len(messages)}")
             print(f"[DEBUG] Current state status: {current_state.status}")
@@ -158,6 +187,20 @@ class MainAgent:
         # Add logic to parse LLM response and determine which tool to use
         # For now, return a simple tool name
         return "semantic_scholar_tool"
+
+    def _handle_conversation(self, message: str) -> str:
+        """Handle general conversation without tool invocation"""
+        print(f"[DEBUG] Handling conversation: {message}")
+        message_lower = message.lower()
+
+        if any(word in message_lower for word in ["hi", "hello", "hey"]):
+            return self.CHAT_RESPONSES["greeting"]
+        elif "what can you do" in message_lower:
+            return self.CHAT_RESPONSES["capabilities"]
+        elif any(word in message_lower for word in ["bye", "goodbye"]):
+            return self.CHAT_RESPONSES["farewell"]
+        else:
+            return "I'm your research assistant. Would you like to search for papers about a specific topic?"
 
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
