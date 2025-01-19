@@ -23,10 +23,10 @@ class OllamaTool(BaseTool):
     args_schema: Type[BaseModel] = GenerateResponseSchema
     _client: OllamaClient = PrivateAttr()  # Use PrivateAttr for non-serialized fields
 
-    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
-        """Initialize the tool with a specific model"""
+    def __init__(self):
         super().__init__()
-        self._client = OllamaClient(model_name=model_name)
+        print("[DEBUG] Initializing OllamaTool")
+        self._client = OllamaClient()
 
     async def _arun(
         self,
@@ -35,17 +35,28 @@ class OllamaTool(BaseTool):
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
     ) -> str:
-        """Asynchronously generate a response using the Ollama LLM."""
         try:
+            print(
+                f"[DEBUG] OllamaTool: Generating response for prompt: {prompt[:100]}..."
+            )
+            print(
+                f"[DEBUG] System prompt: {system_prompt[:100] if system_prompt else 'None'}"
+            )
+
             response = await self._client.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+
+            print(f"[DEBUG] Generated response length: {len(response)}")
             return response
+
         except Exception as e:
-            return f"Error generating response: {str(e)}"
+            error_msg = f"Error in OllamaTool: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
 
     def _run(
         self,
