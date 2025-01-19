@@ -68,24 +68,27 @@ class MainAgent:
         """Create the supervisor node that routes to tools."""
 
         async def supervisor(state: MessagesState) -> Dict:
-            # Get conversation history and current state
+            print(f"[DEBUG] MainAgent: Processing new message in supervisor")
+
             messages = state["messages"]
             current_state = state.get("current_state", AgentState())
 
-            # Format context for system prompt
+            print(f"[DEBUG] Current message count: {len(messages)}")
+            print(f"[DEBUG] Current state status: {current_state.status}")
+
             context = self._format_context(messages)
-            state_summary = self._format_state(current_state)
+            print(f"[DEBUG] Formatted context length: {len(context)}")
 
-            # Create full prompt
-            prompt = self.SYSTEM_PROMPT.format(context=context, state=state_summary)
-
-            # Get LLM decision on next action
             response = await self.llm.generate(
-                prompt=messages[-1].content, system_prompt=prompt
+                prompt=messages[-1].content,
+                system_prompt=self.SYSTEM_PROMPT.format(
+                    context=context, state=self._format_state(current_state)
+                ),
             )
+            print(f"[DEBUG] LLM response received, length: {len(response)}")
 
-            # Parse tool selection
             selected_tool = self._parse_tool_selection(response)
+            print(f"[DEBUG] Selected tool: {selected_tool}")
 
             return {"next": selected_tool}
 
@@ -96,18 +99,21 @@ class MainAgent:
 
         async def tool_node(state: MessagesState) -> Dict:
             try:
-                # Execute tool
+                print(f"[DEBUG] Executing tool: {tool.name}")
                 result = await tool.arun(state["messages"][-1].content)
+                print(
+                    f"[DEBUG] Tool execution successful, result length: {len(result)}"
+                )
 
-                # Update state
                 return {
                     "messages": state["messages"] + [HumanMessage(content=result)],
-                    "next": "supervisor",  # Always return to supervisor
+                    "next": "supervisor",
                 }
             except Exception as e:
+                error_msg = f"Error executing {tool.name}: {str(e)}"
+                print(f"[DEBUG] {error_msg}")
                 return {
-                    "messages": state["messages"]
-                    + [HumanMessage(content=f"Error executing tool: {str(e)}")],
+                    "messages": state["messages"] + [HumanMessage(content=error_msg)],
                     "next": "supervisor",
                 }
 
