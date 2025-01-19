@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
@@ -7,27 +7,39 @@ from clients.semantic_scholar_client import (PaperMetadata, SearchFilters,
                                              SemanticScholarClient)
 
 
-class SearchPapersSchema(BaseModel):
-    """Schema for search_papers parameters"""
+class SearchInput(BaseModel):
+    """Schema for search parameters"""
 
     query: str = Field(..., description="The search query for finding papers")
     year_start: Optional[int] = Field(None, description="Start year filter")
     year_end: Optional[int] = Field(None, description="End year filter")
-    min_citations: Optional[int] = Field(None, description="Minimum citations")
+    min_citations: Optional[int] = Field(None, description="Minimum citations filter")
+    max_results: Optional[int] = Field(
+        10, description="Maximum number of results to return"
+    )
 
 
 class SemanticScholarTool(BaseTool):
-    """Tool for Semantic Scholar interactions"""
+    """Tool for Semantic Scholar paper search and retrieval"""
 
     name: str = "semantic_scholar_tool"
-    description: str = "Tool for searching and retrieving academic papers"
-    args_schema: Type[BaseModel] = SearchPapersSchema
-    _client: SemanticScholarClient = (
-        PrivateAttr()
-    )  # Use PrivateAttr for non-serialized fields
+    description: str = """Use this tool to search for academic papers and retrieve paper information.
+    
+    Capabilities:
+    1. Search for papers by topic, author, or title
+    2. Filter by year, citation count
+    3. Retrieve detailed paper information
+    
+    Input should be a natural language query describing what papers you're looking for.
+    Example: "Find recent papers about large language models from the last 2 years"
+    """
+    args_schema: Type[BaseModel] = SearchInput
+
+    # Private client instance
+    _client: SemanticScholarClient = PrivateAttr()
 
     def __init__(self):
-        """Initialize the tool"""
+        """Initialize the tool with a Semantic Scholar client"""
         super().__init__()
         self._client = SemanticScholarClient()
 
@@ -37,175 +49,82 @@ class SemanticScholarTool(BaseTool):
         year_start: Optional[int] = None,
         year_end: Optional[int] = None,
         min_citations: Optional[int] = None,
+        max_results: int = 10,
     ) -> str:
-        """Asynchronously search for papers."""
+        """Run the tool asynchronously"""
         try:
+            # Create search filters
             filters = SearchFilters(
                 year_start=year_start, year_end=year_end, min_citations=min_citations
             )
 
-            results = await self._client.search_papers(query=query, filters=filters)
-
-            return self._format_search_results(results)
-        except Exception as e:
-            return f"Error searching papers: {str(e)}"
-
-    @tool
-    async def search_papers(
-        self,
-        query: Annotated[str, "The search query for finding papers"],
-        year_start: Annotated[Optional[int], "Start year filter"] = None,
-        year_end: Annotated[Optional[int], "End year filter"] = None,
-        min_citations: Annotated[Optional[int], "Minimum citations"] = None,
-        is_open_access: Annotated[
-            Optional[bool], "Filter for open access papers"
-        ] = None,
-    ) -> str:
-        """Search for academic papers on Semantic Scholar."""
-        try:
-            filters = SearchFilters(
-                year_start=year_start,
-                year_end=year_end,
-                min_citations=min_citations,
-                is_open_access=is_open_access,
+            # Perform search
+            results = await self._client.search_papers(
+                query=query, filters=filters, limit=max_results
             )
 
-            results = await self.client.search_papers(query=query, filters=filters)
-
-            return self._format_search_results(results)
+            # Format results
+            return self._format_results(results)
 
         except Exception as e:
-            print(f"[DEBUG] Search error: {str(e)}")
-            return f"Error searching papers: {str(e)}"
+            return f"Error performing search: {str(e)}"
 
-            # Format results for agent consumption
-            papers_info = []
-            for i, paper in enumerate(results.papers, 1):
-                paper_info = {
-                    "number": i,
-                    "id": paper.paperId,
-                    "title": paper.title,
-                    "authors": [
-                        {"name": a.name, "id": a.authorId} for a in paper.authors
-                    ],
-                    "year": paper.year,
-                    "citations": paper.citations,
-                    "abstract": (
-                        paper.abstract[:300] + "..."
-                        if paper.abstract
-                        else "No abstract available"
-                    ),
-                    "url": paper.url,
-                }
-                papers_info.append(paper_info)
+    def _run(self, query: str, **kwargs) -> str:
+        """Synchronous run is not supported"""
+        raise NotImplementedError("This tool only supports async execution")
 
-            # Build response
-            response_parts = [
-                f"Found {results.total} papers related to '{query}'. Here are the most relevant papers:\n"
+    def _format_results(self, results) -> str:
+        """Format search results into a clear response"""
+        if not results.papers:
+            return "No papers found matching your criteria."
+
+        formatted_parts = [
+            f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant:\n"
+        ]
+
+        for i, paper in enumerate(results.papers, 1):
+            paper_details = [
+                f"\n{i}. {paper.title}",
+                f"Authors: {', '.join(a.name for a in paper.authors)}",
+                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
             ]
 
-            for paper in papers_info:
-                paper_text = [
-                    f"\n[{paper['number']}] {paper['title']}",
-                    f"Authors: {', '.join(a['name'] for a in paper['authors'])}",
-                    f"Year: {paper['year'] or 'N/A'} | Citations: {paper['citations'] or 0}",
-                    f"Abstract: {paper['abstract']}",
-                    f"URL: {paper['url'] or 'No URL available'}\n",
-                ]
-                response_parts.extend(paper_text)
+            if paper.abstract:
+                paper_details.append(
+                    f"Abstract: {paper.abstract[:300]}..."
+                    if len(paper.abstract) > 300
+                    else f"Abstract: {paper.abstract}"
+                )
 
-            return "\n".join(response_parts)
+            paper_details.append(f"URL: {paper.url or 'Not available'}\n")
+            formatted_parts.extend(paper_details)
 
-        except Exception as e:
-            print(f"[DEBUG] Search error: {str(e)}")
-            return f"Error searching papers: {str(e)}"
+        return "\n".join(formatted_parts)
 
-    @tool
-    async def get_paper_details(
-        self,
-        paper_id: Annotated[str, "ID of the paper to fetch details for"],
-    ) -> str:
-        """
-        Get detailed information about a specific paper including full metadata,
-        citation count, and field classifications.
-        """
+    async def get_paper_details(self, paper_id: str) -> str:
+        """Get detailed information about a specific paper"""
         try:
-            print(f"[DEBUG] Fetching paper details for ID: {paper_id}")
+            paper = await self._client.get_paper_details(paper_id)
 
-            paper = await self.client.get_paper_details(paper_id)
-
-            # Format detailed response
-            response = [
+            details = [
                 f"Title: {paper.title}",
                 f"Authors: {', '.join(a.name for a in paper.authors)}",
                 f"Year: {paper.year or 'N/A'}",
                 f"Citations: {paper.citations or 0}",
-                f"Fields of Study: {', '.join(paper.fieldsOfStudy) if paper.fieldsOfStudy else 'Not specified'}",
-                "",
-                "Abstract:",
-                f"{paper.abstract or 'No abstract available'}",
-                "",
-                f"URL: {paper.url or 'No URL available'}",
-                "",
-                "Additional Information:",
-                f"- Open Access: {'Yes' if paper.isOpenAccess else 'No'}",
+                f"Abstract: {paper.abstract or 'No abstract available'}",
+                f"URL: {paper.url or 'Not available'}",
             ]
 
-            return "\n".join(response)
+            return "\n".join(details)
 
         except Exception as e:
-            print(f"[DEBUG] Error fetching paper details: {str(e)}")
-            return f"Error fetching paper details: {str(e)}"
+            return f"Error retrieving paper details: {str(e)}"
 
-    @tool
-    async def search_by_filters(
-        self,
-        filters: Annotated[Dict[str, Any], "Dictionary of search filters"],
-        limit: Annotated[int, "Maximum number of results"] = 10,
-    ) -> str:
-        """
-        Advanced search using custom filters. Accepts a dictionary of filters and returns
-        matching papers. Useful for complex queries with multiple criteria.
-        """
+    async def check_health(self) -> bool:
+        """Check if the tool is functioning properly"""
         try:
-            print(f"[DEBUG] Searching with filters: {filters}")
-
-            # Convert dictionary to SearchFilters object
-            search_filters = SearchFilters(**filters)
-
-            # Perform search
-            results = await self.client.search_papers(
-                query=filters.get("query", ""), filters=search_filters, limit=limit
-            )
-
-            # Format and return results
-            return self._format_search_results(results)
-
-        except Exception as e:
-            print(f"[DEBUG] Filter search error: {str(e)}")
-            return f"Error in filtered search: {str(e)}"
-
-    def _run(self, *args, **kwargs) -> str:
-        """Synchronously search (not implemented)."""
-        raise NotImplementedError("This tool only supports async execution")
-
-    def _format_search_results(self, results) -> str:
-        """Format search results into a readable string."""
-        if not results.papers:
-            return "No papers found matching the criteria."
-
-        response_parts = [
-            f"Found {results.total} papers. Showing top {len(results.papers)} results:\n"
-        ]
-
-        for i, paper in enumerate(results.papers, 1):
-            paper_text = [
-                f"\n[{i}] {paper.title}",
-                f"Authors: {', '.join(a.name for a in paper.authors)}",
-                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
-                f"Abstract: {paper.abstract[:300] + '...' if paper.abstract else 'No abstract available'}",
-                f"URL: {paper.url or 'No URL available'}\n",
-            ]
-            response_parts.extend(paper_text)
-
-        return "\n".join(response_parts)
+            # Test the API with a simple search
+            await self._client.check_api_status()
+            return True
+        except:
+            return False
