@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -13,209 +13,162 @@ class MainAgent:
     """Main orchestrator agent that manages the research workflow."""
 
     SYSTEM_PROMPT = """You are Talk2Papers, an academic research assistant that helps users find, analyze, and understand academic papers.
-    You have access to several specialized tools to help with research tasks:
+    You have access to several specialized tools:
     
-    1. search_papers: Search for academic papers on any topic
-    2. get_paper_details: Get detailed information about a specific paper
-    
-    When processing user requests:
+    1. semantic_scholar_tool: Search and retrieve academic papers
+       - Use for: Finding papers, getting citations, retrieving metadata
+       - Input: Search queries, paper IDs
+       
+    2. pdf_tool: Analyze and extract from PDFs
+       - Use for: Reading papers, extracting sections
+       - Input: Paper URLs, DOIs
+       
+    3. analysis_tool: In-depth paper analysis  
+       - Use for: Summarizing, comparing papers, answering questions
+       - Input: Paper content, specific questions
+
+    Your workflow:
     1. UNDERSTAND THE REQUEST
     - Carefully analyze what the user is asking for
-    - Determine if they need paper search, details, analysis, etc.
-    
-    2. USE APPROPRIATE TOOLS
-    - For finding papers: Use search_papers
-    - For paper details: Use get_paper_details
-    - Use tools in logical sequence
+    - Determine which tools are needed
+    - Plan the sequence of tool usage
+
+    2. USE TOOLS APPROPRIATELY  
+    - semantic_scholar_tool for finding papers
+    - pdf_tool for reading papers
+    - analysis_tool for paper questions
     
     3. MAINTAIN CONTEXT
     - Track papers being discussed
     - Remember previous searches
-    - Connect related information
-    
+    - Build on previous interactions
+
     4. PROVIDE CLEAR RESPONSES
     - Summarize key information
     - Highlight important findings
-    - Make recommendations when appropriate
-    
-    Always think step by step and explain your reasoning when using tools."""
+    - Make connections between papers
 
-    def __init__(
-        self, tools: List[BaseTool], model_name: str = "llama3.2:1b-instruct-q3_K_M"
-    ):
+    Think step by step about:
+    1. What is the user asking for?
+    2. Which tools do I need?
+    3. In what order should I use them?
+    4. How do I combine their outputs?
+
+    Current conversation context: {context}
+    Current state: {state}
+    """
+
+    def __init__(self, tools: List[Any]):
         """Initialize the agent with tools and model."""
         self.tools = tools
-        self.llm = OllamaClient(model_name=model_name)
+        self.llm = OllamaClient(model_name="llama3.2:1b-instruct-q3_K_M")
         self.graph = self._create_graph()
 
+    def _create_supervisor_node(self):
+        """Create the supervisor node that routes to tools."""
+
+        async def supervisor(state: MessagesState) -> Dict:
+            # Get conversation history and current state
+            messages = state["messages"]
+            current_state = state.get("current_state", AgentState())
+
+            # Format context for system prompt
+            context = self._format_context(messages)
+            state_summary = self._format_state(current_state)
+
+            # Create full prompt
+            prompt = self.SYSTEM_PROMPT.format(context=context, state=state_summary)
+
+            # Get LLM decision on next action
+            response = await self.llm.generate(
+                prompt=messages[-1].content, system_prompt=prompt
+            )
+
+            # Parse tool selection
+            selected_tool = self._parse_tool_selection(response)
+
+            return {"next": selected_tool}
+
+        return supervisor
+
+    def _create_tool_node(self, tool: Any):
+        """Create a node for a specific tool."""
+
+        async def tool_node(state: MessagesState) -> Dict:
+            try:
+                # Execute tool
+                result = await tool.arun(state["messages"][-1].content)
+
+                # Update state
+                return {
+                    "messages": state["messages"] + [HumanMessage(content=result)],
+                    "next": "supervisor",  # Always return to supervisor
+                }
+            except Exception as e:
+                return {
+                    "messages": state["messages"]
+                    + [HumanMessage(content=f"Error executing tool: {str(e)}")],
+                    "next": "supervisor",
+                }
+
+        return tool_node
+
     def _create_graph(self) -> StateGraph:
-        """Create the agent's workflow graph."""
+        """Create the workflow graph."""
+        # Create graph
         workflow = StateGraph(MessagesState)
 
-        # Add nodes
-        workflow.add_node("start", self._start_node)
-        workflow.add_node("router", self._route_request)
-        workflow.add_node("process_search", self._process_search)
-        workflow.add_node("process_details", self._process_details)
-        workflow.add_node("update_memory", self._update_memory)
+        # Add supervisor node
+        workflow.add_node("supervisor", self._create_supervisor_node())
+
+        # Add tool nodes
+        for tool in self.tools:
+            workflow.add_node(tool.name, self._create_tool_node(tool))
 
         # Add edges
-        workflow.add_edge(START, "start")
-        workflow.add_edge("start", "router")
-        workflow.add_edge("router", "process_search")
-        workflow.add_edge("router", "process_details")
-        workflow.add_edge("process_search", "update_memory")
-        workflow.add_edge("process_details", "update_memory")
-        workflow.add_edge("update_memory", END)
-
-        # Set entry point
-        workflow.set_entry_point("start")
+        workflow.add_edge("supervisor", list(tool.name for tool in self.tools))
+        for tool in self.tools:
+            workflow.add_edge(tool.name, "supervisor")
 
         return workflow.compile()
+
+    def _format_context(self, messages: List[Dict]) -> str:
+        """Format conversation context for prompt."""
+        return "\n".join(
+            f"{msg['role']}: {msg['content']}"
+            for msg in messages[-5:]  # Last 5 messages
+        )
+
+    def _format_state(self, state: AgentState) -> str:
+        """Format current state for prompt."""
+        return f"""
+        Status: {state.status}
+        Search Results: {len(state.search_context.results) if state.search_context else 0} papers
+        Focused Paper: {state.memory.focused_paper.title if state.memory.focused_paper else 'None'}
+        """
+
+    def _parse_tool_selection(self, llm_response: str) -> str:
+        """Parse LLM response to determine tool selection."""
+        # Add logic to parse LLM response and determine which tool to use
+        # For now, return a simple tool name
+        return "semantic_scholar_tool"
 
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
         try:
-            result = await self.graph.arun(
-                {"messages": state.memory.messages, "current_state": state}
-            )
-            return result["current_state"]
+            # Convert state to messages format
+            messages_state = {"messages": state.memory.messages, "current_state": state}
+
+            # Run through graph
+            result = await self.graph.arun(messages_state)
+
+            # Update state with results
+            state.memory.messages = result["messages"]
+            state.status = AgentStatus.SUCCESS
+
+            return state
+
         except Exception as e:
             state.status = AgentStatus.ERROR
             state.error_message = str(e)
             return state
-
-    def _start_node(self, state: MessagesState) -> Dict:
-        """Initialize processing of a new request."""
-        return {"messages": state["messages"], "next": "router"}
-
-    def _route_request(self, state: MessagesState) -> Dict:
-        """Route the request to appropriate handler based on user intent."""
-        last_message = state["messages"][-1].content.lower()
-
-        # Determine intent through LLM
-        system_prompt = "Determine if this request is about: 1) searching for papers, or 2) getting paper details."
-        try:
-            response = self.llm.generate(
-                prompt=last_message, system_prompt=system_prompt, max_tokens=50
-            )
-
-            if "search" in response.lower():
-                return {"next": "process_search"}
-            else:
-                return {"next": "process_details"}
-        except Exception as e:
-            # Default to search if there's an error
-            return {"next": "process_search"}
-
-    async def _process_search(self, state: MessagesState) -> Dict:
-        """Process paper search requests."""
-        try:
-            message = state["messages"][-1].content
-            print(f"[DEBUG] Processing search request: {message}")
-
-            # Use search tool
-            for tool in self.tools:
-                if hasattr(tool, "search_papers"):
-                    result = await tool.search_papers(query=message)
-                    print(
-                        f"[DEBUG] Search result: {result[:200]}..."
-                    )  # Print first 200 chars
-                    return {
-                        "messages": state["messages"] + [HumanMessage(content=result)],
-                        "next": "update_memory",
-                    }
-
-            print("[DEBUG] Search tool not found")
-            return {
-                "messages": state["messages"]
-                + [HumanMessage(content="Search tool not available")],
-                "next": "update_memory",
-            }
-        except Exception as e:
-            print(f"[DEBUG] Search error: {str(e)}")
-            return {
-                "messages": state["messages"]
-                + [HumanMessage(content=f"Error in search: {str(e)}")],
-                "next": "update_memory",
-            }
-
-    async def _route_request(self, state: MessagesState) -> Dict:
-        """Route the request to appropriate handler based on user intent."""
-        try:
-            last_message = state["messages"][-1].content
-            print(f"[DEBUG] Routing message: {last_message}")
-
-            # Use LLM to determine intent
-            intent_prompt = f"""Analyze this message and determine the user's intent:
-Message: {last_message}
-
-Classify the intent as one of:
-1. search - User wants to find papers on a topic
-2. paper_question - User is asking about a specific paper
-3. comparison - User wants to compare papers
-4. conversation - General conversation or other intent
-
-Respond with just the intent category."""
-
-            intent_response = await self.llm.generate(
-                prompt=intent_prompt,
-                system_prompt="You are a research assistant intent classifier. Respond with only the intent category.",
-                max_tokens=50,
-            )
-
-            print(f"[DEBUG] Detected intent: {intent_response.strip()}")
-
-            # Route based on intent
-            intent = intent_response.strip().lower()
-            if "search" in intent:
-                return {"next": "process_search"}
-            elif "paper_question" in intent:
-                return {"next": "process_details"}
-            elif "comparison" in intent:
-                return {"next": "process_comparison"}
-            else:
-                return {"next": "process_conversation"}
-
-        except Exception as e:
-            print(f"[DEBUG] Error in route_request: {str(e)}")
-            # Default to conversation on error
-            return {"next": "process_conversation"}
-
-    async def _process_details(self, state: MessagesState) -> Dict:
-        """Process paper details requests."""
-        try:
-            message = state["messages"][-1].content
-
-            # Use details tool
-            for tool in self.tools:
-                if tool.name == "get_paper_details":
-                    result = await tool._arun(message)
-                    return {
-                        "messages": state["messages"] + [HumanMessage(content=result)],
-                        "next": "update_memory",
-                    }
-
-            return {
-                "messages": state["messages"]
-                + [HumanMessage(content="Details tool not available")],
-                "next": "update_memory",
-            }
-        except Exception as e:
-            return {
-                "messages": state["messages"]
-                + [HumanMessage(content=f"Error getting details: {str(e)}")],
-                "next": "update_memory",
-            }
-
-    def _update_memory(self, state: MessagesState) -> Dict:
-        """Update conversation memory and state."""
-        try:
-            # Add any final processing here
-            return {"messages": state["messages"], "next": END}
-        except Exception as e:
-            return {
-                "messages": state["messages"]
-                + [HumanMessage(content=f"Error updating memory: {str(e)}")],
-                "next": END,
-            }
