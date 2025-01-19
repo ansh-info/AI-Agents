@@ -203,7 +203,16 @@ class ConversationAgent:
     """Handles LLM-based conversations"""
 
     def __init__(self, ollama_client: OllamaClient):
-        self.client = ollama_client
+        """Initialize conversation agent with Ollama client"""
+        try:
+            print("[DEBUG] Initializing ConversationAgent")
+            if not ollama_client:
+                raise ValueError("OllamaClient cannot be None")
+            self.client = ollama_client
+            print("[DEBUG] ConversationAgent initialized successfully")
+        except Exception as e:
+            print(f"[DEBUG] Error initializing ConversationAgent: {str(e)}")
+            raise
 
     async def generate_response(
         self, prompt: str, context: Optional[str] = None, max_tokens: int = 500
@@ -308,19 +317,38 @@ class EnhancedWorkflowManager:
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize with both old and new components for gradual transition"""
-        # Initialize clients
-        self.ollama_client = OllamaClient(model_name=model_name)
-        self.s2_client = SemanticScholarClient()
+        try:
+            print("[DEBUG] Initializing EnhancedWorkflowManager")
 
-        # Initialize agents
-        self.conversation_agent = ConversationAgent(self.ollama_client)
-        self.search_agent = SearchAgent(self.s2_client)
+            # Initialize clients
+            print("[DEBUG] Initializing clients...")
+            self.ollama_client = OllamaClient(model_name=model_name)
+            self.s2_client = SemanticScholarClient()
+            print("[DEBUG] Clients initialized successfully")
 
-        # Initialize workflow manager
-        self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
+            # Initialize agents
+            print("[DEBUG] Initializing agents...")
+            self.conversation_agent = ConversationAgent(
+                ollama_client=self.ollama_client
+            )
+            self.search_agent = SearchAgent(s2_client=self.s2_client)
+            print("[DEBUG] Agents initialized successfully")
 
-        # Initialize state
-        self.current_state = AgentState()
+            # Initialize workflow manager
+            print("[DEBUG] Initializing workflow manager...")
+            self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
+            print("[DEBUG] Workflow manager initialized successfully")
+
+            # Initialize state
+            print("[DEBUG] Initializing state...")
+            self.current_state = AgentState()
+            print("[DEBUG] State initialized successfully")
+
+            print("[DEBUG] EnhancedWorkflowManager initialization complete")
+
+        except Exception as e:
+            print(f"[DEBUG] Error in EnhancedWorkflowManager initialization: {str(e)}")
+            raise
 
     async def process_command_async(self, command: str) -> AgentState:
         """Process commands using new workflow manager"""
@@ -611,9 +639,19 @@ class EnhancedWorkflowManager:
     async def _handle_conversation(self, command: str):
         """Handle general conversation"""
         try:
+            print(f"[DEBUG] Handling conversation command: {command}")
+
+            if not hasattr(self, "conversation_agent"):
+                print("[DEBUG] conversation_agent not found, reinitializing...")
+                self.conversation_agent = ConversationAgent(
+                    ollama_client=self.ollama_client
+                )
+
             if "hi" in command.lower() or "hello" in command.lower():
+                print("[DEBUG] Detected greeting")
                 response = "Hello! I'm your research assistant. I can help you search for academic papers, analyze them, and answer questions about them. What would you like to know?"
             elif "what can you do" in command.lower():
+                print("[DEBUG] Detected capabilities question")
                 response = """I can help you with several tasks:
 1. Search for academic papers on any topic
 2. Analyze and explain specific papers
@@ -623,25 +661,32 @@ class EnhancedWorkflowManager:
 
 What would you like me to help you with?"""
             else:
-                # Build conversation context
+                print("[DEBUG] Processing general conversation")
                 context = self._build_conversation_context()
+                print(f"[DEBUG] Built context: {context[:100]}...")
+
                 response_data = await self.conversation_agent.generate_response(
                     prompt=command, context=context
                 )
+                print(f"[DEBUG] Generated response data: {response_data}")
+
                 if response_data["status"] == "error":
                     raise Exception(
                         f"Response generation failed: {response_data['error']}"
                     )
                 response = response_data["response"]
 
+            print("[DEBUG] Adding response to state")
             self.current_state.add_message("system", response)
             self.current_state.status = AgentStatus.SUCCESS
 
         except Exception as e:
+            print(f"[DEBUG] Error in _handle_conversation: {str(e)}")
             self.current_state.status = AgentStatus.ERROR
             self.current_state.error_message = str(e)
             self.current_state.add_message(
-                "system", "I apologize, but I encountered an error. Please try again."
+                "system",
+                f"I apologize, but I encountered an error while processing your message: {str(e)}",
             )
 
     def _get_paper_by_reference(self, reference: str) -> Optional[PaperMetadata]:
