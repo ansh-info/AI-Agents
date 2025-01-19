@@ -70,9 +70,11 @@ What would you like to explore?""",
 
     def __init__(self, tools: List[Any]):
         """Initialize the agent with tools and model."""
+        print("[DEBUG] Initializing MainAgent")
         self.tools = tools
         self.llm = OllamaClient(model_name="llama3.2:1b-instruct-q3_K_M")
         self.graph = self._create_graph()
+        print(f"[DEBUG] MainAgent initialized with {len(tools)} tools")
 
     def _create_supervisor_node(self):
         """Create the supervisor node that routes to tools."""
@@ -99,22 +101,18 @@ What would you like to explore?""",
                 response = self._handle_conversation(last_message)
                 return {
                     "messages": messages + [HumanMessage(content=response)],
-                    "next": "__end__",  # End here for conversation
+                    "next": "__end__",
                 }
 
-            print(f"[DEBUG] Current message count: {len(messages)}")
-            print(f"[DEBUG] Current state status: {current_state.status}")
-
+            # Tool selection for research tasks
             context = self._format_context(messages)
-            print(f"[DEBUG] Formatted context length: {len(context)}")
+            state_summary = self._format_state(current_state)
+
+            prompt = self.SYSTEM_PROMPT.format(context=context, state=state_summary)
 
             response = await self.llm.generate(
-                prompt=messages[-1].content,
-                system_prompt=self.SYSTEM_PROMPT.format(
-                    context=context, state=self._format_state(current_state)
-                ),
+                prompt=messages[-1].content, system_prompt=prompt
             )
-            print(f"[DEBUG] LLM response received, length: {len(response)}")
 
             selected_tool = self._parse_tool_selection(response)
             print(f"[DEBUG] Selected tool: {selected_tool}")
@@ -150,7 +148,7 @@ What would you like to explore?""",
 
     def _create_graph(self) -> StateGraph:
         """Create the workflow graph."""
-        # Create graph
+        print("[DEBUG] Creating workflow graph")
         workflow = StateGraph(MessagesState)
 
         # Add supervisor node
@@ -165,6 +163,7 @@ What would you like to explore?""",
         for tool in self.tools:
             workflow.add_edge(tool.name, "supervisor")
 
+        print("[DEBUG] Workflow graph created")
         return workflow.compile()
 
     def _format_context(self, messages: List[Dict]) -> str:
@@ -184,8 +183,7 @@ What would you like to explore?""",
 
     def _parse_tool_selection(self, llm_response: str) -> str:
         """Parse LLM response to determine tool selection."""
-        # Add logic to parse LLM response and determine which tool to use
-        # For now, return a simple tool name
+        # For now, defaulting to semantic scholar for search queries
         return "semantic_scholar_tool"
 
     def _handle_conversation(self, message: str) -> str:
@@ -205,19 +203,19 @@ What would you like to explore?""",
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
         try:
-            # Convert state to messages format
+            print(f"[DEBUG] MainAgent processing request")
             messages_state = {"messages": state.memory.messages, "current_state": state}
 
-            # Run through graph
             result = await self.graph.arun(messages_state)
 
-            # Update state with results
             state.memory.messages = result["messages"]
             state.status = AgentStatus.SUCCESS
 
+            print(f"[DEBUG] Request processed successfully")
             return state
 
         except Exception as e:
+            print(f"[DEBUG] Error in process_request: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = str(e)
             return state
