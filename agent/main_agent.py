@@ -247,19 +247,33 @@ What would you like to explore?""",
         """Process a user request using the workflow graph."""
         try:
             print("[DEBUG] MainAgent processing request")
-            messages_state = {
-                "messages": [
-                    {"role": "user", "content": msg["content"]}
-                    for msg in state.memory.messages
-                ]
-            }
+
+            # Convert messages to proper format
+            messages = []
+            for msg in state.memory.messages:
+                if isinstance(msg, dict):
+                    messages.append(msg)
+                else:
+                    messages.append(
+                        {
+                            "role": msg.role if hasattr(msg, "role") else "user",
+                            "content": msg.content
+                            if hasattr(msg, "content")
+                            else str(msg),
+                        }
+                    )
+
+            messages_state = {"messages": messages}
+            print(f"[DEBUG] Processing with messages state: {messages_state}")
 
             result = await self.graph.ainvoke(messages_state)
 
             if isinstance(result, dict) and "messages" in result:
                 for msg in result["messages"]:
-                    if msg["role"] == "assistant":
+                    if isinstance(msg, dict) and msg.get("role") == "assistant":
                         state.add_message("system", msg["content"])
+                    elif hasattr(msg, "content"):
+                        state.add_message("system", msg.content)
 
             state.status = AgentStatus.SUCCESS
             return state
