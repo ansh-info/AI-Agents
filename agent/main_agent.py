@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, List
 
 from langgraph.graph import (
@@ -86,12 +87,17 @@ What would you like to explore?""",
             if not state.get("messages"):
                 return {"next": "__end__"}
 
+            # Extract message content safely
             last_message = state["messages"][-1]
-            message_content = (
-                last_message.content
-                if hasattr(last_message, "content")
-                else str(last_message)
-            )
+            if isinstance(last_message, dict):
+                message_content = last_message.get("content", "")
+            else:
+                message_content = (
+                    last_message.content
+                    if hasattr(last_message, "content")
+                    else str(last_message)
+                )
+
             message_lower = message_content.lower()
 
             # Handle basic conversations without tool invocation
@@ -146,9 +152,24 @@ What would you like to explore?""",
         def tool_node(state: MessagesState) -> Dict:
             try:
                 print(f"[DEBUG] Executing tool: {tool.name}")
-                # Only execute tool if it's a search request
-                message_content = state["messages"][-1].content
-                result = asyncio.run(tool.arun(message_content))
+
+                # Extract message content safely
+                last_message = state["messages"][-1]
+                if isinstance(last_message, dict):
+                    message_content = last_message.get("content", "")
+                else:
+                    message_content = (
+                        last_message.content
+                        if hasattr(last_message, "content")
+                        else str(last_message)
+                    )
+
+                # Create event loop for async operation
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(tool.arun(message_content))
+                loop.close()
+
                 print(
                     f"[DEBUG] Tool execution successful, result length: {len(result)}"
                 )
@@ -181,9 +202,8 @@ What would you like to explore?""",
         for tool in self.tools:
             workflow.add_node(tool.name, self._create_tool_node(tool))
             workflow.add_edge("supervisor", tool.name)
-            workflow.add_edge(tool.name, "supervisor")
 
-        # Add START edge correctly using the imported constant
+        # Add START edge
         workflow.add_edge(START, "supervisor")
 
         print("[DEBUG] Workflow graph created")
@@ -227,19 +247,28 @@ What would you like to explore?""",
         """Process a user request using the workflow graph."""
         try:
             print("[DEBUG] MainAgent processing request")
-            messages_state = {"messages": state.memory.messages, "current_state": state}
+            messages_state = {
+                "messages": [
+                    {"role": "user", "content": msg["content"]}
+                    for msg in state.memory.messages
+                ]
+            }
 
-            # Change from arun to ainvoke
             result = await self.graph.ainvoke(messages_state)
 
-            state.memory.messages = result["messages"]
-            state.status = AgentStatus.SUCCESS
+            if isinstance(result, dict) and "messages" in result:
+                for msg in result["messages"]:
+                    if msg["role"] == "assistant":
+                        state.add_message("system", msg["content"])
 
-            print("[DEBUG] Request processed successfully")
+            state.status = AgentStatus.SUCCESS
             return state
 
         except Exception as e:
             print(f"[DEBUG] Error in process_request: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = str(e)
+            state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
             return state
