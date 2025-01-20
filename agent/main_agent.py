@@ -1,9 +1,7 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import BaseTool
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END, START, MessagesState, StateGraph
+from langchain_core.messages import HumanMessage
+from langgraph.graph import MessagesState, StateGraph
 
 from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
@@ -80,7 +78,7 @@ What would you like to explore?""",
         """Create the supervisor node that routes to tools."""
 
         async def supervisor(state: MessagesState) -> Dict:
-            print(f"[DEBUG] MainAgent: Processing new message in supervisor")
+            print("[DEBUG] MainAgent: Processing new message in supervisor")
 
             messages = state["messages"]
             current_state = state.get("current_state", AgentState())
@@ -154,14 +152,12 @@ What would you like to explore?""",
         # Add supervisor node
         workflow.add_node("supervisor", self._create_supervisor_node())
 
-        # Add tool nodes
+        # Add tool nodes and edges
         for tool in self.tools:
             workflow.add_node(tool.name, self._create_tool_node(tool))
-
-        # Add edges
-        workflow.add_edge("supervisor", list(tool.name for tool in self.tools))
-        for tool in self.tools:
-            workflow.add_edge(tool.name, "supervisor")
+            # Add edges individually
+            workflow.add_edge("supervisor", tool.name)  # From supervisor to tool
+            workflow.add_edge(tool.name, "supervisor")  # From tool back to supervisor
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
@@ -178,7 +174,7 @@ What would you like to explore?""",
         return f"""
         Status: {state.status}
         Search Results: {len(state.search_context.results) if state.search_context else 0} papers
-        Focused Paper: {state.memory.focused_paper.title if state.memory.focused_paper else 'None'}
+        Focused Paper: {state.memory.focused_paper.title if state.memory.focused_paper else "None"}
         """
 
     def _parse_tool_selection(self, llm_response: str) -> str:
@@ -203,7 +199,7 @@ What would you like to explore?""",
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
         try:
-            print(f"[DEBUG] MainAgent processing request")
+            print("[DEBUG] MainAgent processing request")
             messages_state = {"messages": state.memory.messages, "current_state": state}
 
             result = await self.graph.arun(messages_state)
@@ -211,7 +207,7 @@ What would you like to explore?""",
             state.memory.messages = result["messages"]
             state.status = AgentStatus.SUCCESS
 
-            print(f"[DEBUG] Request processed successfully")
+            print("[DEBUG] Request processed successfully")
             return state
 
         except Exception as e:
