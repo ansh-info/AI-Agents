@@ -159,6 +159,9 @@ What would you like to explore?""",
             workflow.add_edge("supervisor", tool.name)  # From supervisor to tool
             workflow.add_edge(tool.name, "supervisor")  # From tool back to supervisor
 
+        # Add START edge to supervisor
+        workflow.add_edge("START", "supervisor")  # Add this line
+
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
 
