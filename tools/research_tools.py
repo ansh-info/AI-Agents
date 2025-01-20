@@ -1,96 +1,31 @@
-from typing import Annotated, Any, Dict, List, Optional, Type
+from typing import Dict, List, Optional
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, PrivateAttr
 
 from state.agent_state import AgentState
 from tools.ollama_tool import OllamaTool
 from tools.semantic_scholar_tool import SemanticScholarTool
-from tools.state_tool import StateTool
 
 
-class AnalyzePaperSchema(BaseModel):
-    """Schema for paper analysis parameters"""
+class ResearchTools:
+    """Collection of research-related tools."""
 
-    paper_id: str = Field(..., description="ID of the paper to analyze")
-    question: str = Field(..., description="Question about the paper")
-
-
-class ComparePapersSchema(BaseModel):
-    """Schema for paper comparison parameters"""
-
-    paper_ids: List[str] = Field(..., description="List of paper IDs to compare")
-
-
-class ResearchTools(BaseTool):
-    """Collection of research-related tools for the agent."""
-
-    name: str = "research_tools"
-    description: str = "Collection of tools for academic research"
-    args_schema: Type[BaseModel] = AnalyzePaperSchema  # Default schema
-    _s2_tool: SemanticScholarTool = PrivateAttr()
-    _ollama_tool: OllamaTool = PrivateAttr()
-    _state_tool: Optional[StateTool] = PrivateAttr()
-
-    def __init__(self, state: AgentState = None):
+    def __init__(self, state: Optional[AgentState] = None):
         """Initialize research tools"""
-        super().__init__()
-        self._s2_tool = SemanticScholarTool()
-        self._ollama_tool = OllamaTool()
-        self._state_tool = StateTool(state) if state else None
+        print("[DEBUG] Initializing ResearchTools")
 
-    async def analyze_paper(self, paper_id: str, question: str) -> str:
-        """Analyze a paper using LLM."""
-        try:
-            if not self._state_tool:
-                return "State tool not initialized"
+        # Initialize individual tools
+        self._semantic_scholar = SemanticScholarTool()
+        self._ollama = OllamaTool()
 
-            paper_context = await self._state_tool._arun(paper_id)
-            prompt = (
-                f"Based on this paper:\n"
-                f"{paper_context}\n\n"
-                f"Question: {question}\n\n"
-                f"Please provide a detailed analysis addressing the question."
-            )
+        # Store all tools
+        self.tools: List[BaseTool] = [
+            self._semantic_scholar,
+            self._ollama,
+        ]
 
-            return await self._ollama_tool._arun(prompt=prompt, temperature=0.7)
-        except Exception as e:
-            return f"Error analyzing paper: {str(e)}"
-
-    async def compare_papers(self, paper_ids: List[str]) -> str:
-        """Compare multiple papers."""
-        try:
-            if not self._state_tool:
-                return "State tool not initialized"
-
-            papers_context = []
-            for pid in paper_ids:
-                context = await self._state_tool._arun(pid)
-                papers_context.append(context)
-
-            papers_text = "\n---\n".join(papers_context)
-            prompt = (
-                f"Compare these papers:\n"
-                f"{papers_text}\n\n"
-                f"Consider:\n"
-                f"1. Main findings and contributions\n"
-                f"2. Methodological approaches\n"
-                f"3. Key differences and similarities\n"
-                f"4. Impact and significance\n\n"
-                f"Provide a structured comparison."
-            )
-
-            return await self._ollama_tool._arun(prompt=prompt, temperature=0.7)
-        except Exception as e:
-            return f"Error comparing papers: {str(e)}"
-
-    async def _arun(self, paper_id: str, question: str) -> str:
-        """Run the default tool action (paper analysis)."""
-        return await self.analyze_paper(paper_id, question)
-
-    def _run(self, *args, **kwargs) -> str:
-        """Synchronous execution not supported."""
-        raise NotImplementedError("This tool only supports async execution")
+        print(f"[DEBUG] Initialized {len(self.tools)} tools")
+        self._state = state
 
     async def search_papers(
         self,
@@ -101,20 +36,57 @@ class ResearchTools(BaseTool):
     ) -> str:
         """Search for papers using Semantic Scholar."""
         try:
-            return await self._s2_tool._arun(
+            print(f"[DEBUG] ResearchTools: Searching papers with query: {query}")
+            result = await self._semantic_scholar._arun(
                 query=query,
                 year_start=year_start,
                 year_end=year_end,
                 min_citations=min_citations,
             )
+            print(f"[DEBUG] Search completed with result length: {len(result)}")
+            return result
         except Exception as e:
-            return f"Error searching papers: {str(e)}"
+            error_msg = f"Error searching papers: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
 
-    async def get_paper_details(self, paper_id: str) -> str:
-        """Get detailed information about a paper."""
+    async def generate_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Generate text using Ollama."""
         try:
-            if not self._state_tool:
-                return "State tool not initialized"
-            return await self._state_tool._arun(paper_id)
+            print(
+                f"[DEBUG] ResearchTools: Generating text for prompt: {prompt[:100]}..."
+            )
+            result = await self._ollama._arun(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+            )
+            print(f"[DEBUG] Text generation completed with length: {len(result)}")
+            return result
         except Exception as e:
-            return f"Error getting paper details: {str(e)}"
+            error_msg = f"Error generating text: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
+
+    def get_tools(self) -> List[BaseTool]:
+        """Get all available tools."""
+        return self.tools
+
+    async def check_health(self) -> Dict[str, bool]:
+        """Check health of all tools."""
+        try:
+            print("[DEBUG] Checking health of all tools")
+            results = {
+                "semantic_scholar": await self._semantic_scholar.check_health(),
+                "ollama": await self._ollama.check_health(),
+            }
+            print(f"[DEBUG] Health check results: {results}")
+            return results
+        except Exception as e:
+            print(f"[DEBUG] Health check failed: {str(e)}")
+            return {"semantic_scholar": False, "ollama": False, "error": str(e)}

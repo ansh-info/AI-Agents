@@ -1,12 +1,10 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict
 
-from langgraph.graph import MessagesState, StateGraph
+from langgraph.graph import START, MessagesState, StateGraph
 
 from agent.main_agent import MainAgent
-from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus
-from tools.research_tools import ResearchTools
 from tools.semantic_scholar_tool import SemanticScholarTool
 
 
@@ -44,7 +42,8 @@ class ResearchWorkflowManager:
         workflow.add_node("main_agent", self._main_agent_node)
         workflow.add_node("update_state", self._update_state_node)
 
-        # Define graph edges
+        # Define graph edges - Add START edge first
+        workflow.add_edge(START, "start")  # Add this line
         workflow.add_edge("start", "main_agent")
         workflow.add_edge("main_agent", "update_state")
 
@@ -101,8 +100,8 @@ class ResearchWorkflowManager:
             # Add message to state
             self.current_state.add_message("user", message)
 
-            # Process through workflow graph
-            result = await self.graph.arun(
+            # Change from arun to ainvoke
+            result = await self.graph.ainvoke(
                 {"messages": self.current_state.memory.messages}
             )
 

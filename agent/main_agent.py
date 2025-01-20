@@ -1,9 +1,11 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import BaseTool
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END, START, MessagesState, StateGraph
+from langchain_core.messages import HumanMessage
+from langgraph.graph import (
+    START,  # Updated import
+    MessagesState,
+    StateGraph,
+)
 
 from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
@@ -80,15 +82,23 @@ What would you like to explore?""",
         """Create the supervisor node that routes to tools."""
 
         async def supervisor(state: MessagesState) -> Dict:
-            print(f"[DEBUG] MainAgent: Processing new message in supervisor")
+            print("[DEBUG] MainAgent: Processing new message in supervisor")
 
-            messages = state["messages"]
-            current_state = state.get("current_state", AgentState())
+            # Ensure we have messages and they're properly formatted
+            if not state.get("messages"):
+                return {"next": "__end__"}
 
-            # Check if this is a conversation message first
-            last_message = messages[-1].content
+            last_message = state["messages"][-1]
+            # Convert message to string if it's a Message object
+            message_content = (
+                last_message.content
+                if hasattr(last_message, "content")
+                else str(last_message)
+            )
+
+            # Check for conversation first
             if any(
-                trigger in last_message.lower()
+                trigger in message_content.lower()
                 for trigger in [
                     "hi",
                     "hello",
@@ -98,26 +108,41 @@ What would you like to explore?""",
                     "goodbye",
                 ]
             ):
-                response = self._handle_conversation(last_message)
+                response = self._handle_conversation(message_content)
                 return {
-                    "messages": messages + [HumanMessage(content=response)],
+                    "messages": state["messages"]
+                    + [{"role": "assistant", "content": response}],
                     "next": "__end__",
                 }
 
             # Tool selection for research tasks
-            context = self._format_context(messages)
-            state_summary = self._format_state(current_state)
+            context = self._format_context(state["messages"])
+            current_state = state.get("current_state", AgentState())
 
-            prompt = self.SYSTEM_PROMPT.format(context=context, state=state_summary)
-
-            response = await self.llm.generate(
-                prompt=messages[-1].content, system_prompt=prompt
+            prompt = self.SYSTEM_PROMPT.format(
+                context=context, state=self._format_state(current_state)
             )
 
-            selected_tool = self._parse_tool_selection(response)
-            print(f"[DEBUG] Selected tool: {selected_tool}")
-
-            return {"next": selected_tool}
+            # Get tool decision
+            try:
+                response = await self.llm.generate(
+                    prompt=message_content, system_prompt=prompt
+                )
+                selected_tool = self._parse_tool_selection(response)
+                print(f"[DEBUG] Selected tool: {selected_tool}")
+                return {"next": selected_tool}
+            except Exception as e:
+                print(f"[DEBUG] Error in supervisor: {str(e)}")
+                return {
+                    "messages": state["messages"]
+                    + [
+                        {
+                            "role": "assistant",
+                            "content": f"I encountered an error: {str(e)}",
+                        }
+                    ],
+                    "next": "__end__",
+                }
 
         return supervisor
 
@@ -154,14 +179,14 @@ What would you like to explore?""",
         # Add supervisor node
         workflow.add_node("supervisor", self._create_supervisor_node())
 
-        # Add tool nodes
+        # Add tool nodes and edges
         for tool in self.tools:
             workflow.add_node(tool.name, self._create_tool_node(tool))
-
-        # Add edges
-        workflow.add_edge("supervisor", list(tool.name for tool in self.tools))
-        for tool in self.tools:
+            workflow.add_edge("supervisor", tool.name)
             workflow.add_edge(tool.name, "supervisor")
+
+        # Add START edge correctly using the imported constant
+        workflow.add_edge(START, "supervisor")
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
@@ -178,7 +203,7 @@ What would you like to explore?""",
         return f"""
         Status: {state.status}
         Search Results: {len(state.search_context.results) if state.search_context else 0} papers
-        Focused Paper: {state.memory.focused_paper.title if state.memory.focused_paper else 'None'}
+        Focused Paper: {state.memory.focused_paper.title if state.memory.focused_paper else "None"}
         """
 
     def _parse_tool_selection(self, llm_response: str) -> str:
@@ -203,15 +228,16 @@ What would you like to explore?""",
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
         try:
-            print(f"[DEBUG] MainAgent processing request")
+            print("[DEBUG] MainAgent processing request")
             messages_state = {"messages": state.memory.messages, "current_state": state}
 
-            result = await self.graph.arun(messages_state)
+            # Change from arun to ainvoke
+            result = await self.graph.ainvoke(messages_state)
 
             state.memory.messages = result["messages"]
             state.status = AgentStatus.SUCCESS
 
-            print(f"[DEBUG] Request processed successfully")
+            print("[DEBUG] Request processed successfully")
             return state
 
         except Exception as e:
