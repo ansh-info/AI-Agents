@@ -100,19 +100,13 @@ What would you like to explore?""",
 
             message_lower = message_content.lower()
 
-            # Handle basic conversations without tool invocation
+            # Handle basic conversations
             if any(word in message_lower for word in ["hi", "hello", "hey"]):
-                print("[DEBUG] Handling greeting without tool invocation")
-                return {
-                    "messages": state["messages"]
-                    + [
-                        {
-                            "role": "assistant",
-                            "content": "Hello! I'm your research assistant. How can I help you today?",
-                        }
-                    ],
-                    "next": "conversation",
-                }
+                print("[DEBUG] Handling greeting")
+                state["messages"][-1]["assistant_response"] = (
+                    "Hello! I'm your research assistant. How can I help you today?"
+                )
+                return {"messages": state["messages"], "next": "conversation_handler"}
 
             # Handle search intent
             search_indicators = [
@@ -130,17 +124,11 @@ What would you like to explore?""",
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
             # Default conversation handling
-            print("[DEBUG] Handling general conversation without tool invocation")
-            return {
-                "messages": state["messages"]
-                + [
-                    {
-                        "role": "assistant",
-                        "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
-                    }
-                ],
-                "next": "conversation",
-            }
+            print("[DEBUG] Handling general conversation")
+            state["messages"][-1]["assistant_response"] = (
+                "I can help you search for and understand academic papers. Would you like to search for a specific topic?"
+            )
+            return {"messages": state["messages"], "next": "conversation_handler"}
 
         return supervisor
 
