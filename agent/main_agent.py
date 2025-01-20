@@ -87,33 +87,27 @@ What would you like to explore?""",
             if not state.get("messages"):
                 return {"next": "__end__"}
 
-            # Convert HumanMessage to dict if needed
-            messages = list(
-                state["messages"]
-            )  # Create a new list to avoid modifying original
-            last_message = messages[-1]
-
-            # Handle message content extraction
-            if hasattr(last_message, "content"):  # HumanMessage object
+            # Extract message content
+            last_message = state["messages"][-1]
+            if hasattr(last_message, "content"):
                 message_content = last_message.content
-                messages[-1] = {"role": "user", "content": message_content}
-            else:  # Already a dict
+            else:
                 message_content = last_message.get("content", "")
 
             message_lower = message_content.lower()
 
             # Handle basic conversations
             if any(word in message_lower for word in ["hi", "hello", "hey"]):
-                print("[DEBUG] Handling greeting")
+                print("[DEBUG] Handling greeting - routing to conversation")
                 return {
-                    "messages": messages
-                    + [
+                    "messages": [
+                        *state["messages"],
                         {
                             "role": "assistant",
                             "content": "Hello! I'm your research assistant. How can I help you today?",
-                        }
+                        },
                     ],
-                    "next": "__end__",
+                    "next": "conversation",
                 }
 
             # Handle search intent
@@ -129,19 +123,19 @@ What would you like to explore?""",
                 print(
                     "[DEBUG] Detected search intent, routing to semantic_scholar_tool"
                 )
-                return {"messages": messages, "next": "semantic_scholar_tool"}
+                return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
             # Default conversation handling
-            print("[DEBUG] Handling general conversation")
+            print("[DEBUG] Handling general conversation - routing to conversation")
             return {
-                "messages": messages
-                + [
+                "messages": [
+                    *state["messages"],
                     {
                         "role": "assistant",
                         "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
-                    }
+                    },
                 ],
-                "next": "__end__",
+                "next": "conversation",
             }
 
         return supervisor
@@ -203,6 +197,26 @@ What would you like to explore?""",
             workflow.add_node(tool.name, self._create_tool_node(tool))
             # Add tool edges only from supervisor
             workflow.add_edge("supervisor", tool.name)
+
+    # Add conversation handler for non-tool responses
+    def conversation_handler(state: MessagesState) -> Dict:
+        print("[DEBUG] Processing conversation response")
+        return {
+            "messages": state["messages"],
+            "next": "__end__"
+        }
+    
+    workflow.add_node("conversation", conversation_handler)
+
+    # Add edges with clear routing
+    workflow.add_edge(START, "supervisor")
+    workflow.add_edge("supervisor", "semantic_scholar_tool")
+    workflow.add_edge("supervisor", "conversation")
+    workflow.add_edge("semantic_scholar_tool", "__end__")
+    workflow.add_edge("conversation", "__end__")
+
+    print("[DEBUG] Workflow graph created")
+    return workflow.compile()
 
         # Add final node for conversation responses
         def conversation_node(state: MessagesState) -> Dict:
