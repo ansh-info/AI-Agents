@@ -1,6 +1,5 @@
 from typing import Any, Dict, List
 
-from langchain_core.messages import HumanMessage
 from langgraph.graph import (
     START,  # Updated import
     MessagesState,
@@ -78,98 +77,94 @@ What would you like to explore?""",
         self.graph = self._create_graph()
         print(f"[DEBUG] MainAgent initialized with {len(tools)} tools")
 
+    def _create_supervisor_node(self):
+        """Create the supervisor node that routes to tools."""
 
-def _create_supervisor_node(self):
-    """Create the supervisor node that routes to tools."""
+        def supervisor(state: MessagesState) -> Dict:
+            print("[DEBUG] MainAgent: Processing new message in supervisor")
 
-    def supervisor(state: MessagesState) -> Dict:
-        print("[DEBUG] MainAgent: Processing new message in supervisor")
+            if not state.get("messages"):
+                return {"next": "__end__"}
 
-        # Ensure we have messages and they're properly formatted
-        if not state.get("messages"):
-            return {"next": "__end__"}
+            last_message = state["messages"][-1]
+            message_content = (
+                last_message.content
+                if hasattr(last_message, "content")
+                else str(last_message)
+            )
+            message_lower = message_content.lower()
 
-        last_message = state["messages"][-1]
-        message_content = (
-            last_message.content
-            if hasattr(last_message, "content")
-            else str(last_message)
-        )
+            # Handle basic conversations without tool invocation
+            if any(word in message_lower for word in ["hi", "hello", "hey"]):
+                response = {
+                    "messages": state["messages"]
+                    + [
+                        {
+                            "role": "assistant",
+                            "content": "Hello! I'm your research assistant. How can I help you today?",
+                        }
+                    ],
+                    "next": "__end__",
+                }
+                print("[DEBUG] Handling greeting without tool invocation")
+                return response
 
-        # First check for simple conversation patterns to avoid unnecessary API calls
-        message_lower = message_content.lower()
-        if any(word in message_lower for word in ["hi", "hello", "hey"]):
-            return {
-                "messages": state["messages"]
-                + [{"role": "assistant", "content": self.CHAT_RESPONSES["greeting"]}],
-                "next": "__end__",
-            }
-        elif "what can you do" in message_lower:
-            return {
+            # Handle search intent
+            search_indicators = [
+                "find",
+                "search",
+                "look for",
+                "papers about",
+                "papers on",
+                "research on",
+            ]
+            if any(indicator in message_lower for indicator in search_indicators):
+                print(
+                    "[DEBUG] Detected search intent, routing to semantic_scholar_tool"
+                )
+                return {"messages": state["messages"], "next": "semantic_scholar_tool"}
+
+            # Default conversation handling
+            response = {
                 "messages": state["messages"]
                 + [
                     {
                         "role": "assistant",
-                        "content": self.CHAT_RESPONSES["capabilities"],
+                        "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
                     }
                 ],
                 "next": "__end__",
             }
-        elif any(word in message_lower for word in ["bye", "goodbye"]):
-            return {
-                "messages": state["messages"]
-                + [{"role": "assistant", "content": self.CHAT_RESPONSES["farewell"]}],
-                "next": "__end__",
-            }
+            print("[DEBUG] Handling general conversation without tool invocation")
+            return response
 
-        # If it's not a simple conversation, process as a research request
-        # Check if it's likely a search request
-        search_indicators = [
-            "find",
-            "search",
-            "look for",
-            "papers about",
-            "papers on",
-            "research about",
-        ]
-        if any(indicator in message_lower for indicator in search_indicators):
-            return {"next": "semantic_scholar_tool"}
-
-        # If no clear intent is found, handle as general conversation
-        return {
-            "messages": state["messages"]
-            + [
-                {
-                    "role": "assistant",
-                    "content": "I'm your research assistant. Would you like to search for papers about a specific topic?",
-                }
-            ],
-            "next": "__end__",
-        }
-
-    return supervisor
+        return supervisor
 
     def _create_tool_node(self, tool: Any):
         """Create a node for a specific tool."""
 
-        async def tool_node(state: MessagesState) -> Dict:
+        def tool_node(state: MessagesState) -> Dict:
             try:
                 print(f"[DEBUG] Executing tool: {tool.name}")
-                result = await tool.arun(state["messages"][-1].content)
+                # Only execute tool if it's a search request
+                message_content = state["messages"][-1].content
+                result = asyncio.run(tool.arun(message_content))
                 print(
                     f"[DEBUG] Tool execution successful, result length: {len(result)}"
                 )
 
                 return {
-                    "messages": state["messages"] + [HumanMessage(content=result)],
-                    "next": "supervisor",
+                    "messages": state["messages"]
+                    + [{"role": "assistant", "content": result}],
+                    "next": "__end__",
                 }
             except Exception as e:
                 error_msg = f"Error executing {tool.name}: {str(e)}"
                 print(f"[DEBUG] {error_msg}")
                 return {
-                    "messages": state["messages"] + [HumanMessage(content=error_msg)],
-                    "next": "supervisor",
+                    "messages": state["messages"]
+                    + [{"role": "assistant", "content": error_msg}],
+                    "next": "__end__",
                 }
 
         return tool_node
