@@ -35,6 +35,23 @@ class ResearchWorkflowManager:
         # Initialize graph with message state
         workflow = StateGraph(MessagesState)
 
+        # Add nodes for main components
+        workflow.add_node("supervisor", self.main_agent._create_supervisor_node())
+
+        # Add tool nodes
+        for tool in self.tools:
+            workflow.add_node(tool.name, self.main_agent._create_tool_node(tool))
+            workflow.add_edge("supervisor", tool.name)
+            workflow.add_edge(tool.name, "__end__")
+
+        # Add edges
+        workflow.add_edge(START, "supervisor")
+        workflow.add_edge(
+            "supervisor", "__end__"
+        )  # Direct path for basic conversations
+
+        return workflow.compile()
+
         # Create conversation handler node
         def conversation_handler(state: MessagesState) -> Dict:
             """Handle basic conversations"""
@@ -119,10 +136,10 @@ class ResearchWorkflowManager:
         try:
             print(f"[DEBUG] Processing message: {message}")
 
-            # Add message to state as a dict
+            # Add message to state
             self.current_state.add_message("user", message)
 
-            # Convert message to proper format for processing
+            # Convert to format that LangGraph expects
             messages_state = {"messages": [{"role": "user", "content": message}]}
 
             # Process through graph
@@ -130,11 +147,15 @@ class ResearchWorkflowManager:
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
-                for msg in result["messages"]:
-                    if isinstance(msg, dict) and msg.get("role") == "assistant":
-                        self.current_state.add_message("system", msg["content"])
-                    elif hasattr(msg, "content"):
-                        self.current_state.add_message("system", msg.content)
+                assistant_messages = [
+                    msg
+                    for msg in result["messages"]
+                    if isinstance(msg, dict) and msg.get("role") == "assistant"
+                ]
+                if assistant_messages:
+                    self.current_state.add_message(
+                        "system", assistant_messages[-1]["content"]
+                    )
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
