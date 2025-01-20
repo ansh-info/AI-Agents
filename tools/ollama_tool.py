@@ -1,4 +1,4 @@
-from typing import Annotated, Any, Dict, Optional, Type
+from typing import Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
@@ -6,27 +6,34 @@ from pydantic import BaseModel, Field, PrivateAttr
 from clients.ollama_client import OllamaClient
 
 
-class GenerateResponseSchema(BaseModel):
-    """Schema for generate_response parameters"""
+class GenerateInput(BaseModel):
+    """Schema for text generation parameters"""
 
-    prompt: str = Field(..., description="The prompt to send to the LLM")
+    prompt: str = Field(..., description="The prompt to send to the model")
     system_prompt: Optional[str] = Field(None, description="Optional system prompt")
     max_tokens: Optional[int] = Field(None, description="Maximum tokens to generate")
     temperature: float = Field(0.7, description="Temperature for generation")
 
 
 class OllamaTool(BaseTool):
-    """Tool for interacting with Ollama LLM"""
+    """Tool for Ollama LLM interactions"""
 
     name: str = "ollama_tool"
-    description: str = "Tool for interacting with the Ollama LLM"
-    args_schema: Type[BaseModel] = GenerateResponseSchema
-    _client: OllamaClient = PrivateAttr()  # Use PrivateAttr for non-serialized fields
+    description: str = """Use this tool for text generation and understanding.
+    Capabilities:
+    1. Generate responses to questions
+    2. Analyze and understand user intents
+    3. Provide explanations and summaries
+    """
+    args_schema: Type[BaseModel] = GenerateInput
+    _client: OllamaClient = PrivateAttr()
 
-    def __init__(self):
+    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
+        """Initialize the tool with a specific model"""
         super().__init__()
         print("[DEBUG] Initializing OllamaTool")
-        self._client = OllamaClient()
+        self._client = OllamaClient(model_name=model_name)
+        print(f"[DEBUG] OllamaTool initialized with model: {model_name}")
 
     async def _arun(
         self,
@@ -35,13 +42,13 @@ class OllamaTool(BaseTool):
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
     ) -> str:
+        """Asynchronously generate text using Ollama."""
         try:
             print(
                 f"[DEBUG] OllamaTool: Generating response for prompt: {prompt[:100]}..."
             )
-            print(
-                f"[DEBUG] System prompt: {system_prompt[:100] if system_prompt else 'None'}"
-            )
+            if system_prompt:
+                print(f"[DEBUG] With system prompt: {system_prompt[:100]}...")
 
             response = await self._client.generate(
                 prompt=prompt,
@@ -65,5 +72,16 @@ class OllamaTool(BaseTool):
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
     ) -> str:
-        """Synchronously generate a response (not implemented)."""
+        """Synchronous execution not supported."""
         raise NotImplementedError("This tool only supports async execution")
+
+    async def check_health(self) -> bool:
+        """Check if the model is available and responding."""
+        try:
+            print("[DEBUG] Checking OllamaTool health")
+            is_available = await self._client.check_model_availability()
+            print(f"[DEBUG] OllamaTool health check result: {is_available}")
+            return is_available
+        except Exception as e:
+            print(f"[DEBUG] OllamaTool health check failed: {str(e)}")
+            return False
