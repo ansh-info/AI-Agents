@@ -96,20 +96,24 @@ class ResearchWorkflowManager:
         try:
             print(f"[DEBUG] Processing message: {message}")
 
-            # Add message to state
+            # Add message to state as a dict
             self.current_state.add_message("user", message)
 
+            # Convert message to proper format for processing
+            messages_state = {"messages": [{"role": "user", "content": message}]}
+
             # Process through graph
-            result = await self.graph.ainvoke(
-                {"messages": [{"role": "user", "content": message}]}
-            )
+            result = await self.graph.ainvoke(messages_state)
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
                 for msg in result["messages"]:
-                    if msg["role"] == "assistant":
+                    if isinstance(msg, dict) and msg.get("role") == "assistant":
                         self.current_state.add_message("system", msg["content"])
+                    elif hasattr(msg, "content"):
+                        self.current_state.add_message("system", msg.content)
 
+            self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
 
         except Exception as e:
