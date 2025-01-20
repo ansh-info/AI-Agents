@@ -1,11 +1,12 @@
-import logging
-from typing import Any, Dict, List, Optional, Type
+from typing import Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
 
-from clients.semantic_scholar_client import (PaperMetadata, SearchFilters,
-                                             SemanticScholarClient)
+from clients.semantic_scholar_client import (
+    SearchFilters,
+    SemanticScholarClient,
+)
 
 
 class SearchInput(BaseModel):
@@ -47,28 +48,34 @@ class SemanticScholarTool(BaseTool):
         print("[DEBUG] SemanticScholarTool initialized with client")
 
     async def _arun(self, query: str, **kwargs) -> str:
-        """Asynchronously search for papers."""
+        """Run the tool asynchronously"""
         try:
-            print(f"[DEBUG] SemanticScholarTool: Starting search with query: '{query}'")
+            print(f"[DEBUG] SemanticScholarTool: Starting search with query: {query}")
 
+            # Add delay between requests
+            await asyncio.sleep(1)  # Add 1 second delay
+
+            # Create search filters
             filters = SearchFilters(**kwargs)
-            print(f"[DEBUG] Applied filters: {filters.dict()}")
 
-            results = await self._client.search_papers(query=query, filters=filters)
-
-            print(
-                f"[DEBUG] Retrieved {len(results.papers)} papers from total {results.total}"
-            )
-
-            formatted_response = self._format_results(results)
-            print(f"[DEBUG] Formatted response length: {len(formatted_response)}")
-
-            return formatted_response
+            # Perform search with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    results = await self._client.search_papers(
+                        query=query, filters=filters, limit=10
+                    )
+                    return self._format_results(results)
+                except Exception as e:
+                    if "429" in str(e) and attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2  # Exponential backoff
+                        print(f"[DEBUG] Rate limited, waiting {wait_time} seconds...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    raise
 
         except Exception as e:
-            error_msg = f"Error in SemanticScholarTool search: {str(e)}"
-            print(f"[DEBUG] {error_msg}")
-            return error_msg
+            return f"Error performing search: {str(e)}"
 
     def _run(self, query: str, **kwargs) -> str:
         """Synchronous run is not supported"""
