@@ -87,26 +87,34 @@ What would you like to explore?""",
             if not state.get("messages"):
                 return {"next": "__end__"}
 
-            # Extract message content safely
-            last_message = state["messages"][-1]
-            if isinstance(last_message, dict):
+            # Convert HumanMessage to dict if needed
+            messages = list(
+                state["messages"]
+            )  # Create a new list to avoid modifying original
+            last_message = messages[-1]
+
+            # Handle message content extraction
+            if hasattr(last_message, "content"):  # HumanMessage object
+                message_content = last_message.content
+                messages[-1] = {"role": "user", "content": message_content}
+            else:  # Already a dict
                 message_content = last_message.get("content", "")
-            else:
-                message_content = (
-                    last_message.content
-                    if hasattr(last_message, "content")
-                    else str(last_message)
-                )
 
             message_lower = message_content.lower()
 
             # Handle basic conversations
             if any(word in message_lower for word in ["hi", "hello", "hey"]):
                 print("[DEBUG] Handling greeting")
-                state["messages"][-1]["assistant_response"] = (
-                    "Hello! I'm your research assistant. How can I help you today?"
-                )
-                return {"messages": state["messages"], "next": "conversation_handler"}
+                return {
+                    "messages": messages
+                    + [
+                        {
+                            "role": "assistant",
+                            "content": "Hello! I'm your research assistant. How can I help you today?",
+                        }
+                    ],
+                    "next": "__end__",
+                }
 
             # Handle search intent
             search_indicators = [
@@ -121,14 +129,20 @@ What would you like to explore?""",
                 print(
                     "[DEBUG] Detected search intent, routing to semantic_scholar_tool"
                 )
-                return {"messages": state["messages"], "next": "semantic_scholar_tool"}
+                return {"messages": messages, "next": "semantic_scholar_tool"}
 
             # Default conversation handling
             print("[DEBUG] Handling general conversation")
-            state["messages"][-1]["assistant_response"] = (
-                "I can help you search for and understand academic papers. Would you like to search for a specific topic?"
-            )
-            return {"messages": state["messages"], "next": "conversation_handler"}
+            return {
+                "messages": messages
+                + [
+                    {
+                        "role": "assistant",
+                        "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
+                    }
+                ],
+                "next": "__end__",
+            }
 
         return supervisor
 
