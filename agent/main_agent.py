@@ -102,7 +102,8 @@ What would you like to explore?""",
 
             # Handle basic conversations without tool invocation
             if any(word in message_lower for word in ["hi", "hello", "hey"]):
-                response = {
+                print("[DEBUG] Handling greeting without tool invocation")
+                return {
                     "messages": state["messages"]
                     + [
                         {
@@ -110,10 +111,8 @@ What would you like to explore?""",
                             "content": "Hello! I'm your research assistant. How can I help you today?",
                         }
                     ],
-                    "next": "__end__",
+                    "next": "conversation",
                 }
-                print("[DEBUG] Handling greeting without tool invocation")
-                return response
 
             # Handle search intent
             search_indicators = [
@@ -131,7 +130,8 @@ What would you like to explore?""",
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
             # Default conversation handling
-            response = {
+            print("[DEBUG] Handling general conversation without tool invocation")
+            return {
                 "messages": state["messages"]
                 + [
                     {
@@ -139,10 +139,8 @@ What would you like to explore?""",
                         "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
                     }
                 ],
-                "next": "__end__",
+                "next": "conversation",
             }
-            print("[DEBUG] Handling general conversation without tool invocation")
-            return response
 
         return supervisor
 
@@ -198,13 +196,24 @@ What would you like to explore?""",
         # Add supervisor node
         workflow.add_node("supervisor", self._create_supervisor_node())
 
-        # Add tool nodes and edges
+        # Add tool nodes
         for tool in self.tools:
             workflow.add_node(tool.name, self._create_tool_node(tool))
+            # Add tool edges only from supervisor
             workflow.add_edge("supervisor", tool.name)
 
-        # Add START edge
+        # Add final node for conversation responses
+        def conversation_node(state: MessagesState) -> Dict:
+            return {"messages": state["messages"], "next": "__end__"}
+
+        workflow.add_node("conversation", conversation_node)
+
+        # Add edges
         workflow.add_edge(START, "supervisor")
+        workflow.add_edge("supervisor", "conversation")  # Direct path for conversations
+        workflow.add_edge(
+            "semantic_scholar_tool", "__end__"
+        )  # Tool goes directly to end
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
