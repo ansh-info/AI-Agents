@@ -35,16 +35,39 @@ class ResearchWorkflowManager:
         # Initialize graph with message state
         workflow = StateGraph(MessagesState)
 
+        # Create conversation handler node
+        def conversation_handler(state: MessagesState) -> Dict:
+            """Handle basic conversations"""
+            return {
+                "messages": state["messages"]
+                + [
+                    {
+                        "role": "assistant",
+                        "content": state["messages"][-1].get("assistant_response", ""),
+                    }
+                ],
+                "next": "__end__",
+            }
+
+        workflow.add_node("conversation_handler", conversation_handler)
+
         # Add nodes for main components
         workflow.add_node("supervisor", self.main_agent._create_supervisor_node())
 
-        # Add tool nodes
+        # Add tool nodes and edges
         for tool in self.tools:
             workflow.add_node(tool.name, self.main_agent._create_tool_node(tool))
             workflow.add_edge("supervisor", tool.name)
 
         # Add edges
         workflow.add_edge(START, "supervisor")
+        workflow.add_edge("supervisor", "conversation_handler")
+        workflow.add_edge("conversation_handler", "__end__")
+        for tool in self.tools:
+            workflow.add_edge(tool.name, "__end__")
+
+        # Set entry point
+        workflow.set_entry_point("supervisor")
 
         return workflow.compile()
 
