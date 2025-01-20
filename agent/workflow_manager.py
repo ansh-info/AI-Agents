@@ -100,8 +100,8 @@ class ResearchWorkflowManager:
             # Add message to state
             self.current_state.add_message("user", message)
 
-            # Process through workflow graph
-            result = await self.graph.arun(
+            # Change from arun to ainvoke
+            result = await self.graph.ainvoke(
                 {"messages": self.current_state.memory.messages}
             )
 

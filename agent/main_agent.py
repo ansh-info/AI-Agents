@@ -208,7 +208,8 @@ What would you like to explore?""",
             print("[DEBUG] MainAgent processing request")
             messages_state = {"messages": state.memory.messages, "current_state": state}
 
-            result = await self.graph.arun(messages_state)
+            # Change from arun to ainvoke
+            result = await self.graph.ainvoke(messages_state)
 
             state.memory.messages = result["messages"]
             state.status = AgentStatus.SUCCESS
