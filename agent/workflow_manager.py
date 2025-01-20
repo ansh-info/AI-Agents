@@ -16,7 +16,6 @@ class ResearchWorkflowManager:
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize the workflow manager with main agent and tools"""
-
         # Initialize tools - currently only semantic scholar
         self.tools = [
             SemanticScholarTool(),
@@ -33,19 +32,19 @@ class ResearchWorkflowManager:
 
     def _create_workflow_graph(self) -> StateGraph:
         """Create the workflow graph structure"""
-
         # Initialize graph with message state
         workflow = StateGraph(MessagesState)
 
         # Add nodes for main components
-        workflow.add_node("start", self._start_node)
-        workflow.add_node("main_agent", self._main_agent_node)
-        workflow.add_node("update_state", self._update_state_node)
+        workflow.add_node("supervisor", self.main_agent._create_supervisor_node())
 
-        # Define graph edges - Add START edge first
-        workflow.add_edge(START, "start")  # Add this line
-        workflow.add_edge("start", "main_agent")
-        workflow.add_edge("main_agent", "update_state")
+        # Add tool nodes
+        for tool in self.tools:
+            workflow.add_node(tool.name, self.main_agent._create_tool_node(tool))
+            workflow.add_edge("supervisor", tool.name)
+
+        # Add edges
+        workflow.add_edge(START, "supervisor")
 
         return workflow.compile()
 
@@ -100,13 +99,16 @@ class ResearchWorkflowManager:
             # Add message to state
             self.current_state.add_message("user", message)
 
-            # Change from arun to ainvoke
+            # Process through graph
             result = await self.graph.ainvoke(
-                {"messages": self.current_state.memory.messages}
+                {"messages": [{"role": "user", "content": message}]}
             )
 
-            # Update state with results
-            self.current_state.memory.messages = result["messages"]
+            # Update state with response
+            if isinstance(result, dict) and "messages" in result:
+                for msg in result["messages"]:
+                    if msg["role"] == "assistant":
+                        self.current_state.add_message("system", msg["content"])
 
             return self.current_state
 
