@@ -1,20 +1,18 @@
-import asyncio
 import json
-import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from langgraph.graph import END, StateGraph
-
-from agent.workflow_graph import WorkflowGraph
 from agent.workflow_manager import ResearchWorkflowManager
 from clients.ollama_client import OllamaClient
-from clients.ollama_enhanced import EnhancedOllamaClient
-from clients.semantic_scholar_client import (PaperMetadata, SearchFilters,
-                                             SemanticScholarClient)
-from state.agent_state import (AgentState, AgentStatus, ConversationMemory,
-                               PaperContext, SearchContext)
+from clients.semantic_scholar_client import (
+    PaperMetadata,
+    SearchFilters,
+    SemanticScholarClient,
+)
+from state.agent_state import (
+    AgentState,
+    AgentStatus,
+)
 
 
 class CommandParser:
@@ -42,7 +40,7 @@ class CommandParser:
             any(trigger in command_lower for trigger in conversation_triggers)
             or len(command_lower.split()) < 4
         ):
-            print(f"[DEBUG] Detected conversation intent")
+            print("[DEBUG] Detected conversation intent")
             return {
                 "intent": "conversation",
                 "query": command,
@@ -103,32 +101,6 @@ class CommandParser:
         return {"intent": "conversation", "query": command}
 
     @staticmethod
-    def _clean_search_query(query: str) -> str:
-        """Clean search query for proper searching"""
-        clean_phrases = [
-            "can you search for papers on",
-            "can you search for papers about",
-            "can you search for",
-            "can you search",
-            "search for papers on",
-            "search for papers about",
-            "search for papers",
-            "search for",
-            "papers on",
-            "papers about",
-            "can you",
-            "papers",
-            "search",
-        ]
-
-        cleaned = query.lower()
-        for phrase in sorted(clean_phrases, key=len, reverse=True):
-            cleaned = cleaned.replace(phrase, "")
-        cleaned = " ".join(cleaned.split())
-        print(f"[DEBUG] Cleaned query result: {cleaned}")
-        return cleaned
-
-    @staticmethod
     def _extract_paper_reference(command: str) -> str:
         """Extract paper reference from command"""
         words = command.lower().split()
@@ -170,7 +142,7 @@ class ConversationAgent:
     ):
         """Generate response with enhanced context handling"""
         try:
-            print(f"\n[DEBUG] Generating response")
+            print("\n[DEBUG] Generating response")
             print(f"[DEBUG] Prompt: {prompt[:200]}...")
             if context:
                 print(f"[DEBUG] Context: {context[:200]}...")
