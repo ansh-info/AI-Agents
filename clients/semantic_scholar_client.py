@@ -1,8 +1,7 @@
 import asyncio
 import os
 import time
-from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlencode
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 from pydantic import BaseModel, Field, validator
@@ -110,26 +109,24 @@ class SearchResults(BaseModel):
 
 
 class SemanticScholarClient:
-    """Enhanced client for Semantic Scholar Academic Graph API"""
+    """Enhanced client for Semantic Scholar Academic Graph API with rate limiting"""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: str = "https://api.semanticscholar.org/graph/v1",
-        max_retries: int = 3,
-        timeout: int = 30,
         requests_per_minute: int = 100,
+        max_retries: int = 3,
     ):
-        """Initialize the client with enhanced configuration"""
+        """Initialize the client with enhanced rate limiting"""
         self.base_url = base_url
         self.api_key = api_key or os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-        self.max_retries = max_retries
-        self.timeout = timeout
 
         # Rate limiting configuration
         self.requests_per_minute = requests_per_minute
-        self.last_request_time = 0
-        self.min_request_interval = 60.0 / requests_per_minute
+        self.request_window = 60  # seconds
+        self.request_timestamps = []
+        self.max_retries = max_retries
 
         # Initialize headers
         self.headers = {
@@ -139,21 +136,27 @@ class SemanticScholarClient:
         if self.api_key:
             self.headers["x-api-key"] = self.api_key
 
-    async def _wait_for_rate_limit(self):
-        """Enhanced rate limiting with better timing"""
+    async def _check_rate_limit(self) -> bool:
+        """Check if we're within rate limits"""
         current_time = time.time()
-        time_since_last_request = current_time - self.last_request_time
+        # Remove timestamps older than our window
+        self.request_timestamps = [
+            ts
+            for ts in self.request_timestamps
+            if ts > current_time - self.request_window
+        ]
+        return len(self.request_timestamps) < self.requests_per_minute
 
-        if time_since_last_request < self.min_request_interval:
-            wait_time = self.min_request_interval - time_since_last_request
-            await asyncio.sleep(wait_time)
-
-        self.last_request_time = time.time()
+    async def _wait_for_rate_limit(self):
+        """Wait until we're allowed to make another request"""
+        while not await self._check_rate_limit():
+            await asyncio.sleep(1)
+        self.request_timestamps.append(time.time())
 
     async def search_papers(
         self, query: str, filters: Optional[SearchFilters] = None, limit: int = 10
     ) -> SearchResults:
-        """Perform paper search with enhanced error handling"""
+        """Perform paper search with enhanced rate limiting and retries"""
         try:
             # Clean query
             clean_query = query.replace("?", "").strip()
@@ -164,80 +167,52 @@ class SemanticScholarClient:
             params = {
                 "query": clean_query,
                 "offset": 0,
-                "limit": limit,
+                "limit": min(limit, 10),  # Ensure limit doesn't exceed 10
+                "fields": "paperId,title,abstract,year,authors,citationCount,url",
             }
-
-            # Add any fields parameter if needed
-            fields = [
-                "paperId",
-                "title",
-                "abstract",
-                "year",
-                "authors",
-                "citationCount",
-                "url",
-            ]
-            params["fields"] = ",".join(fields)
 
             # Add filters if provided
             if filters:
                 params.update(filters.to_params())
 
-            # Remove any None values
-            params = {k: v for k, v in params.items() if v is not None}
-
             print(f"[DEBUG] Making request with params: {params}")
 
-            async with aiohttp.ClientSession(headers=self.headers) as session:
-                url = f"{self.base_url}/paper/search"
-                async with session.get(
-                    url, params=params, timeout=self.timeout
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"API error ({response.status}): {error_text}")
+            # Implement retry logic with exponential backoff
+            for attempt in range(self.max_retries):
+                try:
+                    # Wait for rate limit
+                    await self._wait_for_rate_limit()
 
-                    data = await response.json()
-                    if not isinstance(data, dict):
-                        raise ValueError(f"Invalid response format: {data}")
+                    async with aiohttp.ClientSession(headers=self.headers) as session:
+                        async with session.get(
+                            f"{self.base_url}/paper/search", params=params, timeout=30
+                        ) as response:
+                            if response.status == 429:
+                                wait_time = 2**attempt  # Exponential backoff
+                                print(
+                                    f"[DEBUG] Rate limited, waiting {wait_time} seconds..."
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
 
-                    papers = []
-                    for paper_data in data.get("data", []):
-                        if not paper_data:
-                            continue
-
-                        # Safely extract author information
-                        authors = []
-                        for author in paper_data.get("authors", []):
-                            if author and isinstance(author, dict):
-                                authors.append(
-                                    Author(
-                                        authorId=author.get("authorId"),
-                                        name=author.get("name", "Unknown Author"),
-                                        url=author.get("url"),
-                                        affiliations=author.get("affiliations", []),
-                                    )
+                            if response.status != 200:
+                                error_text = await response.text()
+                                raise Exception(
+                                    f"API error ({response.status}): {error_text}"
                                 )
 
-                        # Create paper metadata with safe defaults
-                        paper = PaperMetadata(
-                            paperId=paper_data.get("paperId", ""),
-                            title=paper_data.get("title", "Untitled Paper"),
-                            abstract=paper_data.get("abstract"),
-                            year=paper_data.get("year"),
-                            authors=authors,
-                            citations=paper_data.get("citationCount", 0),
-                            references=paper_data.get("referenceCount", 0),
-                            url=paper_data.get("url"),
-                        )
-                        papers.append(paper)
+                            data = await response.json()
+                            return self._process_search_results(data)
 
-                    return SearchResults(
-                        total=data.get("total", 0),
-                        offset=data.get("offset", 0),
-                        papers=papers,
-                        query_time=0.0,
-                    )
+                except aiohttp.ClientError as e:
+                    if attempt == self.max_retries - 1:
+                        raise Exception(
+                            f"Network error after {self.max_retries} retries: {str(e)}"
+                        )
+                    wait_time = 2**attempt
+                    await asyncio.sleep(wait_time)
+
+            raise Exception("Max retries exceeded")
 
         except Exception as e:
             print(f"Search error: {str(e)}")
@@ -305,9 +280,53 @@ class SemanticScholarClient:
         except Exception as e:
             raise Exception(f"Error getting paper details: {str(e)}")
 
+    def _process_search_results(self, data: dict) -> SearchResults:
+        """Process search results with error handling"""
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid response format: {data}")
+
+        papers = []
+        for paper_data in data.get("data", []):
+            if not paper_data:
+                continue
+
+            # Safely extract author information
+            authors = []
+            for author in paper_data.get("authors", []):
+                if author and isinstance(author, dict):
+                    authors.append(
+                        Author(
+                            authorId=author.get("authorId"),
+                            name=author.get("name", "Unknown Author"),
+                            url=author.get("url"),
+                            affiliations=author.get("affiliations", []),
+                        )
+                    )
+
+            # Create paper metadata with safe defaults
+            paper = PaperMetadata(
+                paperId=paper_data.get("paperId", ""),
+                title=paper_data.get("title", "Untitled Paper"),
+                abstract=paper_data.get("abstract"),
+                year=paper_data.get("year"),
+                authors=authors,
+                citations=paper_data.get("citationCount", 0),
+                references=paper_data.get("referenceCount", 0),
+                url=paper_data.get("url"),
+            )
+            papers.append(paper)
+
+        return SearchResults(
+            total=data.get("total", 0),
+            offset=data.get("offset", 0),
+            papers=papers,
+            query_time=time.time(),
+        )
+
     async def check_api_status(self) -> bool:
         """Check if the API is available and responding"""
         try:
+            await self._wait_for_rate_limit()
             async with aiohttp.ClientSession(headers=self.headers) as session:
                 async with session.get(
                     f"{self.base_url}/paper/search",
