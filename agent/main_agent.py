@@ -84,13 +84,21 @@ What would you like to explore?""",
         async def supervisor(state: MessagesState) -> Dict:
             print("[DEBUG] MainAgent: Processing new message in supervisor")
 
-            messages = state["messages"]
-            current_state = state.get("current_state", AgentState())
+            # Ensure we have messages and they're properly formatted
+            if not state.get("messages"):
+                return {"next": "__end__"}
 
-            # Check if this is a conversation message first
-            last_message = messages[-1].content
+            last_message = state["messages"][-1]
+            # Convert message to string if it's a Message object
+            message_content = (
+                last_message.content
+                if hasattr(last_message, "content")
+                else str(last_message)
+            )
+
+            # Check for conversation first
             if any(
-                trigger in last_message.lower()
+                trigger in message_content.lower()
                 for trigger in [
                     "hi",
                     "hello",
@@ -100,26 +108,41 @@ What would you like to explore?""",
                     "goodbye",
                 ]
             ):
-                response = self._handle_conversation(last_message)
+                response = self._handle_conversation(message_content)
                 return {
-                    "messages": messages + [HumanMessage(content=response)],
+                    "messages": state["messages"]
+                    + [{"role": "assistant", "content": response}],
                     "next": "__end__",
                 }
 
             # Tool selection for research tasks
-            context = self._format_context(messages)
-            state_summary = self._format_state(current_state)
+            context = self._format_context(state["messages"])
+            current_state = state.get("current_state", AgentState())
 
-            prompt = self.SYSTEM_PROMPT.format(context=context, state=state_summary)
-
-            response = await self.llm.generate(
-                prompt=messages[-1].content, system_prompt=prompt
+            prompt = self.SYSTEM_PROMPT.format(
+                context=context, state=self._format_state(current_state)
             )
 
-            selected_tool = self._parse_tool_selection(response)
-            print(f"[DEBUG] Selected tool: {selected_tool}")
-
-            return {"next": selected_tool}
+            # Get tool decision
+            try:
+                response = await self.llm.generate(
+                    prompt=message_content, system_prompt=prompt
+                )
+                selected_tool = self._parse_tool_selection(response)
+                print(f"[DEBUG] Selected tool: {selected_tool}")
+                return {"next": selected_tool}
+            except Exception as e:
+                print(f"[DEBUG] Error in supervisor: {str(e)}")
+                return {
+                    "messages": state["messages"]
+                    + [
+                        {
+                            "role": "assistant",
+                            "content": f"I encountered an error: {str(e)}",
+                        }
+                    ],
+                    "next": "__end__",
+                }
 
         return supervisor
 
