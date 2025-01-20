@@ -1,7 +1,11 @@
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage
-from langgraph.graph import MessagesState, StateGraph
+from langgraph.graph import (
+    START,  # Updated import
+    MessagesState,
+    StateGraph,
+)
 
 from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
@@ -155,12 +159,11 @@ What would you like to explore?""",
         # Add tool nodes and edges
         for tool in self.tools:
             workflow.add_node(tool.name, self._create_tool_node(tool))
-            # Add edges individually
-            workflow.add_edge("supervisor", tool.name)  # From supervisor to tool
-            workflow.add_edge(tool.name, "supervisor")  # From tool back to supervisor
+            workflow.add_edge("supervisor", tool.name)
+            workflow.add_edge(tool.name, "supervisor")
 
-        # Add START edge to supervisor
-        workflow.add_edge("START", "supervisor")  # Add this line
+        # Add START edge correctly using the imported constant
+        workflow.add_edge(START, "supervisor")
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
