@@ -78,73 +78,76 @@ What would you like to explore?""",
         self.graph = self._create_graph()
         print(f"[DEBUG] MainAgent initialized with {len(tools)} tools")
 
-    def _create_supervisor_node(self):
-        """Create the supervisor node that routes to tools."""
 
-        async def supervisor(state: MessagesState) -> Dict:
-            print("[DEBUG] MainAgent: Processing new message in supervisor")
+async def _create_supervisor_node(self):
+    """Create the supervisor node that routes to tools."""
 
-            # Ensure we have messages and they're properly formatted
-            if not state.get("messages"):
-                return {"next": "__end__"}
+    async def supervisor(state: MessagesState) -> Dict:
+        print("[DEBUG] MainAgent: Processing new message in supervisor")
 
-            last_message = state["messages"][-1]
-            # Convert message to string if it's a Message object
-            message_content = (
-                last_message.content
-                if hasattr(last_message, "content")
-                else str(last_message)
-            )
+        # Ensure we have messages and they're properly formatted
+        if not state.get("messages"):
+            return {"next": "__end__"}
 
-            # Check for conversation first
-            if any(
-                trigger in message_content.lower()
-                for trigger in [
-                    "hi",
-                    "hello",
-                    "hey",
-                    "what can you do",
-                    "bye",
-                    "goodbye",
-                ]
-            ):
-                response = self._handle_conversation(message_content)
-                return {
-                    "messages": state["messages"]
-                    + [{"role": "assistant", "content": response}],
-                    "next": "__end__",
+        last_message = state["messages"][-1]
+        message_content = (
+            last_message.content
+            if hasattr(last_message, "content")
+            else str(last_message)
+        )
+
+        # First check for simple conversation patterns to avoid unnecessary API calls
+        message_lower = message_content.lower()
+        if any(word in message_lower for word in ["hi", "hello", "hey"]):
+            return {
+                "messages": state["messages"]
+                + [{"role": "assistant", "content": self.CHAT_RESPONSES["greeting"]}],
+                "next": "__end__",
+            }
+        elif "what can you do" in message_lower:
+            return {
+                "messages": state["messages"]
+                + [
+                    {
+                        "role": "assistant",
+                        "content": self.CHAT_RESPONSES["capabilities"],
+                    }
+                ],
+                "next": "__end__",
+            }
+        elif any(word in message_lower for word in ["bye", "goodbye"]):
+            return {
+                "messages": state["messages"]
+                + [{"role": "assistant", "content": self.CHAT_RESPONSES["farewell"]}],
+                "next": "__end__",
+            }
+
+        # If it's not a simple conversation, process as a research request
+        # Check if it's likely a search request
+        search_indicators = [
+            "find",
+            "search",
+            "look for",
+            "papers about",
+            "papers on",
+            "research about",
+        ]
+        if any(indicator in message_lower for indicator in search_indicators):
+            return {"next": "semantic_scholar_tool"}
+
+        # If no clear intent is found, handle as general conversation
+        return {
+            "messages": state["messages"]
+            + [
+                {
+                    "role": "assistant",
+                    "content": "I'm your research assistant. Would you like to search for papers about a specific topic?",
                 }
+            ],
+            "next": "__end__",
+        }
 
-            # Tool selection for research tasks
-            context = self._format_context(state["messages"])
-            current_state = state.get("current_state", AgentState())
-
-            prompt = self.SYSTEM_PROMPT.format(
-                context=context, state=self._format_state(current_state)
-            )
-
-            # Get tool decision
-            try:
-                response = await self.llm.generate(
-                    prompt=message_content, system_prompt=prompt
-                )
-                selected_tool = self._parse_tool_selection(response)
-                print(f"[DEBUG] Selected tool: {selected_tool}")
-                return {"next": selected_tool}
-            except Exception as e:
-                print(f"[DEBUG] Error in supervisor: {str(e)}")
-                return {
-                    "messages": state["messages"]
-                    + [
-                        {
-                            "role": "assistant",
-                            "content": f"I encountered an error: {str(e)}",
-                        }
-                    ],
-                    "next": "__end__",
-                }
-
-        return supervisor
+    return supervisor
 
     def _create_tool_node(self, tool: Any):
         """Create a node for a specific tool."""
