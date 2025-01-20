@@ -7,9 +7,6 @@ from typing import Any, Dict, List, Optional
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-
 from langgraph.graph import END, StateGraph
 
 from clients.ollama_client import OllamaClient
@@ -458,7 +455,7 @@ class WorkflowGraph:
             prompt = f"""Based on this academic paper:
 {paper_context}
 
-Question: {state.memory.messages[-1]['content']}
+Question: {state.memory.messages[-1]["content"]}
 
 Please provide a clear response that addresses the question while considering:
 1. The paper's main findings
@@ -640,43 +637,6 @@ Please provide a structured response that:
                 return paper
 
         return None
-
-    def _clean_search_query(self, query: str) -> str:
-        """Clean search query for more accurate results"""
-        # Remove common prefixes
-        prefixes_to_remove = [
-            "can you search for papers on",
-            "can you search for papers about",
-            "can you search for papers",
-            "can you search for",
-            "can you search",
-            "search for papers on",
-            "search for papers about",
-            "search for papers",
-            "search for",
-            "papers on",
-            "papers about",
-            "papers",
-            "search",
-        ]
-
-        query = query.lower().strip()
-
-        # Remove each prefix if found at start of query
-        for prefix in sorted(prefixes_to_remove, key=len, reverse=True):
-            if query.startswith(prefix):
-                query = query[len(prefix) :].strip()
-                break
-
-        # Clean up the query
-        query = query.replace("?", "").strip()
-        query = " ".join(filter(None, query.split()))  # Remove empty spaces
-
-        print(f"[DEBUG] Query cleaning:")
-        print(f"  Original: '{query}'")
-        print(f"  Cleaned: '{query}'")
-
-        return query
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""

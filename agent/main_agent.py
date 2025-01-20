@@ -1,6 +1,6 @@
+import asyncio
 from typing import Any, Dict, List
 
-from langchain_core.messages import HumanMessage
 from langgraph.graph import (
     START,  # Updated import
     MessagesState,
@@ -81,92 +81,105 @@ What would you like to explore?""",
     def _create_supervisor_node(self):
         """Create the supervisor node that routes to tools."""
 
-        async def supervisor(state: MessagesState) -> Dict:
+        def supervisor(state: MessagesState) -> Dict:
             print("[DEBUG] MainAgent: Processing new message in supervisor")
 
-            # Ensure we have messages and they're properly formatted
             if not state.get("messages"):
                 return {"next": "__end__"}
 
+            # Extract message content
             last_message = state["messages"][-1]
-            # Convert message to string if it's a Message object
-            message_content = (
-                last_message.content
-                if hasattr(last_message, "content")
-                else str(last_message)
-            )
+            if hasattr(last_message, "content"):
+                message_content = last_message.content
+            else:
+                message_content = last_message.get("content", "")
 
-            # Check for conversation first
-            if any(
-                trigger in message_content.lower()
-                for trigger in [
-                    "hi",
-                    "hello",
-                    "hey",
-                    "what can you do",
-                    "bye",
-                    "goodbye",
-                ]
-            ):
-                response = self._handle_conversation(message_content)
+            message_lower = message_content.lower()
+
+            # Handle basic conversations
+            if any(word in message_lower for word in ["hi", "hello", "hey"]):
+                print("[DEBUG] Handling greeting - routing to conversation")
                 return {
-                    "messages": state["messages"]
-                    + [{"role": "assistant", "content": response}],
-                    "next": "__end__",
-                }
-
-            # Tool selection for research tasks
-            context = self._format_context(state["messages"])
-            current_state = state.get("current_state", AgentState())
-
-            prompt = self.SYSTEM_PROMPT.format(
-                context=context, state=self._format_state(current_state)
-            )
-
-            # Get tool decision
-            try:
-                response = await self.llm.generate(
-                    prompt=message_content, system_prompt=prompt
-                )
-                selected_tool = self._parse_tool_selection(response)
-                print(f"[DEBUG] Selected tool: {selected_tool}")
-                return {"next": selected_tool}
-            except Exception as e:
-                print(f"[DEBUG] Error in supervisor: {str(e)}")
-                return {
-                    "messages": state["messages"]
-                    + [
+                    "messages": [
+                        *state["messages"],
                         {
                             "role": "assistant",
-                            "content": f"I encountered an error: {str(e)}",
-                        }
+                            "content": "Hello! I'm your research assistant. How can I help you today?",
+                        },
                     ],
-                    "next": "__end__",
+                    "next": "conversation",
                 }
+
+            # Handle search intent
+            search_indicators = [
+                "find",
+                "search",
+                "look for",
+                "papers about",
+                "papers on",
+                "research on",
+            ]
+            if any(indicator in message_lower for indicator in search_indicators):
+                print(
+                    "[DEBUG] Detected search intent, routing to semantic_scholar_tool"
+                )
+                return {"messages": state["messages"], "next": "semantic_scholar_tool"}
+
+            # Default conversation handling
+            print("[DEBUG] Handling general conversation - routing to conversation")
+            return {
+                "messages": [
+                    *state["messages"],
+                    {
+                        "role": "assistant",
+                        "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
+                    },
+                ],
+                "next": "conversation",
+            }
 
         return supervisor
 
     def _create_tool_node(self, tool: Any):
         """Create a node for a specific tool."""
 
-        async def tool_node(state: MessagesState) -> Dict:
+        def tool_node(state: MessagesState) -> Dict:
             try:
                 print(f"[DEBUG] Executing tool: {tool.name}")
-                result = await tool.arun(state["messages"][-1].content)
+
+                # Extract message content safely
+                last_message = state["messages"][-1]
+                if isinstance(last_message, dict):
+                    message_content = last_message.get("content", "")
+                else:
+                    message_content = (
+                        last_message.content
+                        if hasattr(last_message, "content")
+                        else str(last_message)
+                    )
+
+                # Create event loop for async operation
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(tool.arun(message_content))
+                loop.close()
+
                 print(
                     f"[DEBUG] Tool execution successful, result length: {len(result)}"
                 )
 
                 return {
-                    "messages": state["messages"] + [HumanMessage(content=result)],
-                    "next": "supervisor",
+                    "messages": state["messages"]
+                    + [{"role": "assistant", "content": result}],
+                    "next": "__end__",
                 }
             except Exception as e:
                 error_msg = f"Error executing {tool.name}: {str(e)}"
                 print(f"[DEBUG] {error_msg}")
                 return {
-                    "messages": state["messages"] + [HumanMessage(content=error_msg)],
-                    "next": "supervisor",
+                    "messages": state["messages"]
+                    + [{"role": "assistant", "content": error_msg}],
+                    "next": "__end__",
                 }
 
         return tool_node
@@ -179,14 +192,44 @@ What would you like to explore?""",
         # Add supervisor node
         workflow.add_node("supervisor", self._create_supervisor_node())
 
-        # Add tool nodes and edges
+        # Add tool nodes
         for tool in self.tools:
             workflow.add_node(tool.name, self._create_tool_node(tool))
+            # Add tool edges only from supervisor
             workflow.add_edge("supervisor", tool.name)
-            workflow.add_edge(tool.name, "supervisor")
 
-        # Add START edge correctly using the imported constant
+    # Add conversation handler for non-tool responses
+    def conversation_handler(state: MessagesState) -> Dict:
+        print("[DEBUG] Processing conversation response")
+        return {
+            "messages": state["messages"],
+            "next": "__end__"
+        }
+    
+    workflow.add_node("conversation", conversation_handler)
+
+    # Add edges with clear routing
+    workflow.add_edge(START, "supervisor")
+    workflow.add_edge("supervisor", "semantic_scholar_tool")
+    workflow.add_edge("supervisor", "conversation")
+    workflow.add_edge("semantic_scholar_tool", "__end__")
+    workflow.add_edge("conversation", "__end__")
+
+    print("[DEBUG] Workflow graph created")
+    return workflow.compile()
+
+        # Add final node for conversation responses
+        def conversation_node(state: MessagesState) -> Dict:
+            return {"messages": state["messages"], "next": "__end__"}
+
+        workflow.add_node("conversation", conversation_node)
+
+        # Add edges
         workflow.add_edge(START, "supervisor")
+        workflow.add_edge("supervisor", "conversation")  # Direct path for conversations
+        workflow.add_edge(
+            "semantic_scholar_tool", "__end__"
+        )  # Tool goes directly to end
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
@@ -229,19 +272,42 @@ What would you like to explore?""",
         """Process a user request using the workflow graph."""
         try:
             print("[DEBUG] MainAgent processing request")
-            messages_state = {"messages": state.memory.messages, "current_state": state}
 
-            # Change from arun to ainvoke
+            # Convert messages to proper format
+            messages = []
+            for msg in state.memory.messages:
+                if isinstance(msg, dict):
+                    messages.append(msg)
+                else:
+                    messages.append(
+                        {
+                            "role": msg.role if hasattr(msg, "role") else "user",
+                            "content": msg.content
+                            if hasattr(msg, "content")
+                            else str(msg),
+                        }
+                    )
+
+            messages_state = {"messages": messages}
+            print(f"[DEBUG] Processing with messages state: {messages_state}")
+
             result = await self.graph.ainvoke(messages_state)
 
-            state.memory.messages = result["messages"]
-            state.status = AgentStatus.SUCCESS
+            if isinstance(result, dict) and "messages" in result:
+                for msg in result["messages"]:
+                    if isinstance(msg, dict) and msg.get("role") == "assistant":
+                        state.add_message("system", msg["content"])
+                    elif hasattr(msg, "content"):
+                        state.add_message("system", msg.content)
 
-            print("[DEBUG] Request processed successfully")
+            state.status = AgentStatus.SUCCESS
             return state
 
         except Exception as e:
             print(f"[DEBUG] Error in process_request: {str(e)}")
             state.status = AgentStatus.ERROR
             state.error_message = str(e)
+            state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
             return state

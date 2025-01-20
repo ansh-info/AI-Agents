@@ -16,7 +16,6 @@ class ResearchWorkflowManager:
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize the workflow manager with main agent and tools"""
-
         # Initialize tools - currently only semantic scholar
         self.tools = [
             SemanticScholarTool(),
@@ -33,19 +32,59 @@ class ResearchWorkflowManager:
 
     def _create_workflow_graph(self) -> StateGraph:
         """Create the workflow graph structure"""
-
         # Initialize graph with message state
         workflow = StateGraph(MessagesState)
 
         # Add nodes for main components
-        workflow.add_node("start", self._start_node)
-        workflow.add_node("main_agent", self._main_agent_node)
-        workflow.add_node("update_state", self._update_state_node)
+        workflow.add_node("supervisor", self.main_agent._create_supervisor_node())
 
-        # Define graph edges - Add START edge first
-        workflow.add_edge(START, "start")  # Add this line
-        workflow.add_edge("start", "main_agent")
-        workflow.add_edge("main_agent", "update_state")
+        # Add tool nodes
+        for tool in self.tools:
+            workflow.add_node(tool.name, self.main_agent._create_tool_node(tool))
+            workflow.add_edge("supervisor", tool.name)
+            workflow.add_edge(tool.name, "__end__")
+
+        # Add edges
+        workflow.add_edge(START, "supervisor")
+        workflow.add_edge(
+            "supervisor", "__end__"
+        )  # Direct path for basic conversations
+
+        return workflow.compile()
+
+        # Create conversation handler node
+        def conversation_handler(state: MessagesState) -> Dict:
+            """Handle basic conversations"""
+            return {
+                "messages": state["messages"]
+                + [
+                    {
+                        "role": "assistant",
+                        "content": state["messages"][-1].get("assistant_response", ""),
+                    }
+                ],
+                "next": "__end__",
+            }
+
+        workflow.add_node("conversation_handler", conversation_handler)
+
+        # Add nodes for main components
+        workflow.add_node("supervisor", self.main_agent._create_supervisor_node())
+
+        # Add tool nodes and edges
+        for tool in self.tools:
+            workflow.add_node(tool.name, self.main_agent._create_tool_node(tool))
+            workflow.add_edge("supervisor", tool.name)
+
+        # Add edges
+        workflow.add_edge(START, "supervisor")
+        workflow.add_edge("supervisor", "conversation_handler")
+        workflow.add_edge("conversation_handler", "__end__")
+        for tool in self.tools:
+            workflow.add_edge(tool.name, "__end__")
+
+        # Set entry point
+        workflow.set_entry_point("supervisor")
 
         return workflow.compile()
 
@@ -100,14 +139,28 @@ class ResearchWorkflowManager:
             # Add message to state
             self.current_state.add_message("user", message)
 
-            # Change from arun to ainvoke
-            result = await self.graph.ainvoke(
-                {"messages": self.current_state.memory.messages}
-            )
+            # Process through graph
+            messages_state = {"messages": [{"role": "user", "content": message}]}
 
-            # Update state with results
-            self.current_state.memory.messages = result["messages"]
+            result = await self.graph.ainvoke(messages_state)
 
+            # Update state with response
+            if isinstance(result, dict) and "messages" in result:
+                # Get the last assistant message
+                assistant_messages = [
+                    msg
+                    for msg in result["messages"]
+                    if isinstance(msg, dict) and msg.get("role") == "assistant"
+                ]
+                if assistant_messages:
+                    # Get the last assistant message
+                    last_assistant_message = assistant_messages[-1]
+                    self.current_state.add_message(
+                        "system", last_assistant_message["content"]
+                    )
+                    print(f"Response: {last_assistant_message['content']}")
+
+            self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
 
         except Exception as e:
