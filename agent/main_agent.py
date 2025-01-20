@@ -79,10 +79,10 @@ What would you like to explore?""",
         print(f"[DEBUG] MainAgent initialized with {len(tools)} tools")
 
 
-async def _create_supervisor_node(self):
+def _create_supervisor_node(self):
     """Create the supervisor node that routes to tools."""
 
-    async def supervisor(state: MessagesState) -> Dict:
+    def supervisor(state: MessagesState) -> Dict:
         print("[DEBUG] MainAgent: Processing new message in supervisor")
 
         # Ensure we have messages and they're properly formatted
