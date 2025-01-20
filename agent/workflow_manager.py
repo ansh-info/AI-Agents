@@ -139,23 +139,26 @@ class ResearchWorkflowManager:
             # Add message to state
             self.current_state.add_message("user", message)
 
-            # Convert to format that LangGraph expects
+            # Process through graph
             messages_state = {"messages": [{"role": "user", "content": message}]}
 
-            # Process through graph
             result = await self.graph.ainvoke(messages_state)
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
+                # Get the last assistant message
                 assistant_messages = [
                     msg
                     for msg in result["messages"]
                     if isinstance(msg, dict) and msg.get("role") == "assistant"
                 ]
                 if assistant_messages:
+                    # Get the last assistant message
+                    last_assistant_message = assistant_messages[-1]
                     self.current_state.add_message(
-                        "system", assistant_messages[-1]["content"]
+                        "system", last_assistant_message["content"]
                     )
+                    print(f"Response: {last_assistant_message['content']}")
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
