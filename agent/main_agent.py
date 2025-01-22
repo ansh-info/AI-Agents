@@ -71,7 +71,7 @@ What would you like to explore?""",
     }
 
     def __init__(self, tools: List[Any]):
-        """Initialize the agent with tools and model."""
+        """Initialize the agent with tools."""
         print("[DEBUG] Initializing MainAgent")
         self.tools = tools
         self.llm = OllamaClient(model_name="llama3.2:1b-instruct-q3_K_M")
@@ -80,50 +80,41 @@ What would you like to explore?""",
 
     def _create_supervisor_node(self):
         """Create the supervisor node that routes to tools."""
-        
+
         def supervisor(state: MessagesState) -> Dict:
-            print(f"[DEBUG] MainAgent: Processing new message in supervisor")
+            print("[DEBUG] MainAgent: Processing new message in supervisor")
 
             if not state.get("messages"):
                 return {"next": "__end__"}
 
-            # Extract message content
-            last_message = state["messages"][-1]
-            message_content = last_message.get("content", "") if isinstance(last_message, dict) else getattr(last_message, "content", "")
-            message_lower = message_content.lower()
+            message = state["messages"][-1]["content"].lower()
 
-            # Handle basic conversations (greetings etc.)
-            if any(word in message_lower for word in ["hi", "hello", "hey"]):
-                print("[DEBUG] Handling greeting - routing to conversation")
-                return {
-                    "messages": [
-                        *state["messages"],
-                        {
-                            "role": "assistant",
-                            "content": self.CHAT_RESPONSES["greeting"]
-                        }
-                    ],
-                    "next": "__end__"  # Changed from "conversation" to "__end__"
-                }
+            # Check for conversation patterns first
+            if (
+                any(
+                    word in message for word in ["hi", "hello", "hey", "bye", "goodbye"]
+                )
+                or "what can you do" in message
+            ):
+                print("[DEBUG] Routing to conversation handler")
+                return {"messages": state["messages"], "next": "conversation"}
 
-            # Handle search intent
-            search_indicators = ["find", "search", "look for", "papers about", "papers on", "research on"]
-            if any(indicator in message_lower for indicator in search_indicators):
-                print("[DEBUG] Detected search intent, routing to semantic_scholar_tool")
+            # Check for search intent
+            search_indicators = [
+                "find",
+                "search",
+                "look for",
+                "papers about",
+                "papers on",
+                "research on",
+            ]
+            if any(indicator in message for indicator in search_indicators):
+                print("[DEBUG] Routing to semantic_scholar_tool")
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
-            # Default conversation handling
-            print("[DEBUG] Handling general conversation")
-            return {
-                "messages": [
-                    *state["messages"],
-                    {
-                        "role": "assistant",
-                        "content": self._handle_conversation(message_content)
-                    }
-                ],
-                "next": "__end__"  # Changed from "conversation" to "__end__"
-            }
+            # Default to conversation
+            print("[DEBUG] Default routing to conversation")
+            return {"messages": state["messages"], "next": "conversation"}
 
         return supervisor
 
@@ -176,47 +167,19 @@ What would you like to explore?""",
         print("[DEBUG] Creating workflow graph")
         workflow = StateGraph(MessagesState)
 
-        # Add supervisor node
+        # Add nodes
         workflow.add_node("supervisor", self._create_supervisor_node())
-
-        # Add tool nodes
-        for tool in self.tools:
-            workflow.add_node(tool.name, self._create_tool_node(tool))
-            # Add tool edges only from supervisor
-            workflow.add_edge("supervisor", tool.name)
-
-    # Add conversation handler for non-tool responses
-    def conversation_handler(state: MessagesState) -> Dict:
-        print("[DEBUG] Processing conversation response")
-        return {
-            "messages": state["messages"],
-            "next": "__end__"
-        }
-    
-    workflow.add_node("conversation", conversation_handler)
-
-    # Add edges with clear routing
-    workflow.add_edge(START, "supervisor")
-    workflow.add_edge("supervisor", "semantic_scholar_tool")
-    workflow.add_edge("supervisor", "conversation")
-    workflow.add_edge("semantic_scholar_tool", "__end__")
-    workflow.add_edge("conversation", "__end__")
-
-    print("[DEBUG] Workflow graph created")
-    return workflow.compile()
-
-        # Add final node for conversation responses
-        def conversation_node(state: MessagesState) -> Dict:
-            return {"messages": state["messages"], "next": "__end__"}
-
-        workflow.add_node("conversation", conversation_node)
+        workflow.add_node(
+            "semantic_scholar_tool", self._create_tool_node(self.tools[0])
+        )
+        workflow.add_node("conversation", self._handle_conversation)
 
         # Add edges
         workflow.add_edge(START, "supervisor")
-        workflow.add_edge("supervisor", "conversation")  # Direct path for conversations
-        workflow.add_edge(
-            "semantic_scholar_tool", "__end__"
-        )  # Tool goes directly to end
+        workflow.add_edge("supervisor", "semantic_scholar_tool")
+        workflow.add_edge("supervisor", "conversation")
+        workflow.add_edge("semantic_scholar_tool", "__end__")
+        workflow.add_edge("conversation", "__end__")
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
@@ -241,19 +204,27 @@ What would you like to explore?""",
         # For now, defaulting to semantic scholar for search queries
         return "semantic_scholar_tool"
 
-    def _handle_conversation(self, message: str) -> str:
+    def _handle_conversation(self, state: MessagesState) -> Dict:
         """Handle general conversation without tool invocation"""
-        print(f"[DEBUG] Handling conversation: {message}")
-        message_lower = message.lower()
+        print("[DEBUG] In conversation handler")
+        message = state["messages"][-1]["content"].lower()
 
-        if any(word in message_lower for word in ["hi", "hello", "hey"]):
-            return self.CHAT_RESPONSES["greeting"]
-        elif "what can you do" in message_lower:
-            return self.CHAT_RESPONSES["capabilities"]
-        elif any(word in message_lower for word in ["bye", "goodbye"]):
-            return self.CHAT_RESPONSES["farewell"]
+        if any(word in message for word in ["hi", "hello", "hey"]):
+            response = self.CHAT_RESPONSES["greeting"]
+        elif "what can you do" in message:
+            response = self.CHAT_RESPONSES["capabilities"]
+        elif any(word in message for word in ["bye", "goodbye"]):
+            response = self.CHAT_RESPONSES["farewell"]
         else:
-            return "I'm your research assistant. Would you like to search for papers about a specific topic?"
+            response = "I'm your research assistant. Would you like to search for papers about a specific topic?"
+
+        return {
+            "messages": [
+                *state["messages"],
+                {"role": "assistant", "content": response},
+            ],
+            "next": "__end__",
+        }
 
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
