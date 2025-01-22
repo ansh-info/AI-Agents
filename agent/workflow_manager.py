@@ -146,19 +146,15 @@ class ResearchWorkflowManager:
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
-                # Get the last assistant message
                 assistant_messages = [
                     msg
                     for msg in result["messages"]
                     if isinstance(msg, dict) and msg.get("role") == "assistant"
                 ]
                 if assistant_messages:
-                    # Get the last assistant message
-                    last_assistant_message = assistant_messages[-1]
-                    self.current_state.add_message(
-                        "system", last_assistant_message["content"]
-                    )
-                    print(f"Response: {last_assistant_message['content']}")
+                    last_message = assistant_messages[-1]
+                    self.current_state.add_message("system", last_message["content"])
+                    print(f"[DEBUG] Response: {last_message['content'][:100]}...")
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
