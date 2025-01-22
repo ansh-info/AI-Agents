@@ -3,16 +3,13 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 
 from agent.enhanced_workflow import EnhancedWorkflowManager
-from agent.workflow_manager import ResearchWorkflowManager
-from clients.ollama_client import OllamaClient
-from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, PaperContext
 
 # Set page config at the very start of the script
@@ -232,7 +229,7 @@ class DashboardApp:
                 authors = ", ".join(author.get("name", "") for author in paper.authors)
                 st.markdown(
                     f'<div class="paper-metadata">**Authors:** {authors}<br>'
-                    f'**Year:** {paper.year or "N/A"} | **Citations:** {paper.citations or 0}</div>',
+                    f"**Year:** {paper.year or 'N/A'} | **Citations:** {paper.citations or 0}</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -403,7 +400,6 @@ class DashboardApp:
                     message["role"] == "system"
                     and "# Search Results" in message["content"]
                 ):
-
                     # Split content into sections
                     sections = message["content"].split("\n## ")
 

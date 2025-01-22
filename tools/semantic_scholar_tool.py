@@ -82,7 +82,7 @@ class SemanticScholarTool(BaseTool):
         raise NotImplementedError("This tool only supports async execution")
 
     def _format_results(self, results) -> str:
-        """Format search results with logging"""
+        """Format search results with proper structure"""
         try:
             if not results.papers:
                 print("[DEBUG] No papers found in results")
@@ -94,8 +94,15 @@ class SemanticScholarTool(BaseTool):
             ]
 
             for i, paper in enumerate(results.papers, 1):
-                print(f"[DEBUG] Formatting paper {i}: {paper.title[:50]}...")
-                # Rest of your formatting code...
+                formatted_parts.extend(
+                    [
+                        f"\n{i}. {paper.title}",
+                        f"Authors: {', '.join(a.name for a in paper.authors)}",
+                        f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                        f"Abstract: {paper.abstract[:300] + '...' if paper.abstract and len(paper.abstract) > 300 else paper.abstract or 'No abstract available'}",
+                        f"URL: {paper.url or 'Not available'}\n",
+                    ]
+                )
 
             response = "\n".join(formatted_parts)
             print(f"[DEBUG] Formatted response created, length: {len(response)}")
