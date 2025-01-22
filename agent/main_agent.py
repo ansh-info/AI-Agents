@@ -80,23 +80,19 @@ What would you like to explore?""",
 
     def _create_supervisor_node(self):
         """Create the supervisor node that routes to tools."""
-
+        
         def supervisor(state: MessagesState) -> Dict:
-            print("[DEBUG] MainAgent: Processing new message in supervisor")
+            print(f"[DEBUG] MainAgent: Processing new message in supervisor")
 
             if not state.get("messages"):
                 return {"next": "__end__"}
 
             # Extract message content
             last_message = state["messages"][-1]
-            if hasattr(last_message, "content"):
-                message_content = last_message.content
-            else:
-                message_content = last_message.get("content", "")
-
+            message_content = last_message.get("content", "") if isinstance(last_message, dict) else getattr(last_message, "content", "")
             message_lower = message_content.lower()
 
-            # Handle basic conversations
+            # Handle basic conversations (greetings etc.)
             if any(word in message_lower for word in ["hi", "hello", "hey"]):
                 print("[DEBUG] Handling greeting - routing to conversation")
                 return {
@@ -104,38 +100,29 @@ What would you like to explore?""",
                         *state["messages"],
                         {
                             "role": "assistant",
-                            "content": "Hello! I'm your research assistant. How can I help you today?",
-                        },
+                            "content": self.CHAT_RESPONSES["greeting"]
+                        }
                     ],
-                    "next": "conversation",
+                    "next": "__end__"  # Changed from "conversation" to "__end__"
                 }
 
             # Handle search intent
-            search_indicators = [
-                "find",
-                "search",
-                "look for",
-                "papers about",
-                "papers on",
-                "research on",
-            ]
+            search_indicators = ["find", "search", "look for", "papers about", "papers on", "research on"]
             if any(indicator in message_lower for indicator in search_indicators):
-                print(
-                    "[DEBUG] Detected search intent, routing to semantic_scholar_tool"
-                )
+                print("[DEBUG] Detected search intent, routing to semantic_scholar_tool")
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
             # Default conversation handling
-            print("[DEBUG] Handling general conversation - routing to conversation")
+            print("[DEBUG] Handling general conversation")
             return {
                 "messages": [
                     *state["messages"],
                     {
                         "role": "assistant",
-                        "content": "I can help you search for and understand academic papers. Would you like to search for a specific topic?",
-                    },
+                        "content": self._handle_conversation(message_content)
+                    }
                 ],
-                "next": "conversation",
+                "next": "__end__"  # Changed from "conversation" to "__end__"
             }
 
         return supervisor
