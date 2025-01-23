@@ -136,7 +136,7 @@ class ResearchWorkflowManager:
         try:
             print(f"[DEBUG] Processing message: {message}")
 
-            # Add message to state
+            # Add user message to state
             self.current_state.add_message("user", message)
 
             # Process through graph with simple dict message
@@ -151,17 +151,15 @@ class ResearchWorkflowManager:
                     # Handle both AIMessage objects and dict messages
                     if hasattr(msg, "content"):  # AIMessage or similar
                         content = msg.content
-                        role = "system" if msg.type == "ai" else "user"
+                        if hasattr(msg, "type"):
+                            role = "system" if msg.type == "ai" else "user"
+                        else:
+                            role = "system"
                         self.current_state.add_message(role, content)
-                        print(
-                            f"[DEBUG] Added message from AIMessage: {content[:100]}..."
-                        )
-                    elif isinstance(msg, dict):
-                        if msg.get("role") == "assistant":
-                            self.current_state.add_message("system", msg["content"])
-                            print(
-                                f"[DEBUG] Added message from dict: {msg['content'][:100]}..."
-                            )
+                        print(f"[DEBUG] Added AI message: {content[:100]}...")
+                    elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                        self.current_state.add_message("system", msg["content"])
+                        print(f"[DEBUG] Added dict message: {msg['content'][:100]}...")
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
