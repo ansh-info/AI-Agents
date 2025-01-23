@@ -91,9 +91,9 @@ What would you like to explore?""",
             # Extract message content safely
             last_message = state["messages"][-1]
             message_content = (
-                last_message.get("content", "")
-                if isinstance(last_message, dict)
-                else str(last_message)
+                last_message.content
+                if hasattr(last_message, "content")
+                else last_message.get("content", "")
             )
             message_lower = message_content.lower()
             print(f"[DEBUG] Processing message content: {message_content}")
@@ -104,6 +104,7 @@ What would you like to explore?""",
                 for word in ["hi", "hello", "hey", "bye", "goodbye"]
             ):
                 print("[DEBUG] Handling greeting")
+                # Return greeting directly without tool invocation
                 return {
                     "messages": [
                         *state["messages"],
@@ -112,7 +113,7 @@ What would you like to explore?""",
                             "content": self.CHAT_RESPONSES["greeting"],
                         },
                     ],
-                    "next": "__end__",
+                    "next": "__end__",  # End directly without going to any tool
                 }
 
             # Check for search intent
@@ -128,7 +129,7 @@ What would you like to explore?""",
                 print("[DEBUG] Routing to semantic_scholar_tool")
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
-            # Default to conversation
+            # Default conversation handling
             print("[DEBUG] Handling general conversation")
             return {
                 "messages": [
