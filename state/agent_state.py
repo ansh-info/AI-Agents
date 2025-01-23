@@ -150,8 +150,6 @@ class ConversationMemory(BaseModel):
     focused_paper: Optional[PaperContext] = None
     paper_references: Dict[str, PaperContext] = Field(default_factory=dict)
     last_command: Optional[str] = None
-
-    # Enhanced context tracking
     context_history: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_topics: Set[str] = Field(default_factory=set)
     referenced_papers: Dict[str, int] = Field(default_factory=dict)
@@ -159,7 +157,7 @@ class ConversationMemory(BaseModel):
     def add_message(
         self, role: str, content: str, context: Optional[Dict[str, Any]] = None
     ):
-        """Add message with state tracking"""
+        """Add a message with enhanced context tracking"""
         timestamp = datetime.now()
         message = {
             "role": role,
@@ -168,13 +166,21 @@ class ConversationMemory(BaseModel):
             "context": context or {},
         }
 
-        # Ensure messages list exists
-        if not hasattr(self.memory, "messages"):
-            self.memory.messages = []
+        # Add message
+        self.messages.append(message)
 
-        self.memory.messages.append(message)
+        # Update context history
+        context_entry = {
+            "timestamp": timestamp,
+            "message_type": role,
+            "focused_paper": (
+                self.focused_paper.paper_id if self.focused_paper else None
+            ),
+            "context_data": context or {},
+        }
+        self.context_history.append(context_entry)
+
         print(f"[DEBUG] Added message - Role: {role}, Content: {content[:100]}...")
-        self._track_state_change("message_added")
 
     def set_focused_paper(self, paper: PaperContext):
         """Set focused paper with enhanced tracking"""
@@ -222,6 +228,16 @@ class AgentState(BaseModel):
     next_steps: List[str] = Field(default_factory=list)
     state_history: List[Dict[str, Any]] = Field(default_factory=list)
     last_update: Optional[datetime] = Field(default_factory=datetime.now)
+
+    def add_message(
+        self, role: str, content: str, context: Optional[Dict[str, Any]] = None
+    ):
+        """Add message with state tracking"""
+        # Add message directly to memory
+        self.memory.add_message(role, content, context)
+        self._track_state_change("message_added")
+        # Ensure state fields are updated
+        self.last_update = datetime.now()
 
     def update_search_results(self, papers: List[Dict[str, Any]], total_results: int):
         """Update search results with state tracking"""
