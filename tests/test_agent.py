@@ -17,14 +17,26 @@ async def test_agent():
             messages = response.memory.messages
             print(f"[DEBUG] Total messages: {len(messages)}")
 
-            # Get the last system message
-            system_messages = [msg for msg in messages if msg.get("role") == "system"]
+            # Get all system/assistant messages
+            system_messages = [
+                msg for msg in messages if msg.get("role") in ["system", "assistant"]
+            ]
+
             if system_messages:
-                print(f"Response: {system_messages[-1]['content']}")
+                latest_response = system_messages[-1]
+                print(f"Response: {latest_response['content']}")
+                print(f"[DEBUG] Message role: {latest_response['role']}")
             else:
                 print("No system response found")
+                print("[DEBUG] Available messages:")
+                for msg in messages:
+                    print(
+                        f"  - Role: {msg.get('role')}, Content: {msg.get('content')[:50]}..."
+                    )
         else:
             print("No response received")
+            if response:
+                print(f"[DEBUG] State details: {response}")
 
     # Test conversation
     await process_and_print("Hi there!")
