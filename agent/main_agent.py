@@ -90,25 +90,20 @@ What would you like to explore?""",
 
             # Extract message content safely
             last_message = state["messages"][-1]
-            if isinstance(last_message, (HumanMessage, SystemMessage, AIMessage)):
-                message_content = last_message.content
-            elif isinstance(last_message, dict):
-                message_content = last_message.get("content", "")
-            else:
-                message_content = str(last_message)
-
+            message_content = (
+                last_message.get("content", "")
+                if isinstance(last_message, dict)
+                else str(last_message)
+            )
             message_lower = message_content.lower()
-            print(f"[DEBUG] Processing message: {message_content}")
+            print(f"[DEBUG] Processing message content: {message_content}")
 
             # Check for conversation patterns first
-            if (
-                any(
-                    word in message_lower
-                    for word in ["hi", "hello", "hey", "bye", "goodbye"]
-                )
-                or "what can you do" in message_lower
+            if any(
+                word in message_lower
+                for word in ["hi", "hello", "hey", "bye", "goodbye"]
             ):
-                print("[DEBUG] Routing to conversation handler")
+                print("[DEBUG] Handling greeting")
                 return {
                     "messages": [
                         *state["messages"],
@@ -134,7 +129,7 @@ What would you like to explore?""",
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
             # Default to conversation
-            print("[DEBUG] Default routing to conversation")
+            print("[DEBUG] Handling general conversation")
             return {
                 "messages": [
                     *state["messages"],
