@@ -147,11 +147,21 @@ class ResearchWorkflowManager:
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
-                # Get all assistant messages
                 for msg in result["messages"]:
-                    if isinstance(msg, dict) and msg.get("role") == "assistant":
-                        self.current_state.add_message("system", msg["content"])
-                        print(f"[DEBUG] Added response: {msg['content'][:100]}...")
+                    # Handle both AIMessage objects and dict messages
+                    if hasattr(msg, "content"):  # AIMessage or similar
+                        content = msg.content
+                        role = "system" if msg.type == "ai" else "user"
+                        self.current_state.add_message(role, content)
+                        print(
+                            f"[DEBUG] Added message from AIMessage: {content[:100]}..."
+                        )
+                    elif isinstance(msg, dict):
+                        if msg.get("role") == "assistant":
+                            self.current_state.add_message("system", msg["content"])
+                            print(
+                                f"[DEBUG] Added message from dict: {msg['content'][:100]}..."
+                            )
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
