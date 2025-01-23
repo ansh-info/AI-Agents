@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Dict
 
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import START, MessagesState, StateGraph
 
 from agent.main_agent import MainAgent
@@ -136,25 +137,37 @@ class ResearchWorkflowManager:
         try:
             print(f"[DEBUG] Processing message: {message}")
 
+            # Create HumanMessage
+            message_obj = HumanMessage(content=message)
+
             # Add message to state
             self.current_state.add_message("user", message)
 
             # Process through graph
-            messages_state = {"messages": [{"role": "user", "content": message}]}
+            messages_state = {"messages": [message_obj]}
 
             result = await self.graph.ainvoke(messages_state)
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
+                # Extract the last assistant message
                 assistant_messages = [
                     msg
                     for msg in result["messages"]
-                    if isinstance(msg, dict) and msg.get("role") == "assistant"
+                    if (isinstance(msg, dict) and msg.get("role") == "assistant")
+                    or isinstance(msg, AIMessage)
                 ]
+
                 if assistant_messages:
                     last_message = assistant_messages[-1]
-                    self.current_state.add_message("system", last_message["content"])
-                    print(f"[DEBUG] Response: {last_message['content'][:100]}...")
+                    content = (
+                        last_message.content
+                        if isinstance(last_message, AIMessage)
+                        else last_message.get("content")
+                    )
+                    if content:
+                        self.current_state.add_message("system", content)
+                        print(f"[DEBUG] Response: {content[:100]}...")
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
