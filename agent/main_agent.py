@@ -1,6 +1,7 @@
 import asyncio
 from typing import Any, Dict, List
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import (
     START,  # Updated import
     MessagesState,
@@ -87,17 +88,33 @@ What would you like to explore?""",
             if not state.get("messages"):
                 return {"next": "__end__"}
 
-            message = state["messages"][-1]["content"].lower()
+            # Extract message content safely
+            last_message = state["messages"][-1]
+            message_content = (
+                last_message.content
+                if hasattr(last_message, "content")
+                else last_message.get("content", "")
+            )
+            message_lower = message_content.lower()
+            print(f"[DEBUG] Processing message content: {message_content}")
 
             # Check for conversation patterns first
-            if (
-                any(
-                    word in message for word in ["hi", "hello", "hey", "bye", "goodbye"]
-                )
-                or "what can you do" in message
+            if any(
+                word in message_lower
+                for word in ["hi", "hello", "hey", "bye", "goodbye"]
             ):
-                print("[DEBUG] Routing to conversation handler")
-                return {"messages": state["messages"], "next": "conversation"}
+                print("[DEBUG] Handling greeting")
+                # Return greeting directly without tool invocation
+                return {
+                    "messages": [
+                        *state["messages"],
+                        {
+                            "role": "assistant",
+                            "content": self.CHAT_RESPONSES["greeting"],
+                        },
+                    ],
+                    "next": "__end__",  # End directly without going to any tool
+                }
 
             # Check for search intent
             search_indicators = [
@@ -108,13 +125,22 @@ What would you like to explore?""",
                 "papers on",
                 "research on",
             ]
-            if any(indicator in message for indicator in search_indicators):
+            if any(indicator in message_lower for indicator in search_indicators):
                 print("[DEBUG] Routing to semantic_scholar_tool")
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
 
-            # Default to conversation
-            print("[DEBUG] Default routing to conversation")
-            return {"messages": state["messages"], "next": "conversation"}
+            # Default conversation handling
+            print("[DEBUG] Handling general conversation")
+            return {
+                "messages": [
+                    *state["messages"],
+                    {
+                        "role": "assistant",
+                        "content": "I'm your research assistant. Would you like to search for papers about a specific topic?",
+                    },
+                ],
+                "next": "__end__",
+            }
 
         return supervisor
 
@@ -207,7 +233,15 @@ What would you like to explore?""",
     def _handle_conversation(self, state: MessagesState) -> Dict:
         """Handle general conversation without tool invocation"""
         print("[DEBUG] In conversation handler")
-        message = state["messages"][-1]["content"].lower()
+
+        # Extract message content safely
+        last_message = state["messages"][-1]
+        if isinstance(last_message, (HumanMessage, SystemMessage, AIMessage)):
+            message = last_message.content.lower()
+        elif isinstance(last_message, dict):
+            message = last_message.get("content", "").lower()
+        else:
+            message = str(last_message).lower()
 
         if any(word in message for word in ["hi", "hello", "hey"]):
             response = self.CHAT_RESPONSES["greeting"]

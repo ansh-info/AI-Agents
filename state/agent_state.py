@@ -3,7 +3,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
-import pandas as pd
 from pydantic import BaseModel, Field, validator
 
 
@@ -83,7 +82,7 @@ class SearchContext(BaseModel):
     def add_paper(self, paper: Dict[str, Any]):
         """Add a paper to results with enhanced tracking"""
         try:
-            print(f"\n[DEBUG] Adding paper to SearchContext:")
+            print("\n[DEBUG] Adding paper to SearchContext:")
             print(f"[DEBUG] Input paper data: {paper}")
             print(
                 f"[DEBUG] PaperId from input: {paper.get('paperId', 'NO_ID_IN_DICT')}"
@@ -106,7 +105,7 @@ class SearchContext(BaseModel):
             if paper_ctx.paper_id not in self.active_papers:
                 self.active_papers.append(paper_ctx.paper_id)
 
-            print(f"[DEBUG] Successfully added paper to results")
+            print("[DEBUG] Successfully added paper to results")
 
         except Exception as e:
             print(f"[DEBUG] Error in add_paper: {str(e)}")
@@ -151,8 +150,6 @@ class ConversationMemory(BaseModel):
     focused_paper: Optional[PaperContext] = None
     paper_references: Dict[str, PaperContext] = Field(default_factory=dict)
     last_command: Optional[str] = None
-
-    # Enhanced context tracking
     context_history: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_topics: Set[str] = Field(default_factory=set)
     referenced_papers: Dict[str, int] = Field(default_factory=dict)
@@ -169,6 +166,9 @@ class ConversationMemory(BaseModel):
             "context": context or {},
         }
 
+        # Add message
+        self.messages.append(message)
+
         # Update context history
         context_entry = {
             "timestamp": timestamp,
@@ -178,9 +178,9 @@ class ConversationMemory(BaseModel):
             ),
             "context_data": context or {},
         }
-
-        self.messages.append(message)
         self.context_history.append(context_entry)
+
+        print(f"[DEBUG] Added message - Role: {role}, Content: {content[:100]}...")
 
     def set_focused_paper(self, paper: PaperContext):
         """Set focused paper with enhanced tracking"""
@@ -233,6 +233,7 @@ class AgentState(BaseModel):
         self, role: str, content: str, context: Optional[Dict[str, Any]] = None
     ):
         """Add message with state tracking"""
+        # Add message directly to memory
         self.memory.add_message(role, content, context)
         self._track_state_change("message_added")
         # Ensure state fields are updated

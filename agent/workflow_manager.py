@@ -136,25 +136,30 @@ class ResearchWorkflowManager:
         try:
             print(f"[DEBUG] Processing message: {message}")
 
-            # Add message to state
+            # Add user message to state
             self.current_state.add_message("user", message)
 
-            # Process through graph
+            # Process through graph with simple dict message
             messages_state = {"messages": [{"role": "user", "content": message}]}
 
             result = await self.graph.ainvoke(messages_state)
+            print(f"[DEBUG] Graph result: {result}")
 
             # Update state with response
             if isinstance(result, dict) and "messages" in result:
-                assistant_messages = [
-                    msg
-                    for msg in result["messages"]
-                    if isinstance(msg, dict) and msg.get("role") == "assistant"
-                ]
-                if assistant_messages:
-                    last_message = assistant_messages[-1]
-                    self.current_state.add_message("system", last_message["content"])
-                    print(f"[DEBUG] Response: {last_message['content'][:100]}...")
+                for msg in result["messages"]:
+                    # Handle both AIMessage objects and dict messages
+                    if hasattr(msg, "content"):  # AIMessage or similar
+                        content = msg.content
+                        if hasattr(msg, "type"):
+                            role = "system" if msg.type == "ai" else "user"
+                        else:
+                            role = "system"
+                        self.current_state.add_message(role, content)
+                        print(f"[DEBUG] Added AI message: {content[:100]}...")
+                    elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                        self.current_state.add_message("system", msg["content"])
+                        print(f"[DEBUG] Added dict message: {msg['content'][:100]}...")
 
             self.current_state.status = AgentStatus.SUCCESS
             return self.current_state
