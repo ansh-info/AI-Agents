@@ -63,6 +63,12 @@ class PaperAnalyzerTool(BaseTool):
         self._state = state
         print("[DEBUG] PaperAnalyzerTool initialized")
 
+    def _run(self, *args: Any, **kwargs: Any) -> str:
+        """Synchronous execution not supported"""
+        raise NotImplementedError(
+            "This tool only supports async execution. Use arun instead."
+        )
+
     async def _arun(
         self,
         paper_id: Optional[str] = None,
