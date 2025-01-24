@@ -3,6 +3,9 @@ import json
 
 from agent.enhanced_workflow import EnhancedWorkflowManager
 from state.agent_state import AgentState
+from tools.ollama_tool import OllamaTool
+from tools.paper_analyzer_tool import PaperAnalyzerTool
+from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 async def print_result(response: AgentState, test_name: str):
@@ -92,15 +95,19 @@ async def test_agent():
 async def test_tools():
     """Test individual tools"""
     workflow = EnhancedWorkflowManager()
+    state = AgentState()
 
     print("\n=== Testing Individual Tools ===")
+
+    semantic_tool = SemanticScholarTool(state=state)
+    paper_analyzer = PaperAnalyzerTool(state=state)
+    ollama_tool = OllamaTool(state=state)
 
     # Test Semantic Scholar Tool
     print("\nTesting Semantic Scholar Tool...")
     try:
-        state = AgentState()
         state.add_message("user", "Find papers about neural networks")
-        response = await workflow.semantic_scholar_tool._arun("neural networks")
+        response = await semantic_tool._arun("neural networks")
         print(f"Search Results: {response[:200]}...")
     except Exception as e:
         print(f"Semantic Scholar Tool Error: {str(e)}")
@@ -110,7 +117,7 @@ async def test_tools():
     try:
         if state.search_context.results:
             paper = state.search_context.results[0]
-            response = await workflow.paper_analyzer_tool._arun(
+            response = await paper_analyzer._arun(
                 paper_id=paper.paper_id, analysis_type="summary"
             )
             print(f"Analysis Results: {response[:200]}...")
@@ -120,7 +127,7 @@ async def test_tools():
     # Test Ollama Tool
     print("\nTesting Ollama Tool...")
     try:
-        response = await workflow.ollama_tool._arun("Explain what a neural network is")
+        response = await ollama_tool._arun(prompt="Explain what a neural network is")
         print(f"Ollama Response: {response[:200]}...")
     except Exception as e:
         print(f"Ollama Tool Error: {str(e)}")
