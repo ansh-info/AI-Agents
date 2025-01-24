@@ -5,6 +5,8 @@ from langgraph.graph import START, MessagesState, StateGraph
 
 from agent.main_agent import MainAgent
 from state.agent_state import AgentState, AgentStatus
+from tools.ollama_tool import OllamaTool
+from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
 
 
@@ -16,19 +18,26 @@ class ResearchWorkflowManager:
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize the workflow manager with main agent and tools"""
-        # Initialize tools - currently only semantic scholar
-        self.tools = [
-            SemanticScholarTool(),
-        ]
-
-        # Initialize main agent
-        self.main_agent = MainAgent(tools=self.tools)
+        print("[DEBUG] Initializing ResearchWorkflowManager")
 
         # Initialize state
         self.current_state = AgentState()
 
+        # Initialize tools
+        self.tools = [
+            SemanticScholarTool(state=self.current_state),
+            PaperAnalyzerTool(model_name=model_name, state=self.current_state),
+            OllamaTool(model_name=model_name, state=self.current_state),
+        ]
+        print("[DEBUG] Tools initialized")
+
+        # Initialize main agent with tools
+        self.main_agent = MainAgent(model_name=model_name, tools=self.tools)
+        print("[DEBUG] Main agent initialized")
+
         # Create workflow graph
         self.graph = self._create_workflow_graph()
+        print("[DEBUG] Workflow graph created")
 
     def _create_workflow_graph(self) -> StateGraph:
         """Create the workflow graph structure"""
