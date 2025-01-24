@@ -13,92 +13,62 @@ from state.agent_state import (
     AgentState,
     AgentStatus,
 )
+from tools.ollama_tool import OllamaTool
+from tools.paper_analyzer_tool import PaperAnalyzerTool
+from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 class CommandParser:
     """Handles command parsing and intent detection"""
 
-    @staticmethod
-    def parse_command(command: str) -> Dict[str, Any]:
-        """Parse command and identify intent"""
-        print(f"[DEBUG] Parsing command: {command}")
-        command_lower = command.lower()
+    @classmethod
+    def parse_command(cls, command: str) -> Dict[str, Any]:
+        """Parse command and determine intent"""
+        command = command.lower().strip()
 
-        # Check for greetings and general conversation
-        conversation_triggers = [
-            "hi",
-            "hello",
-            "hey",
-            "how are you",
-            "what can you do",
-            "help",
-            "explain",
-            "tell me about",
-            "what are you",
-        ]
-        if (
-            any(trigger in command_lower for trigger in conversation_triggers)
-            or len(command_lower.split()) < 4
-        ):
-            print("[DEBUG] Detected conversation intent")
-            return {
-                "intent": "conversation",
-                "query": command,
-            }
+        # Extract any paper references
+        paper_refs = cls._extract_multiple_papers(command)
 
-        # Check for search intent
+        # Determine intent
         if any(
-            trigger in command_lower
-            for trigger in [
-                "search",
-                "find",
-                "look for",
-                "papers about",
-                "papers on",
-                "research about",
-                "can you search",
-            ]
+            word in command
+            for word in ["find", "search", "look for", "papers about", "articles about"]
         ):
-            cleaned_query = CommandParser._clean_search_query(command)
-            print(f"[DEBUG] Detected search intent. Cleaned query: {cleaned_query}")
             return {
                 "intent": "search",
-                "query": cleaned_query,
+                "query": command,
+                "paper_references": paper_refs,
             }
-
-        # Check for paper question intent
-        if any(
-            trigger in command_lower
-            for trigger in [
-                "tell me about paper",
-                "explain paper",
-                "what does paper",
-                "can you explain",
-                "summarize paper",
-            ]
+        elif (
+            any(
+                word in command
+                for word in [
+                    "analyze",
+                    "explain",
+                    "summarize",
+                    "what does",
+                    "tell me about",
+                ]
+            )
+            and paper_refs
         ):
             return {
                 "intent": "paper_question",
-                "paper_reference": CommandParser._extract_paper_reference(command),
+                "paper_references": paper_refs,
+                "query": command,
             }
-
-        # Check for comparison intent
-        if any(
-            trigger in command_lower
-            for trigger in [
-                "compare",
-                "difference between",
-                "how do papers",
-                "similarities",
-            ]
-        ):
+        elif "compare" in command and len(paper_refs) >= 2:
             return {
                 "intent": "compare_papers",
-                "paper_references": CommandParser._extract_multiple_papers(command),
+                "paper_references": paper_refs,
+                "query": command,
             }
-
-        # Default to conversation
-        return {"intent": "conversation", "query": command}
+        else:
+            return {
+                "intent": "conversation",
+                "query": command,
+                "paper_references": paper_refs,
+            }
 
     @staticmethod
     def _extract_paper_reference(command: str) -> str:
@@ -125,16 +95,50 @@ class CommandParser:
 class ConversationAgent:
     """Handles LLM-based conversations"""
 
-    def __init__(self, ollama_client: OllamaClient):
-        """Initialize conversation agent"""
+    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
+        """Initialize with both old and new components for gradual transition"""
         try:
-            print("[DEBUG] Initializing ConversationAgent")
-            if not ollama_client:
-                raise ValueError("OllamaClient cannot be None")
-            self.client = ollama_client
-            print("[DEBUG] ConversationAgent initialized successfully")
+            print("[DEBUG] Initializing EnhancedWorkflowManager")
+
+            # Initialize clients
+            print("[DEBUG] Initializing clients...")
+            self.ollama_client = OllamaClient(model_name=model_name)
+            self.s2_client = SemanticScholarClient()
+            print("[DEBUG] Clients initialized successfully")
+
+            # Initialize tools and agents
+            print("[DEBUG] Initializing tools and agents...")
+            # Initialize state first
+            self.current_state = AgentState()
+
+            self.semantic_scholar_tool = SemanticScholarTool(state=self.current_state)
+            self.paper_analyzer_tool = PaperAnalyzerTool(
+                model_name=model_name, state=self.current_state
+            )
+            self.ollama_tool = OllamaTool(
+                model_name=model_name, state=self.current_state
+            )
+
+            self.conversation_agent = ConversationAgent(
+                ollama_client=self.ollama_client
+            )
+            self.search_agent = SearchAgent(s2_client=self.s2_client)
+            print("[DEBUG] Tools and agents initialized successfully")
+
+            # Initialize workflow manager
+            print("[DEBUG] Initializing workflow manager...")
+            self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
+            print("[DEBUG] Workflow manager initialized successfully")
+
+            # Initialize state
+            print("[DEBUG] Initializing state...")
+            self.current_state = AgentState()
+            print("[DEBUG] State initialized successfully")
+
+            print("[DEBUG] EnhancedWorkflowManager initialization complete")
+
         except Exception as e:
-            print(f"[DEBUG] Error initializing ConversationAgent: {str(e)}")
+            print(f"[DEBUG] Error in EnhancedWorkflowManager initialization: {str(e)}")
             raise
 
     async def generate_response(

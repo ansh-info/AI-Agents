@@ -3,14 +3,12 @@ from typing import Optional, Type
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
 
-from clients.semantic_scholar_client import (
-    SearchFilters,
-    SemanticScholarClient,
-)
+from clients.semantic_scholar_client import SearchFilters, SemanticScholarClient
+from state.agent_state import AgentState
 
 
 class SearchInput(BaseModel):
-    """Schema for search parameters"""
+    """Enhanced schema for search parameters"""
 
     query: str = Field(..., description="The search query for finding papers")
     year_start: Optional[int] = Field(None, description="Start year filter")
@@ -22,7 +20,7 @@ class SearchInput(BaseModel):
 
 
 class SemanticScholarTool(BaseTool):
-    """Tool for Semantic Scholar paper search and retrieval"""
+    """Enhanced tool for Semantic Scholar paper search and retrieval"""
 
     name: str = "semantic_scholar_tool"
     description: str = """Use this tool to search for academic papers and retrieve paper information.
@@ -37,106 +35,106 @@ class SemanticScholarTool(BaseTool):
     """
     args_schema: Type[BaseModel] = SearchInput
 
-    # Private client instance
+    # Private client instance using PrivateAttr for non-serializable fields
     _client: SemanticScholarClient = PrivateAttr()
+    _state: Optional[AgentState] = PrivateAttr()
 
-    def __init__(self):
-        """Initialize the tool"""
+    def __init__(self, state: Optional[AgentState] = None):
+        """Initialize the tool with a Semantic Scholar client and optional state"""
         super().__init__()
-        print("[DEBUG] Initializing SemanticScholarTool")
         self._client = SemanticScholarClient()
-        print("[DEBUG] SemanticScholarTool initialized with client")
+        self._state = state
+        print("[DEBUG] Initialized SemanticScholarTool")
 
-    async def _arun(self, query: str, **kwargs) -> str:
-        """Run the tool asynchronously"""
+    async def _arun(
+        self,
+        query: str,
+        year_start: Optional[int] = None,
+        year_end: Optional[int] = None,
+        min_citations: Optional[int] = None,
+        max_results: int = 10,
+    ) -> str:
+        """Run the tool asynchronously with enhanced error handling and state management"""
         try:
-            print(f"[DEBUG] SemanticScholarTool: Starting search with query: {query}")
-
-            # Add delay between requests
-            await asyncio.sleep(1)  # Add 1 second delay
+            print(f"[DEBUG] SemanticScholarTool: Processing query: {query}")
 
             # Create search filters
-            filters = SearchFilters(**kwargs)
+            filters = SearchFilters(
+                year_start=year_start, year_end=year_end, min_citations=min_citations
+            )
 
-            # Perform search with retry logic
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    results = await self._client.search_papers(
-                        query=query, filters=filters, limit=10
+            # Perform search
+            results = await self._client.search_papers(
+                query=query, filters=filters, limit=max_results
+            )
+
+            # Update state if available
+            if self._state and results.papers:
+                for paper in results.papers:
+                    self._state.search_context.add_paper(
+                        {
+                            "paperId": paper.paperId,
+                            "title": paper.title,
+                            "abstract": paper.abstract,
+                            "year": paper.year,
+                            "authors": [
+                                {"name": a.name, "authorId": a.authorId}
+                                for a in paper.authors
+                            ],
+                            "citations": paper.citations,
+                            "url": paper.url,
+                        }
                     )
-                    return self._format_results(results)
-                except Exception as e:
-                    if "429" in str(e) and attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 2  # Exponential backoff
-                        print(f"[DEBUG] Rate limited, waiting {wait_time} seconds...")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    raise
+
+            # Format and return results
+            return self._format_results(results)
 
         except Exception as e:
-            return f"Error performing search: {str(e)}"
+            error_msg = f"Error performing search: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
 
     def _run(self, query: str, **kwargs) -> str:
         """Synchronous run is not supported"""
         raise NotImplementedError("This tool only supports async execution")
 
     def _format_results(self, results) -> str:
-        """Format search results with proper structure"""
-        try:
-            if not results.papers:
-                print("[DEBUG] No papers found in results")
-                return "No papers found matching your criteria."
+        """Format search results with enhanced structure"""
+        if not results.papers:
+            return "No papers found matching your criteria."
 
-            print(f"[DEBUG] Formatting {len(results.papers)} papers")
-            formatted_parts = [
-                f"Found {results.total} papers. Here are the most relevant ones:\n"
+        formatted_parts = [
+            f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant:\n"
+        ]
+
+        for i, paper in enumerate(results.papers, 1):
+            paper_details = [
+                f"\n{i}. {paper.title}",
+                f"Authors: {', '.join(a.name for a in paper.authors)}",
+                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
             ]
 
-            for i, paper in enumerate(results.papers, 1):
-                formatted_parts.extend(
-                    [
-                        f"\n{i}. {paper.title}",
-                        f"Authors: {', '.join(a.name for a in paper.authors)}",
-                        f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
-                        f"Abstract: {paper.abstract[:300] + '...' if paper.abstract and len(paper.abstract) > 300 else paper.abstract or 'No abstract available'}",
-                        f"URL: {paper.url or 'Not available'}\n",
-                    ]
+            if paper.abstract:
+                paper_details.append(
+                    f"Abstract: {paper.abstract[:300]}..."
+                    if len(paper.abstract) > 300
+                    else f"Abstract: {paper.abstract}"
                 )
 
-            response = "\n".join(formatted_parts)
-            print(f"[DEBUG] Formatted response created, length: {len(response)}")
-            return response
+            paper_details.append(f"URL: {paper.url or 'Not available'}\n")
+            formatted_parts.extend(paper_details)
 
-        except Exception as e:
-            error_msg = f"Error formatting results: {str(e)}"
-            print(f"[DEBUG] {error_msg}")
-            return error_msg
+        return "\n".join(formatted_parts)
 
-    async def get_paper_details(self, paper_id: str) -> str:
-        """Get detailed information about a specific paper"""
-        try:
-            paper = await self._client.get_paper_details(paper_id)
-
-            details = [
-                f"Title: {paper.title}",
-                f"Authors: {', '.join(a.name for a in paper.authors)}",
-                f"Year: {paper.year or 'N/A'}",
-                f"Citations: {paper.citations or 0}",
-                f"Abstract: {paper.abstract or 'No abstract available'}",
-                f"URL: {paper.url or 'Not available'}",
-            ]
-
-            return "\n".join(details)
-
-        except Exception as e:
-            return f"Error retrieving paper details: {str(e)}"
+    def set_state(self, state: AgentState):
+        """Set or update the current state"""
+        self._state = state
+        print("[DEBUG] Updated SemanticScholarTool state")
 
     async def check_health(self) -> bool:
         """Check if the tool is functioning properly"""
         try:
-            # Test the API with a simple search
-            await self._client.check_api_status()
-            return True
-        except:
+            return await self._client.check_api_status()
+        except Exception as e:
+            print(f"[DEBUG] Health check failed: {str(e)}")
             return False
