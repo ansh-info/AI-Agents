@@ -1,63 +1,253 @@
 import json
-import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
-
 
 from langgraph.graph import END, StateGraph
 
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
-from state.agent_state import AgentState, AgentStatus, ConversationMemory
+from state.agent_state import AgentState, AgentStatus
+from tools.ollama_tool import OllamaTool
+from tools.paper_analyzer_tool import PaperAnalyzerTool
+from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 class WorkflowGraph:
+    """Enhanced workflow graph that integrates tools and manages state transitions"""
+
     def __init__(
         self,
-        ollama_client: Optional[OllamaClient] = None,
-        s2_client: Optional[SemanticScholarClient] = None,
+        model_name: str = "llama3.2:1b-instruct-q3_K_M",
+        state: Optional[AgentState] = None,
     ):
-        """Initialize the workflow graph with client integrations"""
+        """Initialize the workflow graph with tools and state management"""
+        print("[DEBUG] Initializing WorkflowGraph")
+
+        # Initialize state
+        self.state = state or AgentState()
+
+        # Initialize tools
+        self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
+        self.paper_analyzer_tool = PaperAnalyzerTool(
+            model_name=model_name, state=self.state
+        )
+        self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
+
+        # Create graph
         self.graph = StateGraph(AgentState)
-        self.current_state = AgentState()
-        self.ollama_client = ollama_client or OllamaClient()
-        self.s2_client = s2_client or SemanticScholarClient()
         self.setup_graph()
+        print("[DEBUG] WorkflowGraph initialized")
 
     def setup_graph(self):
         """Setup the state graph with enhanced nodes and edges"""
         # Add core nodes
         self.graph.add_node("start", self._start_node)
-        self.graph.add_node("analyze_input", self._analyze_input)
-        self.graph.add_node("route", self._route_message)
-        self.graph.add_node("process_search", self._process_search)
-        self.graph.add_node("process_paper_question", self._process_paper_question)
-        self.graph.add_node("process_conversation", self._process_conversation)
-        self.graph.add_node("update_memory", self._update_memory)
+        self.graph.add_node("analyze_intent", self._analyze_intent)
+        self.graph.add_node("route_request", self._route_request)
+        self.graph.add_node("search_papers", self._search_papers)
+        self.graph.add_node("analyze_paper", self._analyze_paper)
+        self.graph.add_node("handle_conversation", self._handle_conversation)
+        self.graph.add_node("update_state", self._update_state)
 
-        # Define the workflow edges
-        self.graph.add_edge("start", "analyze_input")
-        self.graph.add_edge("analyze_input", "route")
-        self.graph.add_edge("route", "process_search")
-        self.graph.add_edge("route", "process_paper_question")
-        self.graph.add_edge("route", "process_conversation")
-        self.graph.add_edge("process_search", "update_memory")
-        self.graph.add_edge("process_paper_question", "update_memory")
-        self.graph.add_edge("process_conversation", "update_memory")
-        self.graph.add_edge("update_memory", END)
+        # Define edges
+        self.graph.add_edge("start", "analyze_intent")
+        self.graph.add_edge("analyze_intent", "route_request")
+        self.graph.add_edge("route_request", "search_papers")
+        self.graph.add_edge("route_request", "analyze_paper")
+        self.graph.add_edge("route_request", "handle_conversation")
+        self.graph.add_edge("search_papers", "update_state")
+        self.graph.add_edge("analyze_paper", "update_state")
+        self.graph.add_edge("handle_conversation", "update_state")
+        self.graph.add_edge("update_state", END)
 
         # Set entry point
         self.graph.set_entry_point("start")
 
-    def _start_node(self, state: AgentState) -> Dict:
-        """Initialize state for new message processing"""
-        state.status = AgentStatus.PROCESSING
-        state.current_step = "start"
-        state.next_steps = ["analyze_input"]
-        return {"state": state, "next": "analyze_input"}
+    async def _start_node(self, state: AgentState) -> Dict:
+        """Initialize processing for new request"""
+        try:
+            print("[DEBUG] Starting new request processing")
+            state.update_state(
+                status=AgentStatus.PROCESSING,
+                current_step="start",
+                next_steps=["analyze_intent"],
+                last_update=datetime.now(),
+            )
+            return {"state": state, "next": "analyze_intent"}
+        except Exception as e:
+            print(f"[DEBUG] Error in start node: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": "update_state"}
+
+    async def _analyze_intent(self, state: AgentState) -> Dict:
+        """Analyze request intent using Ollama"""
+        try:
+            print("[DEBUG] Analyzing request intent")
+
+            # Get latest message
+            if not state.memory.messages:
+                raise ValueError("No messages in state")
+
+            message = state.memory.messages[-1]["content"]
+
+            # Use Ollama to determine intent
+            intent_prompt = f"""Analyze this user message and determine the intent:
+Message: "{message}"
+
+Possible intents:
+1. search - User wants to find papers
+2. analyze - User wants to analyze specific papers
+3. conversation - General questions or chat
+
+Return only one word (search/analyze/conversation)."""
+
+            intent = await self.ollama_tool._arun(
+                prompt=intent_prompt,
+                system_prompt="You are an intent classifier. Return only one word.",
+                temperature=0.1,
+            )
+
+            # Update state
+            state.update_state(
+                current_step="intent_analyzed", next_steps=["route_request"]
+            )
+            state.memory.current_context = intent.strip().lower()
+
+            return {"state": state, "next": "route_request"}
+
+        except Exception as e:
+            print(f"[DEBUG] Error analyzing intent: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": "update_state"}
+
+    async def _route_request(self, state: AgentState) -> Dict:
+        """Route request to appropriate handler based on intent"""
+        try:
+            intent = state.memory.current_context
+            print(f"[DEBUG] Routing request with intent: {intent}")
+
+            # Map intent to next node
+            intent_map = {
+                "search": "search_papers",
+                "analyze": "analyze_paper",
+                "conversation": "handle_conversation",
+            }
+
+            next_node = intent_map.get(intent, "handle_conversation")
+            state.update_state(current_step="routed", next_steps=[next_node])
+
+            return {"state": state, "next": next_node}
+
+        except Exception as e:
+            print(f"[DEBUG] Error routing request: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": "update_state"}
+
+    async def _search_papers(self, state: AgentState) -> Dict:
+        """Handle paper search requests"""
+        try:
+            print("[DEBUG] Processing search request")
+            message = state.memory.messages[-1]["content"]
+
+            # Execute search
+            result = await self.semantic_scholar_tool._arun(message)
+
+            # Update state
+            state.add_message("system", result)
+            state.update_state(
+                current_step="search_completed",
+                next_steps=["update_state"],
+                status=AgentStatus.SUCCESS,
+            )
+
+            return {"state": state, "next": "update_state"}
+
+        except Exception as e:
+            print(f"[DEBUG] Error in search: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": "update_state"}
+
+    async def _analyze_paper(self, state: AgentState) -> Dict:
+        """Handle paper analysis requests"""
+        try:
+            print("[DEBUG] Processing paper analysis request")
+            message = state.memory.messages[-1]["content"]
+
+            # Execute analysis
+            result = await self.paper_analyzer_tool._arun(message)
+
+            # Update state
+            state.add_message("system", result)
+            state.update_state(
+                current_step="analysis_completed",
+                next_steps=["update_state"],
+                status=AgentStatus.SUCCESS,
+            )
+
+            return {"state": state, "next": "update_state"}
+
+        except Exception as e:
+            print(f"[DEBUG] Error in paper analysis: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": "update_state"}
+
+    async def _handle_conversation(self, state: AgentState) -> Dict:
+        """Handle general conversation"""
+        try:
+            print("[DEBUG] Processing conversation")
+            message = state.memory.messages[-1]["content"]
+
+            # Generate response
+            result = await self.ollama_tool._arun(message)
+
+            # Update state
+            state.add_message("system", result)
+            state.update_state(
+                current_step="conversation_completed",
+                next_steps=["update_state"],
+                status=AgentStatus.SUCCESS,
+            )
+
+            return {"state": state, "next": "update_state"}
+
+        except Exception as e:
+            print(f"[DEBUG] Error in conversation: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": "update_state"}
+
+    async def _update_state(self, state: AgentState) -> Dict:
+        """Update final state after processing"""
+        try:
+            print("[DEBUG] Updating final state")
+
+            # Ensure all fields are properly set
+            state.last_update = datetime.now()
+
+            # Add state history entry
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": state.current_step,
+                    "status": state.status.value,
+                }
+            )
+
+            return {"state": state, "next": END}
+
+        except Exception as e:
+            print(f"[DEBUG] Error updating state: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            return {"state": state, "next": END}
 
     def _analyze_input(self, state: AgentState) -> Dict:
         """Analyze input message and extract context"""
@@ -796,3 +986,48 @@ Please provide a structured response that:
                 }
             )
             return state
+
+    async def process_request(self, request: str) -> AgentState:
+        """Process a request through the workflow"""
+        try:
+            print(f"[DEBUG] Processing request: {request}")
+
+            # Add request to state
+            self.state.add_message("user", request)
+
+            # Process through graph
+            result = await self.graph.arun(initial_state=self.state)
+
+            return result
+
+        except Exception as e:
+            print(f"[DEBUG] Error processing request: {str(e)}")
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            return self.state
+
+    async def check_health(self) -> Dict[str, bool]:
+        """Check health of all components"""
+        try:
+            semantic_scholar_health = await self.semantic_scholar_tool.check_health()
+            paper_analyzer_health = await self.paper_analyzer_tool.check_health()
+            ollama_health = await self.ollama_tool.check_health()
+
+            return {
+                "semantic_scholar": semantic_scholar_health,
+                "paper_analyzer": paper_analyzer_health,
+                "ollama": ollama_health,
+                "graph": True,
+                "all_healthy": all(
+                    [semantic_scholar_health, paper_analyzer_health, ollama_health]
+                ),
+            }
+        except Exception as e:
+            return {
+                "semantic_scholar": False,
+                "paper_analyzer": False,
+                "ollama": False,
+                "graph": False,
+                "all_healthy": False,
+                "error": str(e),
+            }
