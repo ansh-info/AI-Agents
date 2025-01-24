@@ -1,35 +1,32 @@
-import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import (
-    START,  # Updated import
-    MessagesState,
-    StateGraph,
-)
+from langgraph.graph import START, MessagesState, StateGraph
 
-from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
+from tools.ollama_tool import OllamaTool
+from tools.paper_analyzer_tool import PaperAnalyzerTool
+from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 class MainAgent:
     """Main orchestrator agent that manages the research workflow."""
 
     SYSTEM_PROMPT = """You are Talk2Papers, an academic research assistant that helps users find, analyze, and understand academic papers.
-    You have access to several specialized tools:
     
+    You have access to these specialized tools:
     1. semantic_scholar_tool: Search and retrieve academic papers
        - Use for: Finding papers, getting citations, retrieving metadata
-       - Input: Search queries, paper IDs
+       - Input: Search queries with optional filters
        
-    2. pdf_tool: Analyze and extract from PDFs
-       - Use for: Reading papers, extracting sections
-       - Input: Paper URLs, DOIs
+    2. paper_analyzer_tool: Analyze paper content
+       - Use for: Summarizing papers, analyzing methods, extracting findings
+       - Input: Paper ID/index and analysis request
        
-    3. analysis_tool: In-depth paper analysis  
-       - Use for: Summarizing, comparing papers, answering questions
-       - Input: Paper content, specific questions
-
+    3. ollama_tool: General text generation and understanding
+       - Use for: Answering questions, generating explanations
+       - Input: User queries with optional context
+    
     Your workflow:
     1. UNDERSTAND THE REQUEST
     - Carefully analyze what the user is asking for
@@ -38,151 +35,105 @@ class MainAgent:
 
     2. USE TOOLS APPROPRIATELY  
     - semantic_scholar_tool for finding papers
-    - pdf_tool for reading papers
-    - analysis_tool for paper questions
+    - paper_analyzer_tool for paper questions
+    - ollama_tool for general queries
     
     3. MAINTAIN CONTEXT
     - Track papers being discussed
     - Remember previous searches
     - Build on previous interactions
 
-    4. PROVIDE CLEAR RESPONSES
-    - Summarize key information
-    - Highlight important findings
-    - Make connections between papers
-
-    Think step by step about:
-    1. What is the user asking for?
-    2. Which tools do I need?
-    3. In what order should I use them?
-    4. How do I combine their outputs?
-
     Current conversation context: {context}
     Current state: {state}
     """
 
-    CHAT_RESPONSES = {
-        "greeting": "Hello! I'm Talk2Papers, your research assistant. I can help you find and understand academic papers. What would you like to know?",
-        "capabilities": """I can help you with:
-1. Finding academic papers on any topic
-2. Getting detailed information about specific papers
-3. Understanding paper content and relationships
-What would you like to explore?""",
-        "farewell": "Goodbye! Feel free to return whenever you need help with research papers.",
-    }
-
-    def __init__(self, tools: List[Any]):
-        """Initialize the agent with tools."""
+    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
+        """Initialize the agent with tools and state"""
         print("[DEBUG] Initializing MainAgent")
-        self.tools = tools
-        self.llm = OllamaClient(model_name="llama3.2:1b-instruct-q3_K_M")
+
+        # Initialize state
+        self.state = AgentState()
+
+        # Initialize tools
+        self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
+        self.paper_analyzer_tool = PaperAnalyzerTool(
+            model_name=model_name, state=self.state
+        )
+        self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
+
+        # Create workflow graph
         self.graph = self._create_graph()
-        print(f"[DEBUG] MainAgent initialized with {len(tools)} tools")
+        print("[DEBUG] MainAgent initialized with tools and graph")
 
     def _create_supervisor_node(self):
         """Create the supervisor node that routes to tools."""
 
-        def supervisor(state: MessagesState) -> Dict:
+        async def supervisor(state: MessagesState) -> Dict:
             print("[DEBUG] MainAgent: Processing new message in supervisor")
 
             if not state.get("messages"):
                 return {"next": "__end__"}
 
-            # Extract message content safely
+            # Get the latest message
             last_message = state["messages"][-1]
-            message_content = (
-                last_message.content
-                if hasattr(last_message, "content")
-                else last_message.get("content", "")
-            )
-            message_lower = message_content.lower()
-            print(f"[DEBUG] Processing message content: {message_content}")
+            message_content = self._extract_message_content(last_message)
+            print(f"[DEBUG] Processing message: {message_content}")
 
-            # Check for conversation patterns first
-            if any(
-                word in message_lower
-                for word in ["hi", "hello", "hey", "bye", "goodbye"]
-            ):
-                print("[DEBUG] Handling greeting")
-                # Return greeting directly without tool invocation
-                return {
-                    "messages": [
-                        *state["messages"],
-                        {
-                            "role": "assistant",
-                            "content": self.CHAT_RESPONSES["greeting"],
-                        },
-                    ],
-                    "next": "__end__",  # End directly without going to any tool
-                }
+            # Determine intent using Ollama
+            intent = await self._determine_intent(message_content)
+            print(f"[DEBUG] Determined intent: {intent}")
 
-            # Check for search intent
-            search_indicators = [
-                "find",
-                "search",
-                "look for",
-                "papers about",
-                "papers on",
-                "research on",
-            ]
-            if any(indicator in message_lower for indicator in search_indicators):
-                print("[DEBUG] Routing to semantic_scholar_tool")
+            # Route based on intent
+            if intent == "search":
                 return {"messages": state["messages"], "next": "semantic_scholar_tool"}
-
-            # Default conversation handling
-            print("[DEBUG] Handling general conversation")
-            return {
-                "messages": [
-                    *state["messages"],
-                    {
-                        "role": "assistant",
-                        "content": "I'm your research assistant. Would you like to search for papers about a specific topic?",
-                    },
-                ],
-                "next": "__end__",
-            }
+            elif intent == "analyze":
+                return {"messages": state["messages"], "next": "paper_analyzer_tool"}
+            else:
+                return {"messages": state["messages"], "next": "ollama_tool"}
 
         return supervisor
 
     def _create_tool_node(self, tool: Any):
         """Create a node for a specific tool."""
 
-        def tool_node(state: MessagesState) -> Dict:
+        async def tool_node(state: MessagesState) -> Dict:
             try:
                 print(f"[DEBUG] Executing tool: {tool.name}")
 
-                # Extract message content safely
+                # Extract message content
                 last_message = state["messages"][-1]
-                if isinstance(last_message, dict):
-                    message_content = last_message.get("content", "")
-                else:
-                    message_content = (
-                        last_message.content
-                        if hasattr(last_message, "content")
-                        else str(last_message)
-                    )
+                message_content = self._extract_message_content(last_message)
 
-                # Create event loop for async operation
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(tool.arun(message_content))
-                loop.close()
+                # Update tool state
+                tool.set_state(self.state)
+
+                # Execute tool
+                result = await tool._arun(message_content)
 
                 print(
                     f"[DEBUG] Tool execution successful, result length: {len(result)}"
                 )
 
+                # Update state
+                if isinstance(result, dict):
+                    self.state.update_state(**result)
+
                 return {
-                    "messages": state["messages"]
-                    + [{"role": "assistant", "content": result}],
+                    "messages": [
+                        *state["messages"],
+                        {"role": "assistant", "content": result},
+                    ],
                     "next": "__end__",
                 }
+
             except Exception as e:
                 error_msg = f"Error executing {tool.name}: {str(e)}"
                 print(f"[DEBUG] {error_msg}")
                 return {
-                    "messages": state["messages"]
-                    + [{"role": "assistant", "content": error_msg}],
+                    "messages": [
+                        *state["messages"],
+                        {"role": "assistant", "content": error_msg},
+                    ],
                     "next": "__end__",
                 }
 
@@ -196,101 +147,82 @@ What would you like to explore?""",
         # Add nodes
         workflow.add_node("supervisor", self._create_supervisor_node())
         workflow.add_node(
-            "semantic_scholar_tool", self._create_tool_node(self.tools[0])
+            "semantic_scholar_tool", self._create_tool_node(self.semantic_scholar_tool)
         )
-        workflow.add_node("conversation", self._handle_conversation)
+        workflow.add_node(
+            "paper_analyzer_tool", self._create_tool_node(self.paper_analyzer_tool)
+        )
+        workflow.add_node("ollama_tool", self._create_tool_node(self.ollama_tool))
 
         # Add edges
         workflow.add_edge(START, "supervisor")
         workflow.add_edge("supervisor", "semantic_scholar_tool")
-        workflow.add_edge("supervisor", "conversation")
+        workflow.add_edge("supervisor", "paper_analyzer_tool")
+        workflow.add_edge("supervisor", "ollama_tool")
         workflow.add_edge("semantic_scholar_tool", "__end__")
-        workflow.add_edge("conversation", "__end__")
+        workflow.add_edge("paper_analyzer_tool", "__end__")
+        workflow.add_edge("ollama_tool", "__end__")
 
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
 
-    def _format_context(self, messages: List[Dict]) -> str:
-        """Format conversation context for prompt."""
-        return "\n".join(
-            f"{msg['role']}: {msg['content']}"
-            for msg in messages[-5:]  # Last 5 messages
-        )
+    async def _determine_intent(self, message: str) -> str:
+        """Determine the intent of a message using Ollama."""
+        try:
+            intent_prompt = f"""Analyze this user message and determine the intent:
+Message: "{message}"
 
-    def _format_state(self, state: AgentState) -> str:
-        """Format current state for prompt."""
-        return f"""
-        Status: {state.status}
-        Search Results: {len(state.search_context.results) if state.search_context else 0} papers
-        Focused Paper: {state.memory.focused_paper.title if state.memory.focused_paper else "None"}
-        """
+Possible intents:
+1. search - User wants to find papers
+2. analyze - User wants to analyze specific papers
+3. conversation - General questions or chat
 
-    def _parse_tool_selection(self, llm_response: str) -> str:
-        """Parse LLM response to determine tool selection."""
-        # For now, defaulting to semantic scholar for search queries
-        return "semantic_scholar_tool"
+Return only one word (search/analyze/conversation)."""
 
-    def _handle_conversation(self, state: MessagesState) -> Dict:
-        """Handle general conversation without tool invocation"""
-        print("[DEBUG] In conversation handler")
+            intent = await self.ollama_tool._arun(
+                prompt=intent_prompt,
+                system_prompt="You are an intent classifier. Return only one word.",
+                temperature=0.1,
+            )
 
-        # Extract message content safely
-        last_message = state["messages"][-1]
-        if isinstance(last_message, (HumanMessage, SystemMessage, AIMessage)):
-            message = last_message.content.lower()
-        elif isinstance(last_message, dict):
-            message = last_message.get("content", "").lower()
+            return intent.strip().lower()
+
+        except Exception as e:
+            print(f"[DEBUG] Error determining intent: {str(e)}")
+            return "conversation"
+
+    def _extract_message_content(self, message: Any) -> str:
+        """Safely extract content from different message types."""
+        if isinstance(message, (HumanMessage, SystemMessage, AIMessage)):
+            return message.content
+        elif isinstance(message, dict):
+            return message.get("content", "")
         else:
-            message = str(last_message).lower()
-
-        if any(word in message for word in ["hi", "hello", "hey"]):
-            response = self.CHAT_RESPONSES["greeting"]
-        elif "what can you do" in message:
-            response = self.CHAT_RESPONSES["capabilities"]
-        elif any(word in message for word in ["bye", "goodbye"]):
-            response = self.CHAT_RESPONSES["farewell"]
-        else:
-            response = "I'm your research assistant. Would you like to search for papers about a specific topic?"
-
-        return {
-            "messages": [
-                *state["messages"],
-                {"role": "assistant", "content": response},
-            ],
-            "next": "__end__",
-        }
+            return str(message)
 
     async def process_request(self, state: AgentState) -> AgentState:
         """Process a user request using the workflow graph."""
         try:
             print("[DEBUG] MainAgent processing request")
 
+            # Update local state
+            self.state = state
+
             # Convert messages to proper format
             messages = []
             for msg in state.memory.messages:
-                if isinstance(msg, dict):
-                    messages.append(msg)
-                else:
-                    messages.append(
-                        {
-                            "role": msg.role if hasattr(msg, "role") else "user",
-                            "content": msg.content
-                            if hasattr(msg, "content")
-                            else str(msg),
-                        }
-                    )
+                messages.append(
+                    {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                )
 
-            messages_state = {"messages": messages}
-            print(f"[DEBUG] Processing with messages state: {messages_state}")
+            # Process through graph
+            result = await self.graph.ainvoke({"messages": messages})
 
-            result = await self.graph.ainvoke(messages_state)
-
+            # Update state with results
             if isinstance(result, dict) and "messages" in result:
                 for msg in result["messages"]:
                     if isinstance(msg, dict) and msg.get("role") == "assistant":
                         state.add_message("system", msg["content"])
-                    elif hasattr(msg, "content"):
-                        state.add_message("system", msg.content)
 
             state.status = AgentStatus.SUCCESS
             return state
@@ -303,3 +235,21 @@ What would you like to explore?""",
                 "system", f"I apologize, but I encountered an error: {str(e)}"
             )
             return state
+
+    async def check_health(self) -> Dict[str, bool]:
+        """Check health of all components."""
+        try:
+            return {
+                "semantic_scholar": await self.semantic_scholar_tool.check_health(),
+                "paper_analyzer": await self.paper_analyzer_tool.check_health(),
+                "ollama": await self.ollama_tool.check_health(),
+                "graph": True,
+            }
+        except Exception as e:
+            return {
+                "semantic_scholar": False,
+                "paper_analyzer": False,
+                "ollama": False,
+                "graph": False,
+                "error": str(e),
+            }
