@@ -26,8 +26,9 @@ class SearchInput(BaseModel):
 class SemanticScholarTool(BaseTool):
     """Tool for searching academic papers using Semantic Scholar API"""
 
-    name = "semantic_scholar_search"
-    description = """Use this tool to search for academic papers and retrieve their information.
+    # Add type annotation for name and description
+    name: str = "semantic_scholar_search"
+    description: str = """Use this tool to search for academic papers and retrieve their information.
     
     This tool can:
     - Search for papers by topic, keywords, or authors
