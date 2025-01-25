@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
 from agent.main_agent import MainAgent
@@ -117,54 +118,56 @@ class WorkflowGraph:
     async def _main_agent_node(self, state: MessagesState) -> Dict:
         """Main agent processing"""
         try:
-            message = state["messages"][-1]["content"]
-            intent = await self.main_agent._determine_intent(message)
+            # Get the last message's content correctly
+            last_message = state["messages"][-1]
+            message_content = (
+                last_message.content
+                if isinstance(last_message, HumanMessage)
+                else last_message["content"]
+            )
+
+            intent = await self.main_agent._determine_intent(message_content)
 
             if intent == "search":
                 return {"messages": state["messages"], "next": "research_team"}
             else:
-                result = await self.main_agent.process_request(message)
+                result = await self.main_agent.process_request(message_content)
                 return {
                     "messages": [
                         *state["messages"],
-                        {
-                            "role": "assistant",
-                            "content": result.memory.messages[-1]["content"],
-                        },
+                        AIMessage(content=result.memory.messages[-1]["content"]),
                     ],
                     "next": "update_state",
                 }
         except Exception as e:
             print(f"[DEBUG] Error in main agent: {str(e)}")
             return {
-                "messages": [
-                    *state["messages"],
-                    {"role": "assistant", "content": f"Error: {str(e)}"},
-                ],
+                "messages": [*state["messages"], AIMessage(content=f"Error: {str(e)}")],
                 "next": "update_state",
             }
 
     async def _research_team_node(self, state: MessagesState) -> Dict:
         """Research team processing"""
         try:
-            message = state["messages"][-1]["content"]
-            result = await self.research_team.search_papers(message)
+            # Get the last message's content correctly
+            last_message = state["messages"][-1]
+            message_content = (
+                last_message.content
+                if isinstance(last_message, HumanMessage)
+                else last_message["content"]
+            )
+
+            result = await self.research_team.search_papers(message_content)
 
             response = self.main_agent._format_search_results(result)
             return {
-                "messages": [
-                    *state["messages"],
-                    {"role": "assistant", "content": response},
-                ],
+                "messages": [*state["messages"], AIMessage(content=response)],
                 "next": "update_state",
             }
         except Exception as e:
             print(f"[DEBUG] Error in research team: {str(e)}")
             return {
-                "messages": [
-                    *state["messages"],
-                    {"role": "assistant", "content": f"Error: {str(e)}"},
-                ],
+                "messages": [*state["messages"], AIMessage(content=f"Error: {str(e)}")],
                 "next": "update_state",
             }
 
@@ -1096,16 +1099,17 @@ Please provide a structured response that:
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Initialize messages state
-            messages_state = {"messages": [{"role": "user", "content": request}]}
+            # Initialize messages state with HumanMessage
+            messages_state = {"messages": [HumanMessage(content=request)]}
 
             # Process through graph
-            # Change from arun to ainvoke
             result = await self.graph.ainvoke(messages_state)
 
             # Update state with results
             for message in result["messages"]:
-                if message["role"] == "assistant":
+                if isinstance(message, AIMessage):
+                    self.state.add_message("system", message.content)
+                elif isinstance(message, dict) and message.get("role") == "assistant":
                     self.state.add_message("system", message["content"])
 
             return self.state
