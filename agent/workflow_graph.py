@@ -91,13 +91,19 @@ class WorkflowGraph:
 
     async def _start_node(self, state: MessagesState) -> Dict:
         """Initialize request processing"""
-        print("[DEBUG] Starting new request")
-        self.state.update_state(
-            status=AgentStatus.PROCESSING,
-            current_step="start",
-            next_steps=["main_agent"],
-        )
-        return {"messages": state["messages"], "next": "main_agent"}
+        try:
+            print("[DEBUG] Starting new request")
+            self.state.update_state(
+                status=AgentStatus.PROCESSING,
+                current_step="start",
+                next_steps=["main_agent"],
+            )
+            return {"messages": state["messages"], "next": "main_agent"}
+        except Exception as e:
+            print(f"[DEBUG] Error in start node: {str(e)}")
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            return {"state": self.state, "next": "update_state"}
 
     async def _main_agent_node(self, state: MessagesState) -> Dict:
         """Main agent processing"""
