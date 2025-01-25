@@ -2,41 +2,67 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, MessagesState, StateGraph
 
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus
-from tools.ollama_tool import OllamaTool
+from state.conversation_memory import ConversationMemory
+from state.search_context import SearchContext
 from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
 
 
-class WorkflowGraph:
-    """Enhanced workflow graph that integrates tools and manages state transitions"""
+class ResearchTeam:
+    """Research team responsible for paper search and initial analysis"""
 
-    def __init__(
-        self,
-        model_name: str = "llama3.2:1b-instruct-q3_K_M",
-        state: Optional[AgentState] = None,
-    ):
-        """Initialize the workflow graph with tools and state management"""
+    def __init__(self, state: AgentState):
+        self.state = state
+        self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
+        self.paper_analyzer_tool = PaperAnalyzerTool(state=self.state)
+
+    async def search_papers(self, query: str) -> Dict:
+        """Execute paper search"""
+        return await self.semantic_scholar_tool._arun(query)
+
+    async def analyze_paper(self, paper_id: str, request: str) -> Dict:
+        """Analyze specific paper"""
+        return await self.paper_analyzer_tool._arun(paper_id=paper_id, request=request)
+
+
+class WorkflowGraph:
+    """Enhanced workflow graph with hierarchical team structure"""
+
+    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         print("[DEBUG] Initializing WorkflowGraph")
 
-        # Initialize state
-        self.state = state or AgentState()
+        # Initialize state and teams
+        self.state = AgentState()
+        self.main_agent = MainAgent(model_name=model_name)
+        self.research_team = ResearchTeam(state=self.state)
 
-        # Initialize tools
-        self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
-        self.paper_analyzer_tool = PaperAnalyzerTool(
-            model_name=model_name, state=self.state
-        )
-        self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
-
-        # Create graph
-        self.graph = StateGraph(AgentState)
-        self.setup_graph()
+        # Create workflow graph
+        self.graph = self._create_workflow_graph()
         print("[DEBUG] WorkflowGraph initialized")
+
+    def _create_workflow_graph(self) -> StateGraph:
+        """Create the hierarchical workflow graph"""
+        workflow = StateGraph(MessagesState)
+
+        # Add nodes
+        workflow.add_node("start", self._start_node)
+        workflow.add_node("main_agent", self._main_agent_node)
+        workflow.add_node("research_team", self._research_team_node)
+        workflow.add_node("update_state", self._update_state_node)
+
+        # Add edges
+        workflow.add_edge(START, "start")
+        workflow.add_edge("start", "main_agent")
+        workflow.add_edge("main_agent", "research_team")
+        workflow.add_edge("research_team", "update_state")
+        workflow.add_edge("update_state", END)
+
+        return workflow.compile()
 
     def setup_graph(self):
         """Setup the state graph with enhanced nodes and edges"""
@@ -63,22 +89,85 @@ class WorkflowGraph:
         # Set entry point
         self.graph.set_entry_point("start")
 
-    async def _start_node(self, state: AgentState) -> Dict:
-        """Initialize processing for new request"""
+    async def _start_node(self, state: MessagesState) -> Dict:
+        """Initialize request processing"""
+        print("[DEBUG] Starting new request")
+        self.state.update_state(
+            status=AgentStatus.PROCESSING,
+            current_step="start",
+            next_steps=["main_agent"],
+        )
+        return {"messages": state["messages"], "next": "main_agent"}
+
+    async def _main_agent_node(self, state: MessagesState) -> Dict:
+        """Main agent processing"""
         try:
-            print("[DEBUG] Starting new request processing")
-            state.update_state(
-                status=AgentStatus.PROCESSING,
-                current_step="start",
-                next_steps=["analyze_intent"],
-                last_update=datetime.now(),
-            )
-            return {"state": state, "next": "analyze_intent"}
+            message = state["messages"][-1]["content"]
+            intent = await self.main_agent._determine_intent(message)
+
+            if intent == "search":
+                return {"messages": state["messages"], "next": "research_team"}
+            else:
+                result = await self.main_agent.process_request(message)
+                return {
+                    "messages": [
+                        *state["messages"],
+                        {
+                            "role": "assistant",
+                            "content": result.memory.messages[-1]["content"],
+                        },
+                    ],
+                    "next": "update_state",
+                }
         except Exception as e:
-            print(f"[DEBUG] Error in start node: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            return {"state": state, "next": "update_state"}
+            print(f"[DEBUG] Error in main agent: {str(e)}")
+            return {
+                "messages": [
+                    *state["messages"],
+                    {"role": "assistant", "content": f"Error: {str(e)}"},
+                ],
+                "next": "update_state",
+            }
+
+    async def _research_team_node(self, state: MessagesState) -> Dict:
+        """Research team processing"""
+        try:
+            message = state["messages"][-1]["content"]
+            result = await self.research_team.search_papers(message)
+
+            response = self.main_agent._format_search_results(result)
+            return {
+                "messages": [
+                    *state["messages"],
+                    {"role": "assistant", "content": response},
+                ],
+                "next": "update_state",
+            }
+        except Exception as e:
+            print(f"[DEBUG] Error in research team: {str(e)}")
+            return {
+                "messages": [
+                    *state["messages"],
+                    {"role": "assistant", "content": f"Error: {str(e)}"},
+                ],
+                "next": "update_state",
+            }
+
+    async def _update_state_node(self, state: MessagesState) -> Dict:
+        """Update final state"""
+        self.state.last_update = datetime.now()
+        if not hasattr(self.state, "state_history"):
+            self.state.state_history = []
+
+        self.state.state_history.append(
+            {
+                "timestamp": datetime.now(),
+                "step": self.state.current_step,
+                "status": self.state.status.value,
+            }
+        )
+
+        return {"messages": state["messages"], "next": END}
 
     async def _analyze_intent(self, state: AgentState) -> Dict:
         """Analyze request intent using Ollama"""
@@ -992,13 +1081,18 @@ Please provide a structured response that:
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Add request to state
-            self.state.add_message("user", request)
+            # Initialize messages state
+            messages_state = {"messages": [{"role": "user", "content": request}]}
 
             # Process through graph
-            result = await self.graph.arun(initial_state=self.state)
+            result = await self.graph.arun(messages_state)
 
-            return result
+            # Update state with results
+            for message in result["messages"]:
+                if message["role"] == "assistant":
+                    self.state.add_message("system", message["content"])
+
+            return self.state
 
         except Exception as e:
             print(f"[DEBUG] Error processing request: {str(e)}")
