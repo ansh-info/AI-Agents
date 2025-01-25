@@ -1,8 +1,10 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from langchain.tools import BaseTool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import START, MessagesState, StateGraph
 
+from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
 from tools.ollama_tool import OllamaTool
 from tools.paper_analyzer_tool import PaperAnalyzerTool
@@ -200,22 +202,29 @@ class MainAgent:
     async def _determine_intent(self, message: str) -> str:
         """Determine the intent of a message using LLM"""
         try:
-            intent_prompt = f"""Analyze this user message and determine the intent:
-Message: "{message}"
-
-Possible intents:
-1. search - User wants to find papers
-2. analyze - User wants to analyze specific papers
-3. conversation - General questions or chat
-
-Return only one word (search/analyze/conversation)."""
+            intent_prompt = (
+                "Classify the following message into one of these categories:\n"
+                "- search: looking for papers\n"
+                "- analyze: analyzing specific papers\n"
+                "- conversation: general chat\n\n"
+                f"Message: {message}\n\n"
+                "Return ONLY ONE WORD (search/analyze/conversation):"
+            )
 
             response = await self.ollama_client.generate(
                 prompt=intent_prompt,
                 system_prompt="You are an intent classifier. Return only one word.",
                 temperature=0.1,
             )
-            return response.strip().lower()
+
+            # Clean up response
+            response = response.strip().lower()
+            if "search" in response:
+                return "search"
+            elif "analyze" in response:
+                return "analyze"
+            return "conversation"
+
         except Exception as e:
             print(f"[DEBUG] Error determining intent: {str(e)}")
             return "conversation"
