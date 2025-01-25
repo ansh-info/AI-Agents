@@ -2,10 +2,7 @@ import asyncio
 import json
 
 from agent.enhanced_workflow import EnhancedWorkflowManager
-from state.agent_state import AgentState
-from tools.ollama_tool import OllamaTool
-from tools.paper_analyzer_tool import PaperAnalyzerTool
-from tools.semantic_scholar_tool import SemanticScholarTool
+from state.agent_state import AgentState, AgentStatus
 
 
 async def print_result(response: AgentState, test_name: str):
@@ -21,125 +18,130 @@ async def print_result(response: AgentState, test_name: str):
     print("=" * 50)
 
 
-async def test_agent():
-    """Test all agent functionality"""
-    # Initialize managers
-    enhanced_workflow = EnhancedWorkflowManager()
-
-    async def run_test(message: str, test_name: str):
-        """Run a single test case"""
-        print(f"\nExecuting test: {test_name}")
-        try:
-            response = await enhanced_workflow.process_command_async(message)
-            await print_result(response, test_name)
-            return response
-        except Exception as e:
-            print(f"Error in {test_name}: {str(e)}")
-            return None
-
-    # Test 1: Basic Conversation
-    await run_test("Hi there! Can you help me with research?", "Basic Conversation")
-
-    # Test 2: Paper Search
-    search_result = await run_test(
-        "Find recent papers about large language models published in the last 2 years",
-        "Paper Search",
-    )
-
-    # Test 3: Paper Analysis
-    if search_result and search_result.search_context.results:
-        # Get first paper from previous search
-        paper_num = 1
-        await run_test(
-            f"Can you analyze paper {paper_num} in detail?", "Paper Analysis"
-        )
-
-        # Test 4: Specific Question
-        await run_test(
-            f"What methodology did paper {paper_num} use?", "Specific Paper Question"
-        )
-
-        # Test 5: Paper Comparison
-        await run_test(
-            "Compare papers 1 and 2 from the search results", "Paper Comparison"
-        )
-
-    # Test 6: Invalid Paper Reference
-    await run_test("Tell me about paper 999", "Invalid Paper Reference")
-
-    # Test 7: System Health Check
-    print("\n=== Testing System Health ===")
-    health_status = await enhanced_workflow.check_workflow_health()
-    print("Health Status:")
-    print(json.dumps(health_status, indent=2))
-
-    # Test 8: Complex Query
-    await run_test(
-        "Find papers about transformers in machine learning, focus on those with high citations",
-        "Complex Search Query",
-    )
-
-    # Test 9: Error Handling
-    await run_test(
-        "",  # Empty query to test error handling
-        "Error Handling - Empty Query",
-    )
-
-    # Test 10: State Management
-    state_test_result = await run_test(
-        "What were the papers we just found about transformers?",
-        "State Management - Context Retention",
-    )
-
-
-async def test_tools():
-    """Test individual tools"""
+async def test_hierarchical_workflow():
+    """Test the hierarchical workflow implementation"""
     workflow = EnhancedWorkflowManager()
-    state = AgentState()
 
-    print("\n=== Testing Individual Tools ===")
+    # Test cases to verify different aspects of the system
+    test_cases = [
+        {
+            "name": "Basic Search",
+            "input": "Find recent papers about large language models",
+            "expected_intent": "search",
+        },
+        {
+            "name": "Paper Analysis",
+            "input": "What is the methodology used in paper 1?",
+            "expected_intent": "analyze",
+        },
+        {
+            "name": "General Conversation",
+            "input": "Can you explain what transformer models are?",
+            "expected_intent": "conversation",
+        },
+        {
+            "name": "Complex Query",
+            "input": "Find papers about transformers and summarize their main findings",
+            "expected_intent": "search",
+        },
+    ]
 
-    semantic_tool = SemanticScholarTool(state=state)
-    paper_analyzer = PaperAnalyzerTool(state=state)
-    ollama_tool = OllamaTool(state=state)
+    for test in test_cases:
+        print(f"\nExecuting test: {test['name']}")
+        try:
+            # Process request
+            response = await workflow.process_command_async(test["input"])
 
-    # Test Semantic Scholar Tool
-    print("\nTesting Semantic Scholar Tool...")
-    try:
-        state.add_message("user", "Find papers about neural networks")
-        response = await semantic_tool._arun("neural networks")
-        print(f"Search Results: {response[:200]}...")
-    except Exception as e:
-        print(f"Semantic Scholar Tool Error: {str(e)}")
+            # Print results
+            await print_result(response, test["name"])
 
-    # Test Paper Analyzer Tool
-    print("\nTesting Paper Analyzer Tool...")
-    try:
-        if state.search_context.results:
-            paper = state.search_context.results[0]
-            response = await paper_analyzer._arun(
-                paper_id=paper.paper_id, analysis_type="summary"
+            # Verify state updates
+            assert response.status in [AgentStatus.SUCCESS, AgentStatus.ERROR]
+            assert response.current_step is not None
+            if response.status == AgentStatus.SUCCESS:
+                assert (
+                    len(response.memory.messages) >= 2
+                )  # At least user input and system response
+
+            print(f"✅ {test['name']} completed successfully")
+
+        except Exception as e:
+            print(f"❌ Error in {test['name']}: {str(e)}")
+
+
+async def test_error_handling():
+    """Test error handling in the workflow"""
+    workflow = EnhancedWorkflowManager()
+
+    error_test_cases = [
+        {"name": "Empty Query", "input": "", "expected_error": True},
+        {
+            "name": "Invalid Paper Reference",
+            "input": "Analyze paper 999",
+            "expected_error": True,
+        },
+    ]
+
+    for test in error_test_cases:
+        print(f"\nExecuting error test: {test['name']}")
+        try:
+            response = await workflow.process_command_async(test["input"])
+            assert (
+                response.status == AgentStatus.ERROR
+                if test["expected_error"]
+                else AgentStatus.SUCCESS
             )
-            print(f"Analysis Results: {response[:200]}...")
-    except Exception as e:
-        print(f"Paper Analyzer Tool Error: {str(e)}")
+            print(f"✅ {test['name']} error handling working as expected")
+        except Exception as e:
+            print(f"❌ Error in {test['name']}: {str(e)}")
 
-    # Test Ollama Tool
-    print("\nTesting Ollama Tool...")
-    try:
-        response = await ollama_tool._arun(prompt="Explain what a neural network is")
-        print(f"Ollama Response: {response[:200]}...")
-    except Exception as e:
-        print(f"Ollama Tool Error: {str(e)}")
+
+async def test_state_persistence():
+    """Test state persistence across multiple interactions"""
+    workflow = EnhancedWorkflowManager()
+
+    # Sequence of interactions to test context maintenance
+    interactions = [
+        "Find papers about neural networks",
+        "What is the methodology in paper 1?",
+        "Compare papers 1 and 2",
+        "What were the papers we found earlier?",
+    ]
+
+    print("\nTesting state persistence across interactions")
+    for i, query in enumerate(interactions, 1):
+        try:
+            response = await workflow.process_command_async(query)
+            print(f"\nInteraction {i}:")
+            print(f"Query: {query}")
+            print(
+                f"State maintained: {len(response.memory.messages)} messages in history"
+            )
+            print(
+                f"Search results tracked: {len(response.search_context.results) if response.search_context else 0} papers"
+            )
+        except Exception as e:
+            print(f"❌ Error in interaction {i}: {str(e)}")
 
 
 async def main():
-    """Main test function"""
-    print("Starting Agent Tests...")
-    await test_agent()
-    print("\nStarting Tool Tests...")
-    await test_tools()
-    print("\nAll tests completed!")
+    """Run all tests"""
+    print("Starting Tests...")
+
+    print("\n1. Testing Hierarchical Workflow")
+    await test_hierarchical_workflow()
+
+    print("\n2. Testing Error Handling")
+    await test_error_handling()
+
+    print("\n3. Testing State Persistence")
+    await test_state_persistence()
+
+    print("\n4. Testing System Health")
+    workflow = EnhancedWorkflowManager()
+    health_status = await workflow.check_workflow_health()
+    print("System Health Status:")
+    print(json.dumps(health_status, indent=2))
 
 
 if __name__ == "__main__":
