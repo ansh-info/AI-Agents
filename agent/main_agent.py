@@ -10,38 +10,43 @@ from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 class MainAgent:
-    """Main orchestrator agent that manages the research workflow."""
+    """Main supervisor agent that orchestrates the research workflow"""
 
-    SYSTEM_PROMPT = """You are Talk2Papers, an academic research assistant that helps users find, analyze, and understand academic papers.
-    
-    You have access to these specialized tools:
-    1. semantic_scholar_tool: Search and retrieve academic papers
-       - Use for: Finding papers, getting citations, retrieving metadata
-       - Input: Search queries with optional filters
+    SYSTEM_PROMPT = """You are Talk2Papers, an academic research assistant designed to help users find, analyze, and understand academic papers. You have access to these specialized tools:
+
+    1. semantic_scholar_search: Search for academic papers
+       - Use for: Finding papers based on topics, authors, or keywords
+       - Input: Search queries with optional filters for year, citations
+       - Example: "Find recent papers about large language models"
        
-    2. paper_analyzer_tool: Analyze paper content
-       - Use for: Summarizing papers, analyzing methods, extracting findings
-       - Input: Paper ID/index and analysis request
+    2. paper_analyzer: Analyze paper content
+       - Use for: Understanding paper content, extracting insights
+       - Input: Paper ID and analysis request
+       - Example: "Analyze the methodology of paper 1"
        
-    3. ollama_tool: General text generation and understanding
-       - Use for: Answering questions, generating explanations
-       - Input: User queries with optional context
-    
-    Your workflow:
+    3. conversation: Handle general queries and explanations
+       - Use for: Questions about results, explanations, clarifications
+       - Example: "Explain what this paper is about"
+
+    Approach each request step by step:
+
     1. UNDERSTAND THE REQUEST
-    - Carefully analyze what the user is asking for
-    - Determine which tools are needed
-    - Plan the sequence of tool usage
+       - Carefully analyze what the user is asking for
+       - Identify if they need:
+         * Paper search (finding new papers)
+         * Paper analysis (understanding specific papers)
+         * General help or explanations
 
-    2. USE TOOLS APPROPRIATELY  
-    - semantic_scholar_tool for finding papers
-    - paper_analyzer_tool for paper questions
-    - ollama_tool for general queries
-    
-    3. MAINTAIN CONTEXT
-    - Track papers being discussed
-    - Remember previous searches
-    - Build on previous interactions
+    2. DETERMINE TOOLS TO USE
+       - Choose the appropriate tool based on the request:
+         * Use semantic_scholar_search for finding papers
+         * Use paper_analyzer for analyzing specific papers
+         * Use conversation for general queries
+
+    3. EXECUTE AND RESPOND
+       - Use tools in logical sequence
+       - Maintain conversation context
+       - Provide clear, structured responses
 
     Current conversation context: {context}
     Current state: {state}
@@ -189,7 +194,7 @@ class MainAgent:
         return workflow.compile()
 
     async def _determine_intent(self, message: str) -> str:
-        """Determine the intent of a message using Ollama."""
+        """Determine the intent of a message using LLM"""
         try:
             intent_prompt = f"""Analyze this user message and determine the intent:
 Message: "{message}"
@@ -201,14 +206,12 @@ Possible intents:
 
 Return only one word (search/analyze/conversation)."""
 
-            intent = await self.ollama_tool._arun(
+            response = await self.ollama_client.generate(
                 prompt=intent_prompt,
                 system_prompt="You are an intent classifier. Return only one word.",
                 temperature=0.1,
             )
-
-            return intent.strip().lower()
-
+            return response.strip().lower()
         except Exception as e:
             print(f"[DEBUG] Error determining intent: {str(e)}")
             return "conversation"
@@ -222,56 +225,80 @@ Return only one word (search/analyze/conversation)."""
         else:
             return str(message)
 
-    async def process_request(self, state: AgentState) -> AgentState:
-        """Process a user request using the workflow graph."""
+    async def process_request(self, message: str) -> AgentState:
+        """Process a user request"""
         try:
-            print("[DEBUG] MainAgent processing request")
+            print(f"[DEBUG] Processing request: {message}")
 
-            # Update local state
-            self.state = state
+            # Add user message to state
+            self.state.add_message("user", message)
 
-            # Convert messages to proper format
-            messages = []
-            for msg in state.memory.messages:
-                messages.append(
-                    {"role": msg.get("role", "user"), "content": msg.get("content", "")}
-                )
+            # Determine intent
+            intent = await self._determine_intent(message)
+            print(f"[DEBUG] Determined intent: {intent}")
 
-            # Process through graph
-            result = await self.graph.ainvoke({"messages": messages})
+            # Route to appropriate tool
+            if intent == "search":
+                result = await self.semantic_scholar_tool._arun(message)
+                self.state.add_message("system", self._format_search_results(result))
+            elif intent == "analyze":
+                result = await self.paper_analyzer_tool._arun(message)
+                self.state.add_message("system", result)
+            else:
+                result = await self.ollama_tool._arun(message)
+                self.state.add_message("system", result)
 
-            # Update state with results
-            if isinstance(result, dict) and "messages" in result:
-                for msg in result["messages"]:
-                    if isinstance(msg, dict) and msg.get("role") == "assistant":
-                        state.add_message("system", msg["content"])
-
-            state.status = AgentStatus.SUCCESS
-            return state
+            self.state.status = AgentStatus.SUCCESS
+            return self.state
 
         except Exception as e:
-            print(f"[DEBUG] Error in process_request: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            state.add_message(
+            print(f"[DEBUG] Error processing request: {str(e)}")
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            self.state.add_message(
                 "system", f"I apologize, but I encountered an error: {str(e)}"
             )
-            return state
+            return self.state
+
+    def _format_search_results(self, results: Dict) -> str:
+        """Format search results for display"""
+        if results["status"] == "error":
+            return f"Error performing search: {results['error']}"
+
+        if not results["papers"]:
+            return "No papers found matching your criteria."
+
+        formatted_parts = [
+            f"Found {results['total_results']} papers. Here are the most relevant:"
+        ]
+
+        for i, paper in enumerate(results["papers"], 1):
+            formatted_parts.extend(
+                [
+                    f"\n{i}. {paper['title']}",
+                    f"Authors: {', '.join(paper['authors'])}",
+                    f"Year: {paper['year'] or 'N/A'} | Citations: {paper['citations'] or 0}",
+                    f"Abstract: {paper['abstract']}",
+                    f"URL: {paper['url']}\n",
+                ]
+            )
+
+        return "\n".join(formatted_parts)
 
     async def check_health(self) -> Dict[str, bool]:
-        """Check health of all components."""
+        """Check health of all components"""
         try:
             return {
                 "semantic_scholar": await self.semantic_scholar_tool.check_health(),
                 "paper_analyzer": await self.paper_analyzer_tool.check_health(),
                 "ollama": await self.ollama_tool.check_health(),
-                "graph": True,
+                "main_agent": True,
             }
         except Exception as e:
             return {
                 "semantic_scholar": False,
                 "paper_analyzer": False,
                 "ollama": False,
-                "graph": False,
+                "main_agent": False,
                 "error": str(e),
             }
