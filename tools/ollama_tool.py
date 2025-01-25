@@ -21,7 +21,7 @@ class GenerateInput(BaseModel):
 
 
 class OllamaTool(BaseTool):
-    """Enhanced tool for Ollama LLM interactions"""
+    """Tool for LLM interactions using Ollama"""
 
     name: str = "ollama_tool"
     description: str = """Use this tool for text generation and understanding.
@@ -31,9 +31,6 @@ class OllamaTool(BaseTool):
     2. Analyze and understand user intents
     3. Provide explanations and summaries
     4. Help with paper analysis
-    
-    Input should be a prompt describing what you want the model to do.
-    You can optionally provide a system prompt to guide the model's behavior.
     """
     args_schema: Type[BaseModel] = GenerateInput
 

@@ -40,8 +40,6 @@ class PaperAnalyzerTool(BaseTool):
     4. Assess research impact
     5. Compare multiple papers
     6. Answer specific questions about papers
-    
-    Input should specify the paper (by ID or index) and type of analysis needed.
     """
     args_schema: Type[BaseModel] = AnalysisRequest
 
