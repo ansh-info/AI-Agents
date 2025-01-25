@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from agent.main_agent import MainAgent
+from agent.workflow_graph import WorkflowGraph
 from agent.workflow_manager import ResearchWorkflowManager
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import (
@@ -281,80 +283,55 @@ class SearchAgent:
 
 
 class EnhancedWorkflowManager:
-    """Enhanced workflow manager that integrates with the new hierarchical system"""
+    """Enhanced workflow manager that integrates the hierarchical system"""
 
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
-        """Initialize with both old and new components for gradual transition"""
+        """Initialize the workflow manager with hierarchical components"""
         try:
             print("[DEBUG] Initializing EnhancedWorkflowManager")
 
-            # Initialize clients
-            print("[DEBUG] Initializing clients...")
-            self.ollama_client = OllamaClient(model_name=model_name)
-            self.s2_client = SemanticScholarClient()
-            print("[DEBUG] Clients initialized successfully")
+            # Initialize components
+            self.state = AgentState()
+            self.main_agent = MainAgent(model_name=model_name)
+            self.workflow_graph = WorkflowGraph(model_name=model_name)
 
-            # Initialize agents
-            print("[DEBUG] Initializing agents...")
-            self.conversation_agent = ConversationAgent(
-                ollama_client=self.ollama_client
-            )
-            self.search_agent = SearchAgent(s2_client=self.s2_client)
-            print("[DEBUG] Agents initialized successfully")
-
-            # Initialize workflow manager
-            print("[DEBUG] Initializing workflow manager...")
-            self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
-            print("[DEBUG] Workflow manager initialized successfully")
-
-            # Initialize state
-            print("[DEBUG] Initializing state...")
-            self.current_state = AgentState()
-            print("[DEBUG] State initialized successfully")
-
-            print("[DEBUG] EnhancedWorkflowManager initialization complete")
+            print("[DEBUG] EnhancedWorkflowManager initialized successfully")
 
         except Exception as e:
             print(f"[DEBUG] Error in EnhancedWorkflowManager initialization: {str(e)}")
             raise
 
     async def process_command_async(self, command: str) -> AgentState:
-        """Process commands using new workflow manager"""
+        """Process commands using the hierarchical workflow"""
         try:
-            print(f"\n[DEBUG] Processing command through new workflow: {command}")
+            print(f"\n[DEBUG] Processing command: {command}")
 
-            # Parse command to determine intent
-            command_info = CommandParser.parse_command(command)
-            print(f"[DEBUG] Parsed command intent: {command_info['intent']}")
+            # Update state with new command
+            self.state.add_message("user", command)
+            self.state.update_state(
+                status=AgentStatus.PROCESSING,
+                current_step="command_received",
+                next_steps=["process_intent"],
+            )
 
-            # Update state with intent
-            self.current_state.memory.last_command = command
+            # Process through workflow graph
+            result = await self.workflow_graph.process_request(command)
 
-            # Process based on intent
-            if command_info["intent"] == "search":
-                result = await self._handle_search(command_info["query"])
-                return result["state"]
-            elif command_info["intent"] == "paper_question":
-                await self._handle_paper_question(
-                    command_info["paper_reference"], command
-                )
-                return self.current_state
-            elif command_info["intent"] == "compare_papers":
-                await self._handle_paper_comparison(command_info["paper_references"])
-                return self.current_state
-            else:
-                # Handle conversation
-                await self._handle_conversation(command)
-                return self.current_state
+            # Update final state
+            self.state = result
+            self.state.current_step = "completed"
+            self.state.status = AgentStatus.SUCCESS
+
+            return self.state
 
         except Exception as e:
             print(f"[DEBUG] Error in workflow: {str(e)}")
-            self.current_state.status = AgentStatus.ERROR
-            self.current_state.error_message = str(e)
-            self.current_state.add_message(
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            self.state.add_message(
                 "system", f"I apologize, but I encountered an error: {str(e)}"
             )
-            return self.current_state
+            return self.state
 
     async def _handle_conversation(self, command: str):
         """Handle general conversation"""
@@ -660,18 +637,43 @@ What would you like me to help you with?"""
     async def check_workflow_health(self) -> Dict[str, Any]:
         """Check health of all workflow components"""
         try:
+            # Check main agent health
+            agent_health = await self.main_agent.check_health()
+
+            # Check workflow graph health
+            workflow_health = True  # We'll add more specific checks later
+
+            # Aggregate results
             return {
-                "workflow_graph": True,
-                "ollama_client": await self.ollama_client.check_model_availability(),
-                "semantic_scholar": await self.s2_client.check_api_status(),
+                "workflow_graph": workflow_health,
+                "main_agent": agent_health.get("main_agent", False),
+                "semantic_scholar": agent_health.get("semantic_scholar", False),
+                "ollama_client": agent_health.get("ollama", False),
                 "command_parser": True,
                 "errors": [],
             }
+
         except Exception as e:
             return {
                 "workflow_graph": False,
-                "ollama_client": False,
+                "main_agent": False,
                 "semantic_scholar": False,
+                "ollama_client": False,
                 "command_parser": False,
                 "errors": [str(e)],
             }
+
+    def _build_context(self) -> Dict[str, Any]:
+        """Build current context for tools and agents"""
+        return {
+            "current_step": self.state.current_step,
+            "conversation_history": self.state.memory.messages[-5:]
+            if self.state.memory.messages
+            else [],
+            "current_papers": self.state.search_context.results
+            if self.state.search_context
+            else [],
+            "focused_paper": self.state.memory.focused_paper.paper_id
+            if self.state.memory.focused_paper
+            else None,
+        }
