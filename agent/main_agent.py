@@ -53,44 +53,48 @@ class MainAgent:
     """
 
     def __init__(
-        self, model_name: str = "llama3.2:1b-instruct-q3_K_M", tools: List[Any] = None
+        self,
+        model_name: str = "llama3.2:1b-instruct-q3_K_M",
+        tools: Optional[List[BaseTool]] = None,
     ):
         """Initialize the agent with tools and state"""
-        print("[DEBUG] Initializing MainAgent")
+        try:
+            print("[DEBUG] Initializing MainAgent")
+            self.state = AgentState()
+            self.ollama_client = OllamaClient(model_name=model_name)
 
-        # Initialize state
-        self.state = AgentState()
+            # Initialize tools
+            if tools is not None:
+                print("[DEBUG] Using provided tools")
+                self.tools = tools
+                # Find tools by type
+                self.semantic_scholar_tool = next(
+                    (t for t in tools if isinstance(t, SemanticScholarTool)), None
+                )
+                self.paper_analyzer_tool = next(
+                    (t for t in tools if isinstance(t, PaperAnalyzerTool)), None
+                )
+                self.ollama_tool = next(
+                    (t for t in tools if isinstance(t, OllamaTool)), None
+                )
+            else:
+                print("[DEBUG] Creating new tools")
+                self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
+                self.paper_analyzer_tool = PaperAnalyzerTool(
+                    model_name=model_name, state=self.state
+                )
+                self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
+                self.tools = [
+                    self.semantic_scholar_tool,
+                    self.paper_analyzer_tool,
+                    self.ollama_tool,
+                ]
 
-        # Initialize tools - either use provided tools or create new ones
-        if tools:
-            print("[DEBUG] Using provided tools")
-            self.tools = tools
-            # Find tools by type
-            self.semantic_scholar_tool = next(
-                (t for t in tools if isinstance(t, SemanticScholarTool)), None
-            )
-            self.paper_analyzer_tool = next(
-                (t for t in tools if isinstance(t, PaperAnalyzerTool)), None
-            )
-            self.ollama_tool = next(
-                (t for t in tools if isinstance(t, OllamaTool)), None
-            )
-        else:
-            print("[DEBUG] Creating new tools")
-            self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
-            self.paper_analyzer_tool = PaperAnalyzerTool(
-                model_name=model_name, state=self.state
-            )
-            self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
-            self.tools = [
-                self.semantic_scholar_tool,
-                self.paper_analyzer_tool,
-                self.ollama_tool,
-            ]
+            print("[DEBUG] MainAgent initialized successfully")
 
-        # Create workflow graph
-        self.graph = self._create_graph()
-        print("[DEBUG] MainAgent initialized with tools and graph")
+        except Exception as e:
+            print(f"[DEBUG] Error initializing MainAgent: {str(e)}")
+            raise
 
     def _create_supervisor_node(self):
         """Create the supervisor node that routes to tools."""
