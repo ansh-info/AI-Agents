@@ -4,11 +4,13 @@ from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, START, MessagesState, StateGraph
 
+from agent.main_agent import MainAgent
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus
 from state.conversation_memory import ConversationMemory
 from state.search_context import SearchContext
+from tools.ollama_tool import OllamaTool
 from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
 
@@ -37,11 +39,18 @@ class WorkflowGraph:
         print("[DEBUG] Initializing WorkflowGraph")
 
         # Initialize state and teams
-        self.state = AgentState()
+        self.state = AgentState()  # Initialize state first
         self.main_agent = MainAgent(model_name=model_name)
         self.research_team = ResearchTeam(state=self.state)
 
-        # Create workflow graph
+        # Initialize tools
+        self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
+        self.paper_analyzer_tool = PaperAnalyzerTool(
+            model_name=model_name, state=self.state
+        )
+        self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
+
+        # Create graph
         self.graph = self._create_workflow_graph()
         print("[DEBUG] WorkflowGraph initialized")
 
@@ -50,19 +59,19 @@ class WorkflowGraph:
         workflow = StateGraph(MessagesState)
 
         # Add nodes
-        workflow.add_node("start", self._start_node)
-        workflow.add_node("main_agent", self._main_agent_node)
+        workflow.add_node("supervisor", self._main_agent_node)
         workflow.add_node("research_team", self._research_team_node)
         workflow.add_node("update_state", self._update_state_node)
 
         # Add edges
-        workflow.add_edge(START, "start")
-        workflow.add_edge("start", "main_agent")
-        workflow.add_edge("main_agent", "research_team")
+        workflow.add_edge(START, "supervisor")
+        workflow.add_edge("supervisor", "research_team")
         workflow.add_edge("research_team", "update_state")
         workflow.add_edge("update_state", END)
 
-        return workflow.compile()
+        # Set the entry point
+        self.graph = workflow.compile()
+        return self.graph
 
     def setup_graph(self):
         """Setup the state graph with enhanced nodes and edges"""
@@ -1091,7 +1100,8 @@ Please provide a structured response that:
             messages_state = {"messages": [{"role": "user", "content": request}]}
 
             # Process through graph
-            result = await self.graph.arun(messages_state)
+            # Change from arun to ainvoke
+            result = await self.graph.ainvoke(messages_state)
 
             # Update state with results
             for message in result["messages"]:
