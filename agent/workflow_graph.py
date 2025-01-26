@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
 from agent.main_agent import MainAgent
@@ -118,12 +118,11 @@ class WorkflowGraph:
     async def _main_agent_node(self, state: MessagesState) -> Dict:
         """Main agent processing"""
         try:
-            # Get the last message's content correctly
-            last_message = state["messages"][-1]
+            message = state["messages"][-1]
             message_content = (
-                last_message.content
-                if isinstance(last_message, HumanMessage)
-                else last_message["content"]
+                message.content
+                if isinstance(message, HumanMessage)
+                else message["content"]
             )
 
             intent = await self.main_agent._determine_intent(message_content)
@@ -142,22 +141,27 @@ class WorkflowGraph:
         except Exception as e:
             print(f"[DEBUG] Error in main agent: {str(e)}")
             return {
-                "messages": [*state["messages"], AIMessage(content=f"Error: {str(e)}")],
+                "messages": [
+                    *state["messages"],
+                    SystemMessage(content=f"Error: {str(e)}"),
+                ],
                 "next": "update_state",
             }
 
     async def _research_team_node(self, state: MessagesState) -> Dict:
         """Research team processing"""
         try:
-            # Get the last message's content correctly
-            last_message = state["messages"][-1]
+            message = state["messages"][-1]
             message_content = (
-                last_message.content
-                if isinstance(last_message, HumanMessage)
-                else last_message["content"]
+                message.content
+                if isinstance(message, HumanMessage)
+                else message["content"]
             )
 
             result = await self.research_team.search_papers(message_content)
+
+            # Update state with search results
+            self.state.search_context.results = result.get("papers", [])
 
             response = self.main_agent._format_search_results(result)
             return {
@@ -167,7 +171,10 @@ class WorkflowGraph:
         except Exception as e:
             print(f"[DEBUG] Error in research team: {str(e)}")
             return {
-                "messages": [*state["messages"], AIMessage(content=f"Error: {str(e)}")],
+                "messages": [
+                    *state["messages"],
+                    SystemMessage(content=f"Error in search: {str(e)}"),
+                ],
                 "next": "update_state",
             }
 
@@ -1099,7 +1106,7 @@ Please provide a structured response that:
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Initialize messages state with HumanMessage
+            # Initialize messages state
             messages_state = {"messages": [HumanMessage(content=request)]}
 
             # Process through graph
@@ -1107,7 +1114,7 @@ Please provide a structured response that:
 
             # Update state with results
             for message in result["messages"]:
-                if isinstance(message, AIMessage):
+                if isinstance(message, (AIMessage, SystemMessage)):
                     self.state.add_message("system", message.content)
                 elif isinstance(message, dict) and message.get("role") == "assistant":
                     self.state.add_message("system", message["content"])
