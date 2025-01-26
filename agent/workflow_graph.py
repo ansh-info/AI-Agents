@@ -151,21 +151,29 @@ class WorkflowGraph:
     async def _research_team_node(self, state: MessagesState) -> Dict:
         """Research team processing"""
         try:
-            message = state["messages"][-1]
+            # Extract content safely from last message
+            last_message = state["messages"][-1]
             message_content = (
-                message.content
-                if isinstance(message, HumanMessage)
-                else message["content"]
+                last_message.content
+                if isinstance(last_message, HumanMessage)
+                else last_message["content"]
             )
 
             result = await self.research_team.search_papers(message_content)
 
-            # Update state with search results
-            self.state.search_context.results = result.get("papers", [])
+            # Update state with search results if available
+            if "papers" in result:
+                self.state.search_context.results = result["papers"]
 
+            # Format response
             response = self.main_agent._format_search_results(result)
+
+            # Return updated state with new message
             return {
-                "messages": [*state["messages"], AIMessage(content=response)],
+                "messages": [
+                    *state["messages"],
+                    {"role": "system", "content": response},
+                ],
                 "next": "update_state",
             }
         except Exception as e:
@@ -173,7 +181,7 @@ class WorkflowGraph:
             return {
                 "messages": [
                     *state["messages"],
-                    SystemMessage(content=f"Error in search: {str(e)}"),
+                    {"role": "system", "content": f"Error in search: {str(e)}"},
                 ],
                 "next": "update_state",
             }
@@ -1118,6 +1126,12 @@ Please provide a structured response that:
                     self.state.add_message("system", message.content)
                 elif isinstance(message, dict) and message.get("role") == "assistant":
                     self.state.add_message("system", message["content"])
+                elif isinstance(message, HumanMessage):
+                    self.state.add_message("user", message.content)
+
+            # Ensure state is updated
+            if self.state.status != AgentStatus.ERROR:
+                self.state.status = AgentStatus.SUCCESS
 
             return self.state
 
@@ -1125,6 +1139,9 @@ Please provide a structured response that:
             print(f"[DEBUG] Error processing request: {str(e)}")
             self.state.status = AgentStatus.ERROR
             self.state.error_message = str(e)
+            self.state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
             return self.state
 
     async def check_health(self) -> Dict[str, bool]:
