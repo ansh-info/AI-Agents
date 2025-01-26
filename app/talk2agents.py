@@ -46,39 +46,12 @@ class DashboardApp:
                 padding: 1rem;
                 margin-bottom: 1rem;
                 border-radius: 0.5rem;
-                background-color: #f8f9fa;
             }
             .chat-message.user {
                 background-color: #e9ecef;
             }
-            .paper-list {
-                list-style-type: decimal;
-                padding-left: 1.5rem;
-            }
-            .paper-item {
-                margin-bottom: 1rem;
-                padding: 1rem;
-                border-radius: 0.5rem;
-                background-color: white;
-                border: 1px solid #dee2e6;
-            }
-            .paper-title {
-                font-weight: bold;
-                margin-bottom: 0.5rem;
-            }
-            .stChatInputContainer {
-                position: fixed;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                background: white;
-                padding: 1rem 2rem;
-                border-top: 1px solid #dee2e6;
-                z-index: 100;
-            }
-            .main-content {
-                margin-bottom: 80px;  /* Space for fixed chat input */
-                padding: 20px;
+            .chat-message.assistant {
+                background-color: #f8f9fa;
             }
             </style>
             """,
@@ -91,50 +64,22 @@ class DashboardApp:
         st.session_state.debug_messages.append(f"[{timestamp}] {message}")
 
     def render_debug_panel(self):
-        """Render debug panel in the sidebar with health status"""
+        """Render debug panel"""
         with st.sidebar:
             st.markdown("### 🔍 Debug Panel")
 
-            # Add health check button
             if st.button("Check System Health"):
                 with st.spinner("Checking system health..."):
-                    st.session_state.health_status = asyncio.run(
+                    health_status = asyncio.run(
                         st.session_state.workflow_manager.check_workflow_health()
                     )
+                    st.json(health_status)
 
-            # Display health status if available
-            if st.session_state.health_status:
-                st.markdown("#### System Health")
-                health = st.session_state.health_status
-
-                # Display status with colored indicators
-                st.markdown("**Components Status:**")
-                st.markdown(
-                    f"- Workflow Graph: {'✅' if health['workflow_graph'] else '❌'}"
-                )
-                st.markdown(
-                    f"- Ollama Client: {'✅' if health['ollama_client'] else '❌'}"
-                )
-                st.markdown(
-                    f"- Semantic Scholar: {'✅' if health['semantic_scholar'] else '❌'}"
-                )
-                st.markdown(
-                    f"- Command Parser: {'✅' if health['command_parser'] else '❌'}"
-                )
-
-                # Display any errors
-                if health["errors"]:
-                    st.markdown("**Errors:**")
-                    for error in health["errors"]:
-                        st.error(error)
-
-            # Debug messages section
-            st.markdown("#### Debug Messages")
-            if st.button("Clear Debug Log"):
-                st.session_state.debug_messages = []
-
-            for msg in st.session_state.debug_messages:
-                st.text(msg)
+            # Debug messages
+            if st.session_state.debug_messages:
+                st.markdown("### Debug Messages")
+                for msg in st.session_state.debug_messages:
+                    st.text(msg)
 
     async def initialize_system(self):
         """Initialize system and check health"""
@@ -279,11 +224,11 @@ class DashboardApp:
                 st.experimental_rerun()
 
     async def process_input(self, prompt: str):
-        """Process user input using new workflow manager"""
+        """Process user input using workflow manager"""
         try:
             print(f"[DEBUG] Dashboard processing input: {prompt}")
 
-            # Process through new workflow
+            # Process through workflow
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
@@ -291,7 +236,10 @@ class DashboardApp:
             # Update session state
             st.session_state.agent_state = state
 
-            # Add response to messages
+            # Add messages to chat history
+            if not isinstance(prompt, dict):
+                st.session_state.messages.append({"role": "user", "content": prompt})
+
             if state and state.memory and state.memory.messages:
                 # Get the last system message
                 last_system_message = next(
@@ -304,13 +252,11 @@ class DashboardApp:
                 )
 
                 if last_system_message:
-                    response_message = {
-                        "role": "assistant",
-                        "content": last_system_message["content"],
-                    }
-                    st.session_state.messages.append(response_message)
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": last_system_message["content"]}
+                    )
                     print(
-                        f"[DEBUG] Added response: {response_message['content'][:200]}..."
+                        f"[DEBUG] Added response: {last_system_message['content'][:200]}..."
                     )
 
             return state
@@ -318,7 +264,6 @@ class DashboardApp:
         except Exception as e:
             error_msg = f"Error processing input: {str(e)}"
             print(f"[DEBUG] {error_msg}")
-            self.add_debug_message(error_msg)
             st.session_state.messages.append(
                 {
                     "role": "assistant",
@@ -328,7 +273,7 @@ class DashboardApp:
             return None
 
     def render_chat_interface(self):
-        """Render chat interface with new workflow integration"""
+        """Render chat interface"""
         st.title("Talk2Papers - Academic Research Assistant")
 
         # Display chat history
@@ -338,15 +283,11 @@ class DashboardApp:
 
         # Chat input
         if prompt := st.chat_input("Ask me anything about research papers..."):
-            # Add user message
-            st.chat_message("user").write(prompt)
+            with st.chat_message("user"):
+                st.write(prompt)
 
-            # Process input
-            with st.spinner("Processing your request..."):
+            with st.spinner("Processing..."):
                 asyncio.run(self.process_input(prompt))
-
-            # Use rerun to update the UI
-            st.rerun()
 
     async def process_search(
         self, query: str, year: str = None, citations: str = None, sort_by: str = None
@@ -481,26 +422,11 @@ class DashboardApp:
 
     def run(self):
         """Run the dashboard application"""
-        # Render chat interface
+        self.setup_page()
         self.render_chat_interface()
 
-        # Render debug panel
         if st.sidebar.checkbox("Show Debug Panel"):
-            with st.sidebar:
-                st.markdown("### 🔍 Debug Panel")
-
-                if st.button("Check System Health"):
-                    with st.spinner("Checking system health..."):
-                        health_status = asyncio.run(
-                            st.session_state.workflow_manager.check_workflow_health()
-                        )
-                        st.json(health_status)
-
-                # Display debug messages
-                if st.session_state.debug_messages:
-                    st.markdown("### Debug Messages")
-                    for msg in st.session_state.debug_messages:
-                        st.text(msg)
+            self.render_debug_panel()
 
 
 def main():
