@@ -1110,30 +1110,37 @@ Please provide a structured response that:
             )
             return state
 
-    async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow"""
+    async def _process_request(self, command: str) -> AgentState:
         try:
-            print(f"[DEBUG] Processing request: {request}")
+            # First determine intent
+            intent = await self.main_agent._determine_intent(command)
+            print(f"[DEBUG] Determined intent: {intent}")
 
-            # Initialize messages state
-            messages_state = {"messages": [HumanMessage(content=request)]}
+            if intent == "conversation":
+                # Handle conversation directly with OllamaTool
+                result = await self.ollama_tool._arun(command)
+                self.state.add_message("system", result)
+            elif intent == "search":
+                # Only search when explicitly requested
+                search_result = await self.semantic_scholar_tool._arun(command)
+                if (
+                    isinstance(search_result, dict)
+                    and search_result.get("status") == "success"
+                ):
+                    self.state.add_message(
+                        "system", self._format_search_results(search_result)
+                    )
+                else:
+                    self.state.add_message(
+                        "system",
+                        "I apologize, but I encountered an error while searching.",
+                    )
+            else:
+                # Default to conversation
+                result = await self.ollama_tool._arun(command)
+                self.state.add_message("system", result)
 
-            # Process through graph
-            result = await self.graph.ainvoke(messages_state)
-
-            # Update state with results
-            for message in result["messages"]:
-                if isinstance(message, (AIMessage, SystemMessage)):
-                    self.state.add_message("system", message.content)
-                elif isinstance(message, dict) and message.get("role") == "assistant":
-                    self.state.add_message("system", message["content"])
-                elif isinstance(message, HumanMessage):
-                    self.state.add_message("user", message.content)
-
-            # Ensure state is updated
-            if self.state.status != AgentStatus.ERROR:
-                self.state.status = AgentStatus.SUCCESS
-
+            self.state.status = AgentStatus.SUCCESS
             return self.state
 
         except Exception as e:
