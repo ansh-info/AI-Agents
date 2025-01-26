@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
 from agent.main_agent import MainAgent
@@ -118,12 +118,11 @@ class WorkflowGraph:
     async def _main_agent_node(self, state: MessagesState) -> Dict:
         """Main agent processing"""
         try:
-            # Get the last message's content correctly
-            last_message = state["messages"][-1]
+            message = state["messages"][-1]
             message_content = (
-                last_message.content
-                if isinstance(last_message, HumanMessage)
-                else last_message["content"]
+                message.content
+                if isinstance(message, HumanMessage)
+                else message["content"]
             )
 
             intent = await self.main_agent._determine_intent(message_content)
@@ -142,32 +141,49 @@ class WorkflowGraph:
         except Exception as e:
             print(f"[DEBUG] Error in main agent: {str(e)}")
             return {
-                "messages": [*state["messages"], AIMessage(content=f"Error: {str(e)}")],
+                "messages": [
+                    *state["messages"],
+                    SystemMessage(content=f"Error: {str(e)}"),
+                ],
                 "next": "update_state",
             }
 
     async def _research_team_node(self, state: MessagesState) -> Dict:
-        """Research team processing"""
         try:
-            # Get the last message's content correctly
+            # Extract content safely from last message
             last_message = state["messages"][-1]
             message_content = (
                 last_message.content
                 if isinstance(last_message, HumanMessage)
                 else last_message["content"]
+                if isinstance(last_message, dict)
+                else str(last_message)
             )
 
             result = await self.research_team.search_papers(message_content)
 
+            # Update state with search results if available
+            if isinstance(result, dict) and "papers" in result:
+                self.state.search_context.results = result["papers"]
+
+            # Format response
             response = self.main_agent._format_search_results(result)
+
+            # Return updated state with new message
             return {
-                "messages": [*state["messages"], AIMessage(content=response)],
+                "messages": [
+                    *state["messages"],
+                    {"role": "system", "content": response},
+                ],
                 "next": "update_state",
             }
         except Exception as e:
             print(f"[DEBUG] Error in research team: {str(e)}")
             return {
-                "messages": [*state["messages"], AIMessage(content=f"Error: {str(e)}")],
+                "messages": [
+                    *state["messages"],
+                    {"role": "system", "content": f"Error in search: {str(e)}"},
+                ],
                 "next": "update_state",
             }
 
@@ -1094,30 +1110,46 @@ Please provide a structured response that:
             )
             return state
 
-    async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow"""
+    async def _process_request(self, command: str) -> AgentState:
         try:
-            print(f"[DEBUG] Processing request: {request}")
+            # First determine intent
+            intent = await self.main_agent._determine_intent(command)
+            print(f"[DEBUG] Determined intent: {intent}")
 
-            # Initialize messages state with HumanMessage
-            messages_state = {"messages": [HumanMessage(content=request)]}
+            if intent == "conversation":
+                # Handle conversation directly with OllamaTool
+                result = await self.ollama_tool._arun(command)
+                self.state.add_message("system", result)
+            elif intent == "search":
+                # Only search when explicitly requested
+                search_result = await self.semantic_scholar_tool._arun(command)
+                if (
+                    isinstance(search_result, dict)
+                    and search_result.get("status") == "success"
+                ):
+                    self.state.add_message(
+                        "system", self._format_search_results(search_result)
+                    )
+                else:
+                    self.state.add_message(
+                        "system",
+                        "I apologize, but I encountered an error while searching.",
+                    )
+            else:
+                # Default to conversation
+                result = await self.ollama_tool._arun(command)
+                self.state.add_message("system", result)
 
-            # Process through graph
-            result = await self.graph.ainvoke(messages_state)
-
-            # Update state with results
-            for message in result["messages"]:
-                if isinstance(message, AIMessage):
-                    self.state.add_message("system", message.content)
-                elif isinstance(message, dict) and message.get("role") == "assistant":
-                    self.state.add_message("system", message["content"])
-
+            self.state.status = AgentStatus.SUCCESS
             return self.state
 
         except Exception as e:
             print(f"[DEBUG] Error processing request: {str(e)}")
             self.state.status = AgentStatus.ERROR
             self.state.error_message = str(e)
+            self.state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
             return self.state
 
     async def check_health(self) -> Dict[str, bool]:

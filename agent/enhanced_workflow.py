@@ -28,49 +28,15 @@ class CommandParser:
         """Parse command and determine intent"""
         command = command.lower().strip()
 
-        # Extract any paper references
-        paper_refs = cls._extract_multiple_papers(command)
-
         # Determine intent
         if any(
-            word in command
-            for word in ["find", "search", "look for", "papers about", "articles about"]
+            word in command for word in ["find", "search", "look for", "papers about"]
         ):
-            return {
-                "intent": "search",
-                "query": command,
-                "paper_references": paper_refs,
-            }
-        elif (
-            any(
-                word in command
-                for word in [
-                    "analyze",
-                    "explain",
-                    "summarize",
-                    "what does",
-                    "tell me about",
-                ]
-            )
-            and paper_refs
-        ):
-            return {
-                "intent": "paper_question",
-                "paper_references": paper_refs,
-                "query": command,
-            }
-        elif "compare" in command and len(paper_refs) >= 2:
-            return {
-                "intent": "compare_papers",
-                "paper_references": paper_refs,
-                "query": command,
-            }
+            return {"intent": "search", "query": command}
+        elif "analyze" in command or "explain" in command:
+            return {"intent": "analyze", "query": command}
         else:
-            return {
-                "intent": "conversation",
-                "query": command,
-                "paper_references": paper_refs,
-            }
+            return {"intent": "conversation", "query": command}
 
     @staticmethod
     def _extract_paper_reference(command: str) -> str:
