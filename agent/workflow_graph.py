@@ -149,7 +149,6 @@ class WorkflowGraph:
             }
 
     async def _research_team_node(self, state: MessagesState) -> Dict:
-        """Research team processing"""
         try:
             # Extract content safely from last message
             last_message = state["messages"][-1]
@@ -157,12 +156,14 @@ class WorkflowGraph:
                 last_message.content
                 if isinstance(last_message, HumanMessage)
                 else last_message["content"]
+                if isinstance(last_message, dict)
+                else str(last_message)
             )
 
             result = await self.research_team.search_papers(message_content)
 
             # Update state with search results if available
-            if "papers" in result:
+            if isinstance(result, dict) and "papers" in result:
                 self.state.search_context.results = result["papers"]
 
             # Format response
