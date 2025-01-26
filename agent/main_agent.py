@@ -252,8 +252,12 @@ class MainAgent:
 
             # Route to appropriate tool
             if intent == "search":
-                result = await self.semantic_scholar_tool._arun(message)
-                self.state.add_message("system", self._format_search_results(result))
+                search_result = await self.semantic_scholar_tool._arun(message)
+                if isinstance(search_result, dict):
+                    formatted_result = self._format_search_results(search_result)
+                    self.state.add_message("system", formatted_result)
+                else:
+                    self.state.add_message("system", str(search_result))
             elif intent == "analyze":
                 result = await self.paper_analyzer_tool._arun(message)
                 self.state.add_message("system", result)
