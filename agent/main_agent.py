@@ -238,34 +238,41 @@ class MainAgent:
         else:
             return str(message)
 
-    async def process_request(self, message: str) -> AgentState:
-        """Process a user request"""
+    async def process_request(self, request: str) -> AgentState:
+        """Process a request through the workflow"""
         try:
-            print(f"[DEBUG] Processing request: {message}")
+            print(f"[DEBUG] Processing request: {request}")
 
-            # Add user message to state
-            self.state.add_message("user", message)
+            # Initialize messages state for graph
+            messages_state = {"messages": [HumanMessage(content=request)]}
 
-            # Determine intent
-            intent = await self._determine_intent(message)
+            # Determine intent first
+            intent = await self.main_agent._determine_intent(request)
             print(f"[DEBUG] Determined intent: {intent}")
 
-            # Route to appropriate tool
-            if intent == "search":
-                search_result = await self.semantic_scholar_tool._arun(message)
-                if isinstance(search_result, dict):
-                    formatted_result = self._format_search_results(search_result)
+            if intent == "conversation":
+                # For conversation, use OllamaTool directly
+                result = await self.ollama_tool._arun(request)
+                self.state.add_message("system", result)
+            elif intent == "search":
+                # For search, use semantic scholar tool
+                result = await self.semantic_scholar_tool._arun(request)
+
+                if isinstance(result, dict) and result.get("status") == "success":
+                    formatted_result = self._format_search_results(result)
                     self.state.add_message("system", formatted_result)
                 else:
-                    self.state.add_message("system", str(search_result))
-            elif intent == "analyze":
-                result = await self.paper_analyzer_tool._arun(message)
-                self.state.add_message("system", result)
+                    error_msg = result.get("error", "Unknown search error")
+                    self.state.add_message("system", f"Error in search: {error_msg}")
             else:
-                result = await self.ollama_tool._arun(message)
+                # Default to conversation
+                result = await self.ollama_tool._arun(request)
                 self.state.add_message("system", result)
 
-            self.state.status = AgentStatus.SUCCESS
+            # Ensure state is updated
+            if self.state.status != AgentStatus.ERROR:
+                self.state.status = AgentStatus.SUCCESS
+
             return self.state
 
         except Exception as e:
@@ -279,26 +286,33 @@ class MainAgent:
 
     def _format_search_results(self, results: Dict) -> str:
         """Format search results for display"""
-        if results["status"] == "error":
-            return f"Error performing search: {results['error']}"
+        if results.get("status") == "error":
+            return f"Error performing search: {results.get('error')}"
 
-        if not results["papers"]:
+        papers = results.get("papers", [])
+        if not papers:
             return "No papers found matching your criteria."
 
         formatted_parts = [
-            f"Found {results['total_results']} papers. Here are the most relevant:"
+            f"Found {results.get('total_results', 0)} papers. Here are the most relevant:\n"
         ]
 
-        for i, paper in enumerate(results["papers"], 1):
-            formatted_parts.extend(
-                [
-                    f"\n{i}. {paper['title']}",
-                    f"Authors: {', '.join(paper['authors'])}",
-                    f"Year: {paper['year'] or 'N/A'} | Citations: {paper['citations'] or 0}",
-                    f"Abstract: {paper['abstract']}",
-                    f"URL: {paper['url']}\n",
-                ]
-            )
+        for i, paper in enumerate(papers, 1):
+            paper_info = [
+                f"\n{i}. {paper.title}",
+                f"Authors: {', '.join(a.name for a in paper.authors)}",
+                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+            ]
+
+            if paper.abstract:
+                paper_info.append(
+                    f"Abstract: {paper.abstract[:300]}..."
+                    if len(paper.abstract) > 300
+                    else f"Abstract: {paper.abstract}"
+                )
+
+            paper_info.append(f"[View Paper]({paper.url})\n")
+            formatted_parts.extend(paper_info)
 
         return "\n".join(formatted_parts)
 
