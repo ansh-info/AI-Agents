@@ -243,36 +243,26 @@ class MainAgent:
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Initialize messages state for graph
-            messages_state = {"messages": [HumanMessage(content=request)]}
-
             # Determine intent first
             intent = await self.main_agent._determine_intent(request)
             print(f"[DEBUG] Determined intent: {intent}")
 
             if intent == "conversation":
-                # For conversation, use OllamaTool directly
+                # Handle conversation directly
                 result = await self.ollama_tool._arun(request)
                 self.state.add_message("system", result)
             elif intent == "search":
-                # For search, use semantic scholar tool
+                # Handle search
                 result = await self.semantic_scholar_tool._arun(request)
-
-                if isinstance(result, dict) and result.get("status") == "success":
-                    formatted_result = self._format_search_results(result)
-                    self.state.add_message("system", formatted_result)
-                else:
-                    error_msg = result.get("error", "Unknown search error")
-                    self.state.add_message("system", f"Error in search: {error_msg}")
+                # Format and add results to state
+                formatted_result = self._format_search_results(result)
+                self.state.add_message("system", formatted_result)
             else:
                 # Default to conversation
                 result = await self.ollama_tool._arun(request)
                 self.state.add_message("system", result)
 
-            # Ensure state is updated
-            if self.state.status != AgentStatus.ERROR:
-                self.state.status = AgentStatus.SUCCESS
-
+            self.state.status = AgentStatus.SUCCESS
             return self.state
 
         except Exception as e:
@@ -289,29 +279,31 @@ class MainAgent:
         if results.get("status") == "error":
             return f"Error performing search: {results.get('error')}"
 
-        papers = results.get("papers", [])
-        if not papers:
+        if not results.get("papers"):
             return "No papers found matching your criteria."
 
         formatted_parts = [
             f"Found {results.get('total_results', 0)} papers. Here are the most relevant:\n"
         ]
 
-        for i, paper in enumerate(papers, 1):
+        for i, paper in enumerate(results.get("papers", []), 1):
             paper_info = [
-                f"\n{i}. {paper.title}",
-                f"Authors: {', '.join(a.name for a in paper.authors)}",
-                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                f"\n{i}. {paper.get('title', 'Untitled')}",
+                f"Authors: {', '.join(paper.get('authors', []))}",
+                f"Year: {paper.get('year', 'N/A')} | Citations: {paper.get('citations', 0)}",
             ]
 
-            if paper.abstract:
+            if paper.get("abstract"):
+                abstract = paper["abstract"]
                 paper_info.append(
-                    f"Abstract: {paper.abstract[:300]}..."
-                    if len(paper.abstract) > 300
-                    else f"Abstract: {paper.abstract}"
+                    f"Abstract: {abstract[:300]}..."
+                    if len(abstract) > 300
+                    else f"Abstract: {abstract}"
                 )
 
-            paper_info.append(f"[View Paper]({paper.url})\n")
+            if paper.get("url"):
+                paper_info.append(f"[View Paper]({paper.get('url')})\n")
+
             formatted_parts.extend(paper_info)
 
         return "\n".join(formatted_parts)
