@@ -63,17 +63,23 @@ class SemanticScholarTool(BaseTool):
         try:
             print(f"[DEBUG] SemanticScholarTool: Processing query: {query}")
 
+            # Clean the query - extract just the text if it's an AIMessage or similar
+            if hasattr(query, "content"):
+                query = query.content
+            # Remove any markdown formatting or extra whitespace
+            clean_query = " ".join(query.split())[:1000]  # Limit query length
+
             # Create search filters
             filters = SearchFilters(
                 year_start=year_start, year_end=year_end, min_citations=min_citations
             )
 
-            # Perform search
+            # Perform search with cleaned query
             results = await self._client.search_papers(
-                query=query, filters=filters, limit=max_results
+                query=clean_query, filters=filters, limit=max_results
             )
 
-            # Update state if available
+            # Rest of your existing implementation...
             if self._state and results.papers:
                 for paper in results.papers:
                     self._state.search_context.add_paper(
@@ -91,7 +97,6 @@ class SemanticScholarTool(BaseTool):
                         }
                     )
 
-            # Return structured response
             return {
                 "status": "success",
                 "total_results": results.total,
@@ -102,9 +107,11 @@ class SemanticScholarTool(BaseTool):
                         "authors": [a.name for a in paper.authors],
                         "year": paper.year,
                         "citations": paper.citations,
-                        "abstract": paper.abstract[:300] + "..."
-                        if paper.abstract
-                        else "No abstract available",
+                        "abstract": (
+                            paper.abstract[:300] + "..."
+                            if paper.abstract
+                            else "No abstract available"
+                        ),
                         "url": paper.url,
                     }
                     for paper in results.papers
