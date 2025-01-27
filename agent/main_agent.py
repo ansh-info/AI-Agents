@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List, Optional
 
 from langchain.tools import BaseTool
@@ -6,49 +7,40 @@ from langgraph.graph import START, MessagesState, StateGraph
 
 from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
-from tools.ollama_tool import OllamaTool
-from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 class MainAgent:
     """Main supervisor agent that orchestrates the research workflow"""
 
-    SYSTEM_PROMPT = """You are Talk2Papers, an academic research assistant designed to help users find, analyze, and understand academic papers. You have access to these specialized tools:
+    SYSTEM_PROMPT = """You are Talk2Papers, an intelligent research assistant specialized in academic paper search and analysis. 
+    You have access to the Semantic Scholar database through the semantic_scholar_tool.
 
+    Your primary capabilities include:
     1. semantic_scholar_search: Search for academic papers
        - Use for: Finding papers based on topics, authors, or keywords
        - Input: Search queries with optional filters for year, citations
        - Example: "Find recent papers about large language models"
-       
-    2. paper_analyzer: Analyze paper content
-       - Use for: Understanding paper content, extracting insights
-       - Input: Paper ID and analysis request
-       - Example: "Analyze the methodology of paper 1"
-       
-    3. conversation: Handle general queries and explanations
-       - Use for: Questions about results, explanations, clarifications
-       - Example: "Explain what this paper is about"
 
-    Approach each request step by step:
+    Follow these steps for EVERY user request:
 
     1. UNDERSTAND THE REQUEST
        - Carefully analyze what the user is asking for
-       - Identify if they need:
-         * Paper search (finding new papers)
-         * Paper analysis (understanding specific papers)
-         * General help or explanations
+       - Determine if they need:
+           * Paper search (new papers to review)
+           * Specific paper information
+           * Refinement of previous search
+       - Extract key search parameters (topics, authors, years, etc.)
 
-    2. DETERMINE TOOLS TO USE
-       - Choose the appropriate tool based on the request:
-         * Use semantic_scholar_search for finding papers
-         * Use paper_analyzer for analyzing specific papers
-         * Use conversation for general queries
+    2. DETERMINE ACTION NEEDED
+       - For new paper searches: Use semantic_scholar_search
+       - For paper information: Access existing search context
+       - For search refinement: Modify previous search parameters
 
     3. EXECUTE AND RESPOND
-       - Use tools in logical sequence
-       - Maintain conversation context
-       - Provide clear, structured responses
+       - Use semantic_scholar_search with precise parameters
+       - Format results clearly with proper structure
+       - Maintain conversation context for follow-ups
 
     Current conversation context: {context}
     Current state: {state}
@@ -69,28 +61,13 @@ class MainAgent:
             if tools is not None:
                 print("[DEBUG] Using provided tools")
                 self.tools = tools
-                # Find tools by type
                 self.semantic_scholar_tool = next(
                     (t for t in tools if isinstance(t, SemanticScholarTool)), None
-                )
-                self.paper_analyzer_tool = next(
-                    (t for t in tools if isinstance(t, PaperAnalyzerTool)), None
-                )
-                self.ollama_tool = next(
-                    (t for t in tools if isinstance(t, OllamaTool)), None
                 )
             else:
                 print("[DEBUG] Creating new tools")
                 self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
-                self.paper_analyzer_tool = PaperAnalyzerTool(
-                    model_name=model_name, state=self.state
-                )
-                self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
-                self.tools = [
-                    self.semantic_scholar_tool,
-                    self.paper_analyzer_tool,
-                    self.ollama_tool,
-                ]
+                self.tools = [self.semantic_scholar_tool]
 
             print("[DEBUG] MainAgent initialized successfully")
 
@@ -199,35 +176,61 @@ class MainAgent:
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
 
-    async def _determine_intent(self, message: str) -> str:
+    async def _determine_intent(self, message: str) -> Dict[str, Any]:
         """Determine the intent of a message using LLM"""
         try:
-            intent_prompt = (
-                "Classify the following message into one of these categories:\n"
-                "- search: looking for papers\n"
-                "- analyze: analyzing specific papers\n"
-                "- conversation: general chat\n\n"
-                f"Message: {message}\n\n"
-                "Return ONLY ONE WORD (search/analyze/conversation):"
-            )
+            print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
+
+            intent_prompt = f"""Based on the user's request, determine:
+1. Primary Intent: What is the main action needed?
+2. Search Parameters: What specific parameters should be used for search?
+3. Context Requirement: Is previous context needed?
+
+User Request: {message}
+
+Respond in JSON format:
+{{
+    "intent": "search/refine/information",
+    "search_params": {{
+        "query": string,
+        "year_start": optional number,
+        "year_end": optional number,
+        "min_citations": optional number
+    }},
+    "requires_context": boolean,
+    "explanation": string
+}}"""
 
             response = await self.ollama_client.generate(
                 prompt=intent_prompt,
-                system_prompt="You are an intent classifier. Return only one word.",
+                system_prompt="You are an intent analyzer. Return only valid JSON.",
                 temperature=0.1,
             )
 
-            # Clean up response
-            response = response.strip().lower()
-            if "search" in response:
-                return "search"
-            elif "analyze" in response:
-                return "analyze"
-            return "conversation"
+            # Parse response to JSON
+            try:
+                parsed_response = json.loads(response)
+                print(f"[DEBUG] Determined intent: {parsed_response}")
+                return parsed_response
+            except json.JSONDecodeError:
+                print(
+                    "[DEBUG] Error parsing JSON response, falling back to basic intent"
+                )
+                return {
+                    "intent": "search",
+                    "search_params": {"query": message},
+                    "requires_context": False,
+                    "explanation": "Fallback: Basic search intent",
+                }
 
         except Exception as e:
             print(f"[DEBUG] Error determining intent: {str(e)}")
-            return "conversation"
+            return {
+                "intent": "search",
+                "search_params": {"query": message},
+                "requires_context": False,
+                "explanation": f"Error in intent analysis: {str(e)}",
+            }
 
     def _extract_message_content(self, message: Any) -> str:
         """Safely extract content from different message types."""
