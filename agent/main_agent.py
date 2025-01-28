@@ -7,6 +7,8 @@ from langgraph.graph import START, MessagesState, StateGraph
 
 from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
+from tools.ollama_tool import OllamaTool
+from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
 
 
@@ -61,13 +63,24 @@ class MainAgent:
             if tools is not None:
                 print("[DEBUG] Using provided tools")
                 self.tools = tools
+                # Find tools by type
                 self.semantic_scholar_tool = next(
                     (t for t in tools if isinstance(t, SemanticScholarTool)), None
+                )
+                self.paper_analyzer_tool = next(
+                    (t for t in tools if isinstance(t, PaperAnalyzerTool)), None
+                )
+                self.ollama_tool = next(
+                    (t for t in tools if isinstance(t, OllamaTool)), None
                 )
             else:
                 print("[DEBUG] Creating new tools")
                 self.semantic_scholar_tool = SemanticScholarTool(state=self.state)
-                self.tools = [self.semantic_scholar_tool]
+                self.ollama_tool = OllamaTool(model_name=model_name, state=self.state)
+                self.tools = [
+                    self.semantic_scholar_tool,
+                    self.ollama_tool,
+                ]
 
             print("[DEBUG] MainAgent initialized successfully")
 
@@ -253,8 +266,8 @@ Respond in JSON format:
             intent_analysis = await self._determine_intent(message)
             print(f"[DEBUG] Intent analysis result: {intent_analysis}")
 
-            # Route based on intent while maintaining existing functionality
-            if intent_analysis["intent"] == "search":
+            # Route based on intent
+            if intent_analysis["intent"].startswith("search"):
                 print("[DEBUG] MainAgent: Invoking semantic_scholar_tool for search")
                 search_result = await self.semantic_scholar_tool._arun(
                     query=intent_analysis["search_params"]["query"],
@@ -275,7 +288,6 @@ Respond in JSON format:
                     print("[DEBUG] Search results added to state (non-dict response)")
             else:
                 print("[DEBUG] MainAgent: Processing as conversation")
-                # Maintain existing conversation handling
                 result = await self.ollama_tool._arun(message)
                 self.state.add_message("system", result)
 
@@ -293,14 +305,14 @@ Respond in JSON format:
 
     def _format_search_results(self, results: Dict) -> str:
         """Format search results for display"""
-        if results.get("status") == "error":
-            return f"Error performing search: {results.get('error')}"
+        if results["status"] == "error":
+            return f"Error performing search: {results['error']}"
 
         if not results.get("papers"):
             return "No papers found matching your criteria."
 
         formatted_parts = [
-            f"Found {results.get('total_results', 0)} papers. Here are the most relevant:\n"
+            f"Found {results.get('total_results', 0)} papers. Here are the most relevant:"
         ]
 
         for i, paper in enumerate(results.get("papers", []), 1):
@@ -311,15 +323,14 @@ Respond in JSON format:
             ]
 
             if paper.get("abstract"):
-                abstract = paper["abstract"]
                 paper_info.append(
-                    f"Abstract: {abstract[:300]}..."
-                    if len(abstract) > 300
-                    else f"Abstract: {abstract}"
+                    f"Abstract: {paper['abstract'][:300]}..."
+                    if len(paper["abstract"]) > 300
+                    else f"Abstract: {paper['abstract']}"
                 )
 
             if paper.get("url"):
-                paper_info.append(f"[View Paper]({paper.get('url')})\n")
+                paper_info.append(f"URL: {paper['url']}")
 
             formatted_parts.extend(paper_info)
 
