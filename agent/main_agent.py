@@ -241,35 +241,49 @@ Respond in JSON format:
         else:
             return str(message)
 
-    async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow"""
+    async def process_request(self, message: str) -> AgentState:
+        """Process a user request"""
         try:
-            print(f"[DEBUG] Processing request: {request}")
+            print(f"[DEBUG] MainAgent: Processing request: {message}")
 
-            # Determine intent first
-            intent = await self.main_agent._determine_intent(request)
-            print(f"[DEBUG] Determined intent: {intent}")
+            # Add user message to state
+            self.state.add_message("user", message)
 
-            if intent == "conversation":
-                # Handle conversation directly
-                result = await self.ollama_tool._arun(request)
-                self.state.add_message("system", result)
-            elif intent == "search":
-                # Handle search
-                result = await self.semantic_scholar_tool._arun(request)
+            # Determine intent with enhanced analysis
+            intent_analysis = await self._determine_intent(message)
+            print(f"[DEBUG] Intent analysis result: {intent_analysis}")
+
+            # Route based on intent while maintaining existing functionality
+            if intent_analysis["intent"] == "search":
+                print("[DEBUG] MainAgent: Invoking semantic_scholar_tool for search")
+                search_result = await self.semantic_scholar_tool._arun(
+                    query=intent_analysis["search_params"]["query"],
+                    year_start=intent_analysis["search_params"].get("year_start"),
+                    year_end=intent_analysis["search_params"].get("year_end"),
+                    min_citations=intent_analysis["search_params"].get("min_citations"),
+                )
+
                 # Format and add results to state
-                formatted_result = self._format_search_results(result)
-                self.state.add_message("system", formatted_result)
+                if isinstance(search_result, dict):
+                    formatted_result = self._format_search_results(search_result)
+                    self.state.add_message("system", formatted_result)
+                    print(
+                        f"[DEBUG] Search results added to state: {len(search_result.get('papers', []))} papers found"
+                    )
+                else:
+                    self.state.add_message("system", str(search_result))
+                    print("[DEBUG] Search results added to state (non-dict response)")
             else:
-                # Default to conversation
-                result = await self.ollama_tool._arun(request)
+                print("[DEBUG] MainAgent: Processing as conversation")
+                # Maintain existing conversation handling
+                result = await self.ollama_tool._arun(message)
                 self.state.add_message("system", result)
 
             self.state.status = AgentStatus.SUCCESS
             return self.state
 
         except Exception as e:
-            print(f"[DEBUG] Error processing request: {str(e)}")
+            print(f"[DEBUG] Error in MainAgent process_request: {str(e)}")
             self.state.status = AgentStatus.ERROR
             self.state.error_message = str(e)
             self.state.add_message(
