@@ -1160,7 +1160,11 @@ Please provide a structured response that:
             print(f"[DEBUG] Determined intent: {intent}")
 
             # Process based on intent
-            if intent.get("intent") == "conversation":
+            print(f"[DEBUG] Intent analysis result: {intent}")
+
+            if intent.get("intent") == "conversation" and intent.get(
+                "requires_context", False
+            ):
                 if self._is_history_query(request):
                     result = await self._handle_history_query(request)
                 else:
