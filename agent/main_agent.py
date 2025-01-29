@@ -193,46 +193,61 @@ class MainAgent:
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
 
-    async def _determine_intent(self, message: str) -> Dict[str, Any]:
+    async def _determine_intent(
+        self, message: str, context: Optional[Dict] = None
+    ) -> Dict[str, Any]:
         """Determine the intent of a message using LLM with enhanced classification"""
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-            intent_prompt = f"""Classify this message into EXACTLY ONE intent type. Only return a JSON object.
+            # Build context string
+            context_str = ""
+            if context:
+                if context.get("conversation_history"):
+                    context_str += (
+                        f"\nConversation history:\n{context['conversation_history']}"
+                    )
+                if context.get("current_search_results"):
+                    context_str += "\nHas current search results: Yes"
+                if context.get("focused_paper"):
+                    context_str += (
+                        f"\nCurrently focused on paper: {context['focused_paper']}"
+                    )
 
-            Message: "{message}"
+            intent_prompt = f"""You are an academic research assistant that helps users find and understand papers.
 
-            Rules:
-            1. "conversation" if:
-               - Asking for explanations (e.g., "explain", "tell me about", "what is")
-               - General questions about concepts
-               - Asking about previous results
-               - Requests for clarification
-               
-            2. "search" if:
-               - Explicitly requesting papers (e.g., "find papers", "show papers", "get papers")
-               - Searching for specific authors or topics
-               - Looking for publications in a time range
-               
-            3. "analysis" if:
-               - Referencing specific papers (e.g., "paper 1", "that paper")
-               - Comparing multiple papers
-               - Asking about methodology or findings
-               - Requesting paper summaries
+    MESSAGE: "{message}"
+    {context_str}
 
-            Example Classifications:
-            - "explain what transformers are" -> conversation
-            - "find papers about LLMs" -> search
-            - "what did paper 2 conclude?" -> analysis
-            - "what were my last search results" -> conversation
+    Classify the intent as either "search" or "conversation". Use these rules:
 
-            Return ONLY this JSON format:
-            {{
-                "intent": "search" | "conversation" | "analysis",
-                "explanation": "<brief reason>",
-                "parameters": {{}}
-            }}"""
+    SEARCH intent if:
+    - User wants to find/look for/search for papers
+    - User mentions specific authors or topics to find papers about
+    - User asks for papers with specific criteria (year, citations)
+    Example: "find papers about LLMs", "search for papers by Hinton"
 
+    CONVERSATION intent if:
+    - User asks for explanations or definitions
+    - User asks about previous search results or context
+    - User wants to understand concepts
+    Example: "explain transformers", "what was my last search"
+
+    Return intent as a JSON object with these exact fields:
+    - intent: either "search" or "conversation"
+    - explanation: brief reason for the intent choice
+    - requires_context: boolean (true/false)
+    - search_params: empty object if conversation intent
+
+    Example response:
+    {{
+        "intent": "search",
+        "explanation": "User explicitly asks to find papers",
+        "requires_context": false,
+        "search_params": {{}}
+    }}"""
+
+            # Generate response
             response = await self._ollama_client.generate(
                 prompt=intent_prompt,
                 system_prompt="Return only valid JSON with exact format shown.",
@@ -260,6 +275,7 @@ class MainAgent:
                 return {
                     "intent": "conversation",
                     "explanation": "Failed to parse intent, defaulting to conversation",
+                    "requires_context": False,
                     "search_params": {},
                 }
 
@@ -268,6 +284,7 @@ class MainAgent:
             return {
                 "intent": "conversation",
                 "explanation": f"Error in intent analysis: {str(e)}",
+                "requires_context": False,
                 "search_params": {},
             }
 
