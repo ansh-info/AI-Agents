@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain.tools import BaseTool
@@ -57,7 +59,9 @@ class MainAgent:
         try:
             print("[DEBUG] Initializing MainAgent")
             self.state = AgentState()
-            self.ollama_client = OllamaClient(model_name=model_name)
+
+            # Initialize Ollama client
+            self._ollama_client = OllamaClient(model_name=model_name)
 
             # Initialize tools
             if tools is not None:
@@ -190,31 +194,41 @@ class MainAgent:
         return workflow.compile()
 
     async def _determine_intent(self, message: str) -> Dict[str, Any]:
-        """Determine the intent of a message using LLM"""
+        """Determine the intent of a message using LLM with strict intent types"""
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-            intent_prompt = f"""Based on the user's request, determine:
-1. Primary Intent: What is the main action needed?
-2. Search Parameters: What specific parameters should be used for search?
-3. Context Requirement: Is previous context needed?
+            intent_prompt = f"""Analyze this user message and classify it as exactly ONE of these intent types:
 
-User Request: {message}
+            1. "search": Queries asking to find, retrieve, or discover papers
+               Examples: 
+               - "Find papers about machine learning"
+               - "Show me papers by Geoffrey Hinton"
+               - "What are the latest papers on transformers"
 
-Respond in JSON format:
-{{
-    "intent": "search/refine/information",
-    "search_params": {{
-        "query": string,
-        "year_start": optional number,
-        "year_end": optional number,
-        "min_citations": optional number
-    }},
-    "requires_context": boolean,
-    "explanation": string
-}}"""
+            2. "conversation": Questions asking for explanations or general information
+               Examples:
+               - "Can you explain what transformer models are?"
+               - "What is deep learning?"
+               - "How does reinforcement learning work?"
 
-            response = await self.ollama_client.generate(
+            3. "analysis": Questions about specific papers or comparing papers
+               Examples:
+               - "What is the methodology in paper 1?"
+               - "Compare papers 2 and 3"
+               - "Explain the results from the last paper"
+
+            User message: {message}
+
+            Return a JSON object with these fields:
+            - "intent": EXACTLY one of ["search", "conversation", "analysis"]
+            - "explanation": Brief reason for classification
+            - "parameters": Additional parameters if needed
+
+            The intent MUST be one of the three types listed above.
+            """
+
+            response = await self._ollama_client.generate(
                 prompt=intent_prompt,
                 system_prompt="You are an intent analyzer. Return only valid JSON.",
                 temperature=0.1,
@@ -224,26 +238,84 @@ Respond in JSON format:
             try:
                 parsed_response = json.loads(response)
                 print(f"[DEBUG] Determined intent: {parsed_response}")
+
+                # Validate intent type
+                if parsed_response["intent"] not in [
+                    "search",
+                    "conversation",
+                    "analysis",
+                ]:
+                    raise ValueError(
+                        f"Invalid intent type: {parsed_response['intent']}"
+                    )
+
+                # Extract search parameters if needed
+                if parsed_response["intent"] == "search":
+                    parsed_response["search_params"] = self._extract_search_params(
+                        message
+                    )
+
                 return parsed_response
+
             except json.JSONDecodeError:
                 print(
                     "[DEBUG] Error parsing JSON response, falling back to basic intent"
                 )
                 return {
-                    "intent": "search",
-                    "search_params": {"query": message},
-                    "requires_context": False,
-                    "explanation": "Fallback: Basic search intent",
+                    "intent": "conversation",
+                    "explanation": "Failed to parse intent, defaulting to conversation",
+                    "search_params": {},
                 }
 
         except Exception as e:
             print(f"[DEBUG] Error determining intent: {str(e)}")
             return {
-                "intent": "search",
-                "search_params": {"query": message},
-                "requires_context": False,
+                "intent": "conversation",
                 "explanation": f"Error in intent analysis: {str(e)}",
+                "search_params": {},
             }
+
+    def _extract_search_params(self, message: str) -> Dict[str, Any]:
+        """Extract search parameters from message"""
+        params = {
+            "query": message,
+            "year_start": None,
+            "year_end": None,
+            "min_citations": None,
+        }
+
+        # Extract year ranges
+        year_matches = re.findall(r"from (\d{4})|since (\d{4})|after (\d{4})", message)
+        if year_matches:
+            # Combine the matched groups and take the first valid year
+            year_start = next((y for group in year_matches for y in group if y), None)
+            if year_start:
+                params["year_start"] = int(year_start)
+                params["year_end"] = datetime.now().year
+
+        # Extract citation requirements
+        citation_matches = re.findall(
+            r"at least (\d+) citations|min[imum]* (\d+) citations", message
+        )
+        if citation_matches:
+            citations = next(
+                (c for group in citation_matches for c in group if c), None
+            )
+            if citations:
+                params["min_citations"] = int(citations)
+
+        return params
+
+    def process_intent(self, intent_data: Dict[str, Any]) -> str:
+        """Process the determined intent and route to appropriate handler"""
+        intent = intent_data["intent"]
+
+        if intent == "search":
+            return "semantic_scholar_tool"
+        elif intent == "analysis":
+            return "paper_analyzer_tool"
+        else:  # conversation
+            return "ollama_tool"
 
     def _extract_message_content(self, message: Any) -> str:
         """Safely extract content from different message types."""
