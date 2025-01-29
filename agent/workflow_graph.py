@@ -847,20 +847,20 @@ Please provide a clear response that addresses the question while considering:
             return {"state": state, "next": "update_memory"}
 
     def _build_conversation_context(self, state: AgentState) -> str:
-        """Build context for conversation"""
+        """Build context from conversation history and current state"""
         context_parts = []
 
-        # Add recent conversation history
-        recent_messages = state.memory.messages[-5:]
-        if recent_messages:
+        # Add recent conversation history (last 5 messages)
+        if state.memory and state.memory.messages:
+            recent_messages = state.memory.messages[-5:]
             context_parts.append("Recent conversation:")
             for msg in recent_messages:
                 context_parts.append(f"{msg['role']}: {msg['content']}")
 
         # Add search context if available
-        if state.search_context.results:
-            context_parts.append("\nAvailable papers:")
-            for i, paper in enumerate(state.search_context.results, 1):
+        if state.search_context and state.search_context.results:
+            context_parts.append("\nCurrent search results:")
+            for i, paper in enumerate(state.search_context.results[:5], 1):
                 context_parts.append(
                     f"{i}. {paper.title} ({paper.year or 'N/A'}) - {paper.citations or 0} citations"
                 )
@@ -868,18 +868,43 @@ Please provide a clear response that addresses the question while considering:
         # Add focused paper if available
         if state.memory.focused_paper:
             paper = state.memory.focused_paper
-            context_parts.append(f"\nCurrently discussing paper: {paper.title}")
-            if paper.abstract:
-                context_parts.append(f"Abstract: {paper.abstract[:200]}...")
-            context_parts.append(
-                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}"
-            )
-            context_parts.append(
-                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}"
+            context_parts.extend(
+                [
+                    "\nCurrently discussing paper:",
+                    f"Title: {paper.title}",
+                    f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}",
+                    f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                    f"Abstract: {paper.abstract[:200] + '...' if paper.abstract else 'Not available'}",
+                ]
             )
 
-        # Join all context parts
         return "\n".join(context_parts)
+
+    async def _handle_history_query(self, request: str) -> Dict[str, Any]:
+        """Handle queries about conversation history"""
+        try:
+            print("[DEBUG] Handling history query")
+
+            # Get conversation history
+            history = self.state.memory.messages
+            context = self._build_conversation_context(self.state)
+
+            # Generate response using context
+            response = await self.conversation_agent.generate_response(
+                prompt=f"Based on our conversation history:\n{context}\n\nUser question: {request}",
+                system_prompt="You are a helpful research assistant. Use the conversation history to answer the user's question.",
+            )
+
+            if isinstance(response, dict) and response.get("status") == "error":
+                raise Exception(f"Error generating response: {response.get('error')}")
+
+            # Update state
+            self.state.add_message("system", response.get("response", response))
+            return {"status": AgentStatus.SUCCESS}
+
+        except Exception as e:
+            print(f"[DEBUG] Error handling history query: {str(e)}")
+            return {"status": AgentStatus.ERROR, "error_message": str(e)}
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
@@ -1110,35 +1135,42 @@ Please provide a structured response that:
             )
             return state
 
-    async def _process_request(self, command: str) -> AgentState:
+    async def process_request(self, request: str) -> AgentState:
+        """Process a request through the workflow with enhanced state management"""
         try:
-            # First determine intent
-            intent = await self.main_agent._determine_intent(command)
+            print(f"[DEBUG] Processing request: {request}")
+
+            # Update state with new request
+            self.state.add_message("user", request)
+
+            # Build conversation context
+            conversation_context = self._build_conversation_context(self.state)
+
+            # Determine intent with context
+            intent = await self.main_agent._determine_intent(
+                request,
+                context={
+                    "conversation_history": conversation_context,
+                    "current_search_results": bool(self.state.search_context.results),
+                    "focused_paper": self.state.memory.focused_paper.paper_id
+                    if self.state.memory.focused_paper
+                    else None,
+                },
+            )
             print(f"[DEBUG] Determined intent: {intent}")
 
-            if intent == "conversation":
-                # Handle conversation directly with OllamaTool
-                result = await self.ollama_tool._arun(command)
-                self.state.add_message("system", result)
-            elif intent == "search":
-                # Only search when explicitly requested
-                search_result = await self.semantic_scholar_tool._arun(command)
-                if (
-                    isinstance(search_result, dict)
-                    and search_result.get("status") == "success"
-                ):
-                    self.state.add_message(
-                        "system", self._format_search_results(search_result)
-                    )
+            # Process based on intent
+            if intent.get("intent") == "conversation":
+                if self._is_history_query(request):
+                    result = await self._handle_history_query(request)
                 else:
-                    self.state.add_message(
-                        "system",
-                        "I apologize, but I encountered an error while searching.",
-                    )
-            else:
-                # Default to conversation
-                result = await self.ollama_tool._arun(command)
-                self.state.add_message("system", result)
+                    result = await self._handle_conversation(request)
+            else:  # search intent
+                result = await self._handle_search(request)
+
+            # Update state with final result
+            if isinstance(result, dict):
+                self.state.update_state(**result)
 
             self.state.status = AgentStatus.SUCCESS
             return self.state
@@ -1151,6 +1183,22 @@ Please provide a structured response that:
                 "system", f"I apologize, but I encountered an error: {str(e)}"
             )
             return self.state
+
+    def _is_history_query(self, request: str) -> bool:
+        """Check if the request is asking about conversation history"""
+        history_keywords = [
+            "previous",
+            "last",
+            "before",
+            "earlier",
+            "recent",
+            "what did you say",
+            "what did we discuss",
+            "what papers",
+            "what was the",
+        ]
+        request_lower = request.lower()
+        return any(keyword in request_lower for keyword in history_keywords)
 
     async def check_health(self) -> Dict[str, bool]:
         """Check health of all components"""
