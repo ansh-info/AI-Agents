@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional, Type
 
 from langchain_core.tools import BaseTool
@@ -57,41 +58,60 @@ class OllamaTool(BaseTool):
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
     ) -> str:
-        """Run the tool asynchronously with enhanced error handling and state management"""
+        """Run the tool asynchronously with enhanced error handling"""
         try:
             print(
                 f"[DEBUG] OllamaTool: Generating response for prompt: {prompt[:100]}..."
             )
-            if system_prompt:
-                print(f"[DEBUG] With system prompt: {system_prompt[:100]}...")
 
-            # Enhance prompt with context if state is available
-            if self._state:
-                context = self._build_context()
-                enhanced_prompt = f"{context}\n\nUser request: {prompt}"
-            else:
-                enhanced_prompt = prompt
+            # Build context from state using existing method
+            context = self._build_context()
 
-            # Generate response
-            response = await self._client.generate(
-                prompt=enhanced_prompt,
-                system_prompt=system_prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            # Combine context and prompt
+            full_prompt = f"{context}\n\nUser request: {prompt}" if context else prompt
+
+            # Generate response with retries
+            max_retries = 3
+            last_error = None
+
+            for attempt in range(max_retries):
+                try:
+                    response = await self._client.generate(
+                        prompt=full_prompt,
+                        system_prompt=system_prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+
+                    # Update state if available
+                    if self._state:
+                        self._state.add_message("user", prompt)
+                        self._state.add_message("system", response)
+
+                    return response
+
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:  # Not the last attempt
+                        print(f"[DEBUG] Retry {attempt + 1} after error: {str(e)}")
+                        await asyncio.sleep(1)  # Wait before retry
+                        continue
+                    break  # On last attempt, break and handle error
+
+            # If we get here, all retries failed
+            error_msg = (
+                f"Error in OllamaTool after {max_retries} attempts: {str(last_error)}"
             )
-
-            # Update state if available
-            if self._state:
-                self._update_state(prompt, response)
-
-            print(f"[DEBUG] Generated response length: {len(response)}")
-            return response
-
-        except Exception as e:
-            error_msg = f"Error in OllamaTool: {str(e)}"
             print(f"[DEBUG] {error_msg}")
             if self._state:
-                self._state.error_message = error_msg
+                self._state.add_message("system", error_msg)
+            return error_msg
+
+        except Exception as e:
+            error_msg = f"Unexpected error in OllamaTool: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            if self._state:
+                self._state.add_message("system", error_msg)
             return error_msg
 
     def _run(self, prompt: str, **kwargs) -> str:
