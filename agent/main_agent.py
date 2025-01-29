@@ -193,22 +193,28 @@ class MainAgent:
         print("[DEBUG] Workflow graph created")
         return workflow.compile()
 
-    async def _determine_intent(self, message: str, context: Optional[Dict] = None) -> Dict[str, Any]:
-            """Determine the intent of a message using LLM with enhanced classification"""
-            try:
-                print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
-                
-                # Build context string
-                context_str = ""
-                if context:
-                    if context.get("conversation_history"):
-                        context_str += f"\nConversation history:\n{context['conversation_history']}"
-                    if context.get("current_search_results"):
-                        context_str += "\nHas current search results: Yes"
-                    if context.get("focused_paper"):
-                        context_str += f"\nCurrently focused on paper: {context['focused_paper']}"
+    async def _determine_intent(
+        self, message: str, context: Optional[Dict] = None
+    ) -> Dict[str, Any]:
+        """Determine the intent of a message using LLM with enhanced classification"""
+        try:
+            print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-                intent_prompt = f"""You are an academic research assistant that helps users find and understand papers.
+            # Build context string
+            context_str = ""
+            if context:
+                if context.get("conversation_history"):
+                    context_str += (
+                        f"\nConversation history:\n{context['conversation_history']}"
+                    )
+                if context.get("current_search_results"):
+                    context_str += "\nHas current search results: Yes"
+                if context.get("focused_paper"):
+                    context_str += (
+                        f"\nCurrently focused on paper: {context['focused_paper']}"
+                    )
+
+            intent_prompt = f"""You are an academic research assistant that helps users find and understand papers.
 
     MESSAGE: "{message}"
     {context_str}
@@ -227,74 +233,60 @@ class MainAgent:
     - User wants to understand concepts
     Example: "explain transformers", "what was my last search"
 
-    Return JSON in format:
-    {
-        "intent": "search" | "conversation",
-        "explanation": "<why you chose this intent>",
-        "requires_context": <true if asking about previous results/papers>,
-        "search_params": {} (empty if conversation intent)
-    }
+    Return intent as a JSON object with these exact fields:
+    - intent: either "search" or "conversation"
+    - explanation: brief reason for the intent choice
+    - requires_context: boolean (true/false)
+    - search_params: empty object if conversation intent
 
-    Message: "{message}"
-    {context_str}
-
-    Rules for classification:
-    1. "conversation" if:
-       - Asking for explanations (e.g., "explain", "tell me about", "what is")
-       - General questions about concepts
-       - Asking about previous results or conversation
-       - Asking for clarification
-       
-    2. "search" if:
-       - Explicitly requesting papers (e.g., "find papers", "search for", "look for")
-       - Searching for specific authors or topics
-       - Looking for publications in a time range
-       - Needs new search results
-
-    Return JSON in this format:
+    Example response:
     {{
-        "intent": "search" | "conversation",
-        "explanation": "<brief reason>",
-        "requires_context": true | false,
-        "search_params": {{ }} (only for search intent)
+        "intent": "search",
+        "explanation": "User explicitly asks to find papers",
+        "requires_context": false,
+        "search_params": {{}}
     }}"""
 
-                # Generate response
-                response = await self._ollama_client.generate(
-                    prompt=intent_prompt,
-                    system_prompt="Return only valid JSON with exact format shown.",
-                    temperature=0.1,
+            # Generate response
+            response = await self._ollama_client.generate(
+                prompt=intent_prompt,
+                system_prompt="Return only valid JSON with exact format shown.",
+                temperature=0.1,
+            )
+
+            # Clean and parse response
+            try:
+                clean_response = self._clean_json_response(response)
+                parsed_response = json.loads(clean_response)
+                print(f"[DEBUG] Successfully parsed intent response: {parsed_response}")
+
+                # Add search parameters for search intents
+                if parsed_response["intent"] == "search":
+                    parsed_response["search_params"] = self._extract_search_params(
+                        message
+                    )
+
+                return parsed_response
+
+            except json.JSONDecodeError as e:
+                print(
+                    f"[DEBUG] JSON parse error: {str(e)}\nResponse was: {clean_response}"
                 )
-
-                # Clean and parse response
-                try:
-                    clean_response = self._clean_json_response(response)
-                    parsed_response = json.loads(clean_response)
-                    print(f"[DEBUG] Successfully parsed intent response: {parsed_response}")
-
-                    # Add search parameters for search intents
-                    if parsed_response["intent"] == "search":
-                        parsed_response["search_params"] = self._extract_search_params(message)
-
-                    return parsed_response
-
-                except json.JSONDecodeError as e:
-                    print(f"[DEBUG] JSON parse error: {str(e)}\nResponse was: {clean_response}")
-                    return {
-                        "intent": "conversation",
-                        "explanation": "Failed to parse intent, defaulting to conversation",
-                        "requires_context": False,
-                        "search_params": {},
-                    }
-
-            except Exception as e:
-                print(f"[DEBUG] Error determining intent: {str(e)}")
                 return {
                     "intent": "conversation",
-                    "explanation": f"Error in intent analysis: {str(e)}",
+                    "explanation": "Failed to parse intent, defaulting to conversation",
                     "requires_context": False,
                     "search_params": {},
                 }
+
+        except Exception as e:
+            print(f"[DEBUG] Error determining intent: {str(e)}")
+            return {
+                "intent": "conversation",
+                "explanation": f"Error in intent analysis: {str(e)}",
+                "requires_context": False,
+                "search_params": {},
+            }
 
     def _clean_json_response(self, response: str) -> str:
         """Clean the response to extract only valid JSON"""
