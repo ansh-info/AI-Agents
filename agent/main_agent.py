@@ -198,46 +198,36 @@ class MainAgent:
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-            intent_prompt = f"""Analyze this user message and classify it as exactly ONE of these intent types:
+            intent_prompt = f"""Given this user message, classify it into exactly ONE intent type.
+            Message: {message}
 
-            1. "search": Queries asking to find, retrieve, or discover papers
-               Examples: 
-               - "Find papers about machine learning"
-               - "Show me papers by Geoffrey Hinton"
-               - "What are the latest papers on transformers"
+            RESPOND WITH ONLY A VALID JSON OBJECT IN THIS EXACT FORMAT:
+            {{
+                "intent": "<intent_type>",
+                "explanation": "<brief explanation>",
+                "parameters": {{}}
+            }}
 
-            2. "conversation": Questions asking for explanations or general information
-               Examples:
-               - "Can you explain what transformer models are?"
-               - "What is deep learning?"
-               - "How does reinforcement learning work?"
+            Where <intent_type> MUST BE EXACTLY ONE OF:
+            - "search": for finding or listing papers
+            - "conversation": for explanations or general questions
+            - "analysis": for analyzing specific papers
 
-            3. "analysis": Questions about specific papers or comparing papers
-               Examples:
-               - "What is the methodology in paper 1?"
-               - "Compare papers 2 and 3"
-               - "Explain the results from the last paper"
-
-            User message: {message}
-
-            Return a JSON object with these fields:
-            - "intent": EXACTLY one of ["search", "conversation", "analysis"]
-            - "explanation": Brief reason for classification
-            - "parameters": Additional parameters if needed
-
-            The intent MUST be one of the three types listed above.
+            ONLY RETURN THE JSON OBJECT, NO OTHER TEXT.
             """
 
             response = await self._ollama_client.generate(
                 prompt=intent_prompt,
-                system_prompt="You are an intent analyzer. Return only valid JSON.",
+                system_prompt="You are an intent classifier. Return only valid JSON with exact format specified.",
                 temperature=0.1,
             )
 
-            # Parse response to JSON
+            # Clean the response - remove any non-JSON text
+            clean_response = self._clean_json_response(response)
+
             try:
-                parsed_response = json.loads(response)
-                print(f"[DEBUG] Determined intent: {parsed_response}")
+                parsed_response = json.loads(clean_response)
+                print(f"[DEBUG] Successfully parsed intent response: {parsed_response}")
 
                 # Validate intent type
                 if parsed_response["intent"] not in [
@@ -249,7 +239,7 @@ class MainAgent:
                         f"Invalid intent type: {parsed_response['intent']}"
                     )
 
-                # Extract search parameters if needed
+                # Add search parameters if it's a search intent
                 if parsed_response["intent"] == "search":
                     parsed_response["search_params"] = self._extract_search_params(
                         message
@@ -257,9 +247,9 @@ class MainAgent:
 
                 return parsed_response
 
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 print(
-                    "[DEBUG] Error parsing JSON response, falling back to basic intent"
+                    f"[DEBUG] JSON parse error: {str(e)}\nResponse was: {clean_response}"
                 )
                 return {
                     "intent": "conversation",
@@ -275,12 +265,26 @@ class MainAgent:
                 "search_params": {},
             }
 
+    def _clean_json_response(self, response: str) -> str:
+        """Clean the response to extract only valid JSON"""
+        try:
+            # Find the first '{' and last '}'
+            start = response.find("{")
+            end = response.rfind("}")
+
+            if start != -1 and end != -1:
+                return response[start : end + 1]
+            return response
+        except Exception as e:
+            print(f"[DEBUG] Error cleaning JSON response: {str(e)}")
+            return response
+
     def _extract_search_params(self, message: str) -> Dict[str, Any]:
         """Extract search parameters from message"""
         params = {
             "query": message,
             "year_start": None,
-            "year_end": None,
+            "year_end": datetime.now().year,
             "min_citations": None,
         }
 
@@ -291,7 +295,6 @@ class MainAgent:
             year_start = next((y for group in year_matches for y in group if y), None)
             if year_start:
                 params["year_start"] = int(year_start)
-                params["year_end"] = datetime.now().year
 
         # Extract citation requirements
         citation_matches = re.findall(
