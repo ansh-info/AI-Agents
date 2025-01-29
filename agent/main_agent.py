@@ -198,48 +198,37 @@ class MainAgent:
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-            intent_prompt = f"""Given this user message, classify it into exactly ONE intent type.
-            Message: {message}
+            intent_prompt = f"""Classify this message into EXACTLY ONE intent type. Only return a JSON object.
 
-            RESPOND WITH ONLY A VALID JSON OBJECT IN THIS EXACT FORMAT:
+            Message: "{message}"
+
+            Rules:
+            1. If the message contains words like "find", "show", "search", "papers about", "papers by", "papers on", "need papers" -> intent MUST be "search"
+            2. If asking for explanation or what something means -> intent MUST be "conversation" 
+            3. If analyzing specific papers or comparing papers -> intent MUST be "analysis"
+
+            Return ONLY this JSON format:
             {{
-                "intent": "<intent_type>",
-                "explanation": "<brief explanation>",
+                "intent": "search" | "conversation" | "analysis",
+                "explanation": "<brief reason>",
                 "parameters": {{}}
             }}
 
-            Where <intent_type> MUST BE EXACTLY ONE OF:
-            - "search": for finding or listing papers
-            - "conversation": for explanations or general questions
-            - "analysis": for analyzing specific papers
-
-            ONLY RETURN THE JSON OBJECT, NO OTHER TEXT.
-            """
+            NO OTHER TEXT besides the JSON object."""
 
             response = await self._ollama_client.generate(
                 prompt=intent_prompt,
-                system_prompt="You are an intent classifier. Return only valid JSON with exact format specified.",
+                system_prompt="Return only valid JSON with exact format shown.",
                 temperature=0.1,
             )
 
-            # Clean the response - remove any non-JSON text
-            clean_response = self._clean_json_response(response)
-
+            # Clean and parse response
             try:
+                clean_response = self._clean_json_response(response)
                 parsed_response = json.loads(clean_response)
                 print(f"[DEBUG] Successfully parsed intent response: {parsed_response}")
 
-                # Validate intent type
-                if parsed_response["intent"] not in [
-                    "search",
-                    "conversation",
-                    "analysis",
-                ]:
-                    raise ValueError(
-                        f"Invalid intent type: {parsed_response['intent']}"
-                    )
-
-                # Add search parameters if it's a search intent
+                # Add search parameters for search intents
                 if parsed_response["intent"] == "search":
                     parsed_response["search_params"] = self._extract_search_params(
                         message
