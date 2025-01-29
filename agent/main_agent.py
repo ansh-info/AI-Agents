@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain.tools import BaseTool
@@ -57,7 +59,9 @@ class MainAgent:
         try:
             print("[DEBUG] Initializing MainAgent")
             self.state = AgentState()
-            self.ollama_client = OllamaClient(model_name=model_name)
+
+            # Initialize Ollama client
+            self._ollama_client = OllamaClient(model_name=model_name)
 
             # Initialize tools
             if tools is not None:
@@ -190,60 +194,177 @@ class MainAgent:
         return workflow.compile()
 
     async def _determine_intent(self, message: str) -> Dict[str, Any]:
-        """Determine the intent of a message using LLM"""
+        """Determine the intent of a message using LLM with enhanced classification"""
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-            intent_prompt = f"""Based on the user's request, determine:
-1. Primary Intent: What is the main action needed?
-2. Search Parameters: What specific parameters should be used for search?
-3. Context Requirement: Is previous context needed?
+            intent_prompt = f"""Classify this message into EXACTLY ONE intent type. Only return a JSON object.
 
-User Request: {message}
+            Message: "{message}"
 
-Respond in JSON format:
-{{
-    "intent": "search/refine/information",
-    "search_params": {{
-        "query": string,
-        "year_start": optional number,
-        "year_end": optional number,
-        "min_citations": optional number
-    }},
-    "requires_context": boolean,
-    "explanation": string
-}}"""
+            Rules:
+            1. "conversation" if:
+               - Asking for explanations (e.g., "explain", "tell me about", "what is")
+               - General questions about concepts
+               - Asking about previous results
+               - Requests for clarification
+               
+            2. "search" if:
+               - Explicitly requesting papers (e.g., "find papers", "show papers", "get papers")
+               - Searching for specific authors or topics
+               - Looking for publications in a time range
+               
+            3. "analysis" if:
+               - Referencing specific papers (e.g., "paper 1", "that paper")
+               - Comparing multiple papers
+               - Asking about methodology or findings
+               - Requesting paper summaries
 
-            response = await self.ollama_client.generate(
+            Example Classifications:
+            - "explain what transformers are" -> conversation
+            - "find papers about LLMs" -> search
+            - "what did paper 2 conclude?" -> analysis
+            - "what were my last search results" -> conversation
+
+            Return ONLY this JSON format:
+            {{
+                "intent": "search" | "conversation" | "analysis",
+                "explanation": "<brief reason>",
+                "parameters": {{}}
+            }}"""
+
+            response = await self._ollama_client.generate(
                 prompt=intent_prompt,
-                system_prompt="You are an intent analyzer. Return only valid JSON.",
+                system_prompt="Return only valid JSON with exact format shown.",
                 temperature=0.1,
             )
 
-            # Parse response to JSON
+            # Clean and parse response
             try:
-                parsed_response = json.loads(response)
-                print(f"[DEBUG] Determined intent: {parsed_response}")
+                clean_response = self._clean_json_response(response)
+                parsed_response = json.loads(clean_response)
+                print(f"[DEBUG] Successfully parsed intent response: {parsed_response}")
+
+                # Add search parameters for search intents
+                if parsed_response["intent"] == "search":
+                    parsed_response["search_params"] = self._extract_search_params(
+                        message
+                    )
+
                 return parsed_response
-            except json.JSONDecodeError:
+
+            except json.JSONDecodeError as e:
                 print(
-                    "[DEBUG] Error parsing JSON response, falling back to basic intent"
+                    f"[DEBUG] JSON parse error: {str(e)}\nResponse was: {clean_response}"
                 )
                 return {
-                    "intent": "search",
-                    "search_params": {"query": message},
-                    "requires_context": False,
-                    "explanation": "Fallback: Basic search intent",
+                    "intent": "conversation",
+                    "explanation": "Failed to parse intent, defaulting to conversation",
+                    "search_params": {},
                 }
 
         except Exception as e:
             print(f"[DEBUG] Error determining intent: {str(e)}")
             return {
-                "intent": "search",
-                "search_params": {"query": message},
-                "requires_context": False,
+                "intent": "conversation",
                 "explanation": f"Error in intent analysis: {str(e)}",
+                "search_params": {},
             }
+
+    def _clean_json_response(self, response: str) -> str:
+        """Clean the response to extract only valid JSON"""
+        try:
+            # Find the first '{' and last '}'
+            start = response.find("{")
+            end = response.rfind("}")
+
+            if start != -1 and end != -1:
+                return response[start : end + 1]
+            return response
+        except Exception as e:
+            print(f"[DEBUG] Error cleaning JSON response: {str(e)}")
+            return response
+
+    def _extract_search_params(self, message: str) -> Dict[str, Any]:
+        """Extract search parameters with improved pattern matching"""
+        params = {
+            "query": message,
+            "year_start": None,
+            "year_end": datetime.now().year,
+            "min_citations": None,
+            "author": None,
+        }
+
+        # Extract years with improved patterns
+        year_patterns = [
+            (r"(?:since|after|from)\s+(\d{4})", "year_start"),
+            (r"(?:before|until|to)\s+(\d{4})", "year_end"),
+            (r"in\s+(\d{4})", "year_exact"),  # For exact year matches
+            (r"past\s+(\d+)\s+years?", "year_relative"),  # For relative year ranges
+            (r"between\s+(\d{4})\s+and\s+(\d{4})", "year_range"),  # For explicit ranges
+        ]
+
+        for pattern, param_type in year_patterns:
+            matches = re.finditer(pattern, message, re.IGNORECASE)
+            for match in matches:
+                if param_type == "year_start":
+                    params["year_start"] = int(match.group(1))
+                elif param_type == "year_end":
+                    params["year_end"] = int(match.group(1))
+                elif param_type == "year_exact":
+                    exact_year = int(match.group(1))
+                    params["year_start"] = exact_year
+                    params["year_end"] = exact_year
+                elif param_type == "year_relative":
+                    years_back = int(match.group(1))
+                    params["year_start"] = datetime.now().year - years_back
+                elif param_type == "year_range":
+                    params["year_start"] = int(match.group(1))
+                    params["year_end"] = int(match.group(2))
+
+        # Extract citation requirements
+        citation_patterns = [
+            r"(?:at least|minimum|min|>)\s*(\d+)\s+citations",
+            r"cited\s+(?:at least|minimum|min|>)\s*(\d+)\s+times",
+            r"(\d+)\+\s+citations",
+        ]
+
+        for pattern in citation_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                params["min_citations"] = int(match.group(1))
+                break
+
+        # Extract author if present (improved author detection)
+        author_patterns = [
+            r"by\s+([A-Z][A-Za-z\s\.-]+)(?=\s|$|\.|,)",
+            r"author\s+([A-Z][A-Za-z\s\.-]+)(?=\s|$|\.|,)",
+            r"from\s+([A-Z][A-Za-z\s\.-]+)(?=\s|$|\.|,)",
+        ]
+
+        for pattern in author_patterns:
+            match = re.search(pattern, message)
+            if match:
+                author = match.group(1).strip()
+                # Don't capture common words that might follow "by"
+                if author.lower() not in ["the", "a", "an", "this", "that"]:
+                    params["author"] = author
+                    # Modify query to use author search
+                    params["query"] = f'author:"{author}"'
+                    break
+
+        return params
+
+    def process_intent(self, intent_data: Dict[str, Any]) -> str:
+        """Process the determined intent and route to appropriate handler"""
+        intent = intent_data["intent"]
+
+        if intent == "search":
+            return "semantic_scholar_tool"
+        elif intent == "analysis":
+            return "paper_analyzer_tool"
+        else:  # conversation
+            return "ollama_tool"
 
     def _extract_message_content(self, message: Any) -> str:
         """Safely extract content from different message types."""
