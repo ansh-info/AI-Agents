@@ -286,32 +286,72 @@ class MainAgent:
             return response
 
     def _extract_search_params(self, message: str) -> Dict[str, Any]:
-        """Extract search parameters from message"""
+        """Extract search parameters with improved pattern matching"""
         params = {
             "query": message,
             "year_start": None,
             "year_end": datetime.now().year,
             "min_citations": None,
+            "author": None,
         }
 
-        # Extract year ranges
-        year_matches = re.findall(r"from (\d{4})|since (\d{4})|after (\d{4})", message)
-        if year_matches:
-            # Combine the matched groups and take the first valid year
-            year_start = next((y for group in year_matches for y in group if y), None)
-            if year_start:
-                params["year_start"] = int(year_start)
+        # Extract years with improved patterns
+        year_patterns = [
+            (r"(?:since|after|from)\s+(\d{4})", "year_start"),
+            (r"(?:before|until|to)\s+(\d{4})", "year_end"),
+            (r"in\s+(\d{4})", "year_exact"),  # For exact year matches
+            (r"past\s+(\d+)\s+years?", "year_relative"),  # For relative year ranges
+            (r"between\s+(\d{4})\s+and\s+(\d{4})", "year_range"),  # For explicit ranges
+        ]
+
+        for pattern, param_type in year_patterns:
+            matches = re.finditer(pattern, message, re.IGNORECASE)
+            for match in matches:
+                if param_type == "year_start":
+                    params["year_start"] = int(match.group(1))
+                elif param_type == "year_end":
+                    params["year_end"] = int(match.group(1))
+                elif param_type == "year_exact":
+                    exact_year = int(match.group(1))
+                    params["year_start"] = exact_year
+                    params["year_end"] = exact_year
+                elif param_type == "year_relative":
+                    years_back = int(match.group(1))
+                    params["year_start"] = datetime.now().year - years_back
+                elif param_type == "year_range":
+                    params["year_start"] = int(match.group(1))
+                    params["year_end"] = int(match.group(2))
 
         # Extract citation requirements
-        citation_matches = re.findall(
-            r"at least (\d+) citations|min[imum]* (\d+) citations", message
-        )
-        if citation_matches:
-            citations = next(
-                (c for group in citation_matches for c in group if c), None
-            )
-            if citations:
-                params["min_citations"] = int(citations)
+        citation_patterns = [
+            r"(?:at least|minimum|min|>)\s*(\d+)\s+citations",
+            r"cited\s+(?:at least|minimum|min|>)\s*(\d+)\s+times",
+            r"(\d+)\+\s+citations",
+        ]
+
+        for pattern in citation_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                params["min_citations"] = int(match.group(1))
+                break
+
+        # Extract author if present (improved author detection)
+        author_patterns = [
+            r"by\s+([A-Z][A-Za-z\s\.-]+)(?=\s|$|\.|,)",
+            r"author\s+([A-Z][A-Za-z\s\.-]+)(?=\s|$|\.|,)",
+            r"from\s+([A-Z][A-Za-z\s\.-]+)(?=\s|$|\.|,)",
+        ]
+
+        for pattern in author_patterns:
+            match = re.search(pattern, message)
+            if match:
+                author = match.group(1).strip()
+                # Don't capture common words that might follow "by"
+                if author.lower() not in ["the", "a", "an", "this", "that"]:
+                    params["author"] = author
+                    # Modify query to use author search
+                    params["query"] = f'author:"{author}"'
+                    break
 
         return params
 
