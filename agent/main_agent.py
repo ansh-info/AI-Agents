@@ -194,7 +194,7 @@ class MainAgent:
         return workflow.compile()
 
     async def _determine_intent(self, message: str) -> Dict[str, Any]:
-        """Determine the intent of a message using LLM with strict intent types"""
+        """Determine the intent of a message using LLM with enhanced classification"""
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
@@ -203,18 +203,35 @@ class MainAgent:
             Message: "{message}"
 
             Rules:
-            1. If the message contains words like "find", "show", "search", "papers about", "papers by", "papers on", "need papers" -> intent MUST be "search"
-            2. If asking for explanation or what something means -> intent MUST be "conversation" 
-            3. If analyzing specific papers or comparing papers -> intent MUST be "analysis"
+            1. "conversation" if:
+               - Asking for explanations (e.g., "explain", "tell me about", "what is")
+               - General questions about concepts
+               - Asking about previous results
+               - Requests for clarification
+               
+            2. "search" if:
+               - Explicitly requesting papers (e.g., "find papers", "show papers", "get papers")
+               - Searching for specific authors or topics
+               - Looking for publications in a time range
+               
+            3. "analysis" if:
+               - Referencing specific papers (e.g., "paper 1", "that paper")
+               - Comparing multiple papers
+               - Asking about methodology or findings
+               - Requesting paper summaries
+
+            Example Classifications:
+            - "explain what transformers are" -> conversation
+            - "find papers about LLMs" -> search
+            - "what did paper 2 conclude?" -> analysis
+            - "what were my last search results" -> conversation
 
             Return ONLY this JSON format:
             {{
                 "intent": "search" | "conversation" | "analysis",
                 "explanation": "<brief reason>",
                 "parameters": {{}}
-            }}
-
-            NO OTHER TEXT besides the JSON object."""
+            }}"""
 
             response = await self._ollama_client.generate(
                 prompt=intent_prompt,
