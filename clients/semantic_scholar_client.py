@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -64,7 +65,7 @@ class PaperMetadata(BaseModel):
 
 
 class SearchFilters(BaseModel):
-    """Model for search filters"""
+    """Model for search filters with proper formatting"""
 
     year_start: Optional[int] = None
     year_end: Optional[int] = None
@@ -74,18 +75,30 @@ class SearchFilters(BaseModel):
     is_open_access: Optional[bool] = None
     has_pdf: Optional[bool] = None
 
+    def _format_year_param(self) -> Optional[str]:
+        """Format year parameter according to API requirements"""
+        if self.year_start and self.year_end:
+            return f"{self.year_start}-{self.year_end}"
+        elif self.year_start:
+            return f"{self.year_start}-{datetime.now().year}"
+        elif self.year_end:
+            return f"1900-{self.year_end}"
+        return None
+
     def to_params(self) -> Dict[str, Any]:
-        """Convert filters to API parameters"""
+        """Convert filters to API parameters with proper formatting"""
         params = {}
-        if self.year_start:
-            params["year"] = f">={self.year_start}"
-        if self.year_end:
-            if "year" in params:
-                params["year"] = f"{params['year']},{self.year_end}"
-            else:
-                params["year"] = f"<={self.year_end}"
+
+        # Handle year parameter
+        year_param = self._format_year_param()
+        if year_param:
+            params["year"] = year_param
+
+        # Handle citation count
         if self.min_citations:
             params["citationCount"] = f">={self.min_citations}"
+
+        # Handle other parameters
         if self.fields_of_study:
             params["fieldsOfStudy"] = ",".join(self.fields_of_study)
         if self.venue:
@@ -94,6 +107,7 @@ class SearchFilters(BaseModel):
             params["isOpenAccess"] = str(self.is_open_access).lower()
         if self.has_pdf is not None:
             params["hasPdf"] = str(self.has_pdf).lower()
+
         return params
 
 
