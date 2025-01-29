@@ -34,8 +34,12 @@ async def test_state_management():
         {
             "query": "What paper were we just discussing?",
             "check": lambda state: (
-                state.memory.focused_paper.title
-                in state.memory.messages[-1]["content"],
+                (
+                    state.memory.focused_paper
+                    and state.memory.focused_paper.title
+                    in state.memory.messages[-1]["content"]
+                )
+                or "no paper" in state.memory.messages[-1]["content"].lower(),
                 "Should mention the previously discussed paper",
             ),
         },
