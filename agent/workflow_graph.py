@@ -636,7 +636,22 @@ Return only one word (search/analyze/conversation)."""
 
             # Update state with search results
             if isinstance(search_result, dict) and "papers" in search_result:
-                self.state.search_context.results = search_result["papers"]
+                # Convert papers to PaperContext objects
+                paper_contexts = []
+                for paper in search_result["papers"]:
+                    paper_ctx = PaperContext(
+                        paperId=paper["id"],
+                        title=paper["title"],
+                        authors=[{"name": name} for name in paper["authors"]],
+                        year=paper.get("year"),
+                        citations=paper.get("citations", 0),
+                        abstract=paper.get("abstract", ""),
+                        url=paper.get("url", ""),
+                    )
+                    paper_contexts.append(paper_ctx)
+
+                # Update state
+                self.state.search_context.results = paper_contexts
                 self.state.search_context.query = request
 
                 # Format and add response
@@ -869,18 +884,33 @@ Please provide a clear response that addresses the question while considering:
         return "\n".join(context_parts)
 
     async def _handle_history_query(self, request: str) -> Dict[str, Any]:
-        """Handle queries about conversation history"""
+        """Handle queries about conversation history with contextual responses"""
         try:
             print("[DEBUG] Handling history query")
 
-            # Get conversation history
-            history = self.state.memory.messages
+            # Build context including last search and focused paper
             context = self._build_conversation_context(self.state)
 
-            # Generate response using context
+            # Add specific context based on the type of history query
+            if "last search" in request.lower() and self.state.search_context.query:
+                context += f"\nLast search query: {self.state.search_context.query}"
+
+            if "paper" in request.lower():
+                if self.state.memory.focused_paper:
+                    paper = self.state.memory.focused_paper
+                    context += f"\nCurrently focused paper: {paper.title} ({paper.year}) by {', '.join(a['name'] for a in paper.authors)}"
+                elif self.state.search_context.results:
+                    papers = self.state.search_context.results[:3]
+                    context += "\nRecent papers found:\n" + "\n".join(
+                        f"{i + 1}. {p.title}" for i, p in enumerate(papers)
+                    )
+
+            # Generate response using conversation agent
             response = await self.conversation_agent.generate_response(
-                prompt=f"Based on our conversation history:\n{context}\n\nUser question: {request}",
-                system_prompt="You are a helpful research assistant. Use the conversation history to answer the user's question.",
+                prompt=f"Based on the following context:\n{context}\n\nUser question: {request}",
+                system_prompt="""You are a helpful research assistant. Use the conversation history to answer the user's question.
+                    When referring to papers, include their titles and authors.
+                    If discussing search results, mention the search query used.""",
             )
 
             if isinstance(response, dict) and response.get("status") == "error":
