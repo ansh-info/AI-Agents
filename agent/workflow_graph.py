@@ -9,7 +9,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from agent.main_agent import MainAgent
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
-from state.agent_state import AgentState, AgentStatus
+from state.agent_state import AgentState, AgentStatus, PaperContext
 from state.conversation_memory import ConversationMemory
 from state.search_context import SearchContext
 from tools.ollama_tool import OllamaTool
@@ -639,27 +639,34 @@ Return only one word (search/analyze/conversation)."""
                 # Convert papers to PaperContext objects
                 paper_contexts = []
                 for paper in search_result["papers"]:
-                    paper_ctx = PaperContext(
-                        paperId=paper["id"],
-                        title=paper["title"],
-                        authors=[{"name": name} for name in paper["authors"]],
-                        year=paper.get("year"),
-                        citations=paper.get("citations", 0),
-                        abstract=paper.get("abstract", ""),
-                        url=paper.get("url", ""),
-                    )
-                    paper_contexts.append(paper_ctx)
+                    try:
+                        paper_ctx = PaperContext(
+                            paperId=paper.get("id") or paper.get("paperId"),
+                            title=paper.get("title", "Untitled"),
+                            authors=[
+                                {"name": a}
+                                if isinstance(a, str)
+                                else {"name": a.get("name", "Unknown")}
+                                for a in paper.get("authors", [])
+                            ],
+                            year=paper.get("year"),
+                            citations=paper.get("citations", 0),
+                            abstract=paper.get("abstract", ""),
+                            url=paper.get("url", ""),
+                        )
+                        paper_contexts.append(paper_ctx)
+                    except Exception as e:
+                        print(f"[DEBUG] Error creating PaperContext: {str(e)}")
+                        continue
 
                 # Update state
                 self.state.search_context.results = paper_contexts
                 self.state.search_context.query = request
 
                 # Format and add response
-                response = self._format_search_results(search_result)
+                response = self._format_search_results({"papers": paper_contexts})
                 self.state.add_message("system", response)
-                print(
-                    f"[DEBUG] Search successful, found {len(search_result['papers'])} papers"
-                )
+                print(f"[DEBUG] Search successful, found {len(paper_contexts)} papers")
 
             # Update state status
             self.state.status = AgentStatus.SUCCESS
@@ -883,46 +890,33 @@ Please provide a clear response that addresses the question while considering:
 
         return "\n".join(context_parts)
 
-    async def _handle_history_query(self, request: str) -> Dict[str, Any]:
-        """Handle queries about conversation history with contextual responses"""
+    def _handle_history_query(self, request: str) -> str:
+        """Handle queries about conversation history"""
         try:
-            print("[DEBUG] Handling history query")
-
-            # Build context including last search and focused paper
-            context = self._build_conversation_context(self.state)
-
-            # Add specific context based on the type of history query
-            if "last search" in request.lower() and self.state.search_context.query:
-                context += f"\nLast search query: {self.state.search_context.query}"
+            # Get relevant history information
+            if "last search" in request.lower():
+                if self.state.search_context.query:
+                    return (
+                        f"Your last search was about: {self.state.search_context.query}"
+                    )
+                return "You haven't performed any searches yet."
 
             if "paper" in request.lower():
                 if self.state.memory.focused_paper:
                     paper = self.state.memory.focused_paper
-                    context += f"\nCurrently focused paper: {paper.title} ({paper.year}) by {', '.join(a['name'] for a in paper.authors)}"
+                    return f"We were discussing: {paper.title} ({paper.year}) by {', '.join(a['name'] for a in paper.authors)}"
                 elif self.state.search_context.results:
-                    papers = self.state.search_context.results[:3]
-                    context += "\nRecent papers found:\n" + "\n".join(
-                        f"{i + 1}. {p.title}" for i, p in enumerate(papers)
+                    papers = self.state.search_context.results
+                    return "The most recent papers we found were: \n" + "\n".join(
+                        f"{i + 1}. {p.title}" for i, p in enumerate(papers[:3])
                     )
+                return "We haven't looked at any papers yet."
 
-            # Generate response using conversation agent
-            response = await self.conversation_agent.generate_response(
-                prompt=f"Based on the following context:\n{context}\n\nUser question: {request}",
-                system_prompt="""You are a helpful research assistant. Use the conversation history to answer the user's question.
-                    When referring to papers, include their titles and authors.
-                    If discussing search results, mention the search query used.""",
-            )
-
-            if isinstance(response, dict) and response.get("status") == "error":
-                raise Exception(f"Error generating response: {response.get('error')}")
-
-            # Update state
-            self.state.add_message("system", response.get("response", response))
-            return {"status": AgentStatus.SUCCESS}
+            return "I'm not sure what history you're asking about. Could you be more specific?"
 
         except Exception as e:
             print(f"[DEBUG] Error handling history query: {str(e)}")
-            return {"status": AgentStatus.ERROR, "error_message": str(e)}
+            return f"I encountered an error while retrieving history: {str(e)}"
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
