@@ -1145,12 +1145,9 @@ Please provide a structured response that:
                     else None,
                 },
             )
-            print(f"[DEBUG] Determined intent: {intent}")
-
-            # Process based on intent
             print(f"[DEBUG] Intent analysis result: {intent}")
 
-            # Extract search parameters if it's a search intent
+            # Check for search keywords
             if any(
                 keyword in request.lower()
                 for keyword in [
@@ -1161,23 +1158,16 @@ Please provide a structured response that:
                     "papers by",
                 ]
             ):
-                intent["intent"] = "search"
-
-            if intent.get("intent") == "search":
                 return await self._handle_search(request)
-            elif intent.get("intent") == "conversation" and intent.get(
-                "requires_context", False
-            ):
-                if self._is_history_query(request):
-                    result = await self._handle_history_query(request)
-                else:
-                    result = await self._handle_conversation(request)
-            else:  # search intent
-                result = await self._handle_search(request)
 
-            # Update state with final result
-            if isinstance(result, dict):
-                self.state.update_state(**result)
+            # Process based on intent
+            if intent.get("intent") == "conversation":
+                if self._is_history_query(request):
+                    await self._handle_history_query(request)
+                else:
+                    await self._handle_conversation(request)
+            else:  # search intent
+                await self._handle_search(request)
 
             self.state.status = AgentStatus.SUCCESS
             return self.state
