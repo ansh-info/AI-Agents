@@ -1,7 +1,6 @@
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
-from uuid import uuid4
 
 from pydantic import BaseModel, Field, validator
 
@@ -16,48 +15,37 @@ class AgentStatus(Enum):
 class PaperContext(BaseModel):
     """Enhanced model for tracking paper details in conversation"""
 
-    paper_id: str = Field(alias="paperId")  # Keep the alias
+    paper_id: str = Field(alias="paperId")
     title: str = Field(default="Untitled Paper")
-    authors: List[Dict[str, Any]] = Field(default_factory=list)
+    authors: List[Dict[str, str]] = Field(default_factory=list)
     year: Optional[int] = None
     citations: Optional[int] = None
     abstract: Optional[str] = None
     url: Optional[str] = None
-    last_referenced: Optional[datetime] = None
+    last_referenced: Optional[datetime] = Field(default_factory=datetime.now)
     reference_count: int = 0
     discussed_aspects: Set[str] = Field(default_factory=set)
-
-    def update_reference(self):
-        """Update paper reference tracking"""
-        self.last_referenced = datetime.now()
-        self.reference_count += 1
-
-    @validator("paper_id", pre=True, always=True)
-    def validate_or_generate_paper_id(cls, v):
-        """Validate or generate a default paper_id if missing."""
-        if not v:
-            return str(uuid4())  # Generate a unique ID if paper_id is missing
-        return str(v).strip()
-
-    @validator("title")
-    def validate_title(cls, v):
-        if not v:
-            return "Untitled Paper"
-        return v.strip()
 
     @validator("paper_id", pre=True)
     def validate_paper_id(cls, v):
         """Ensure paper_id is never null and is a valid string"""
         if not v:
             raise ValueError("paper_id cannot be null or empty")
-        return str(v)  # Convert to string if it isn't already
+        return str(v)
 
-    @validator("authors")
+    @validator("authors", pre=True)
     def validate_authors(cls, v):
         """Ensure authors list is never null"""
         if not v:
-            return [{"name": "Unknown Author", "authorId": None}]
-        return v
+            return [{"name": "Unknown Author"}]
+        if isinstance(v, list):
+            return [{"name": a["name"] if isinstance(a, dict) else str(a)} for a in v]
+        return [{"name": str(v)}]
+
+    def update_reference(self):
+        """Update reference tracking"""
+        self.last_referenced = datetime.now()
+        self.reference_count += 1
 
     class Config:
         arbitrary_types_allowed = True
