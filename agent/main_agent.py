@@ -219,19 +219,23 @@ class MainAgent:
     MESSAGE: "{message}"
     {context_str}
 
-    Classify the intent as either "search" or "conversation". Use these rules:
+    TASK: Determine if this is a paper search request or a conversation.
 
-    SEARCH intent if:
-    - User wants to find/look for/search for papers
-    - User mentions specific authors or topics to find papers about
-    - User asks for papers with specific criteria (year, citations)
-    Example: "find papers about LLMs", "search for papers by Hinton"
+    CHOOSE "search" if ANY of these are true:
+    1. Message starts with "find", "search", "get papers", "look for"
+    2. Message includes "papers about", "papers on", "papers by"
+    3. Message has search criteria like "since 2020", "at least 10 citations"
 
-    CONVERSATION intent if:
-    - User asks for explanations or definitions
-    - User asks about previous search results or context
-    - User wants to understand concepts
-    Example: "explain transformers", "what was my last search"
+    CHOOSE "conversation" if:
+    1. Message asks for explanations ("explain", "what is", "tell me about")
+    2. Message asks about previous context ("what did we", "previous", "last")
+    3. Message asks about general concepts without mentioning papers
+
+    Examples:
+    SEARCH: "find papers about LLMs" (has "find papers about")
+    SEARCH: "papers on deep learning" (has "papers on")
+    CONVERSATION: "explain what transformers are" (asks for explanation)
+    CONVERSATION: "what was my last search" (asks about previous context)
 
     Return intent as a JSON object with these exact fields:
     - intent: either "search" or "conversation"
