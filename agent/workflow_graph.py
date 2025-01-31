@@ -610,7 +610,7 @@ Return only one word (search/analyze/conversation)."""
             print(f"[DEBUG] Summary generation error: {str(e)}")
             return "Unable to generate summary at this time."
 
-    async def _handle_search(self, request: str) -> Dict[str, Any]:
+    async def _handle_search(self, request: str) -> AgentState:
         """Handle search requests with proper state management"""
         try:
             print(f"[DEBUG] Handling search request: {request}")
@@ -646,15 +646,18 @@ Return only one word (search/analyze/conversation)."""
                     f"[DEBUG] Search successful, found {len(search_result['papers'])} papers"
                 )
 
-            return {"status": AgentStatus.SUCCESS, "current_step": "search_completed"}
+            # Update state status
+            self.state.status = AgentStatus.SUCCESS
+            self.state.current_step = "search_completed"
+
+            return self.state
 
         except Exception as e:
             print(f"[DEBUG] Error in search handler: {str(e)}")
-            return {
-                "status": AgentStatus.ERROR,
-                "error_message": str(e),
-                "current_step": "search_failed",
-            }
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            self.state.current_step = "search_failed"
+            return self.state
 
     def _extract_search_params(self, request: str) -> Dict[str, Any]:
         """Extract search parameters from request"""
@@ -1147,7 +1150,22 @@ Please provide a structured response that:
             # Process based on intent
             print(f"[DEBUG] Intent analysis result: {intent}")
 
-            if intent.get("intent") == "conversation" and intent.get(
+            # Extract search parameters if it's a search intent
+            if any(
+                keyword in request.lower()
+                for keyword in [
+                    "find",
+                    "search",
+                    "papers about",
+                    "papers on",
+                    "papers by",
+                ]
+            ):
+                intent["intent"] = "search"
+
+            if intent.get("intent") == "search":
+                return await self._handle_search(request)
+            elif intent.get("intent") == "conversation" and intent.get(
                 "requires_context", False
             ):
                 if self._is_history_query(request):
