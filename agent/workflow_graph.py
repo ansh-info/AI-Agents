@@ -9,7 +9,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from agent.main_agent import MainAgent
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
-from state.agent_state import AgentState, AgentStatus
+from state.agent_state import AgentState, AgentStatus, PaperContext
 from state.conversation_memory import ConversationMemory
 from state.search_context import SearchContext
 from tools.ollama_tool import OllamaTool
@@ -610,7 +610,7 @@ Return only one word (search/analyze/conversation)."""
             print(f"[DEBUG] Summary generation error: {str(e)}")
             return "Unable to generate summary at this time."
 
-    async def _handle_search(self, request: str) -> Dict[str, Any]:
+    async def _handle_search(self, request: str) -> AgentState:
         """Handle search requests with proper state management"""
         try:
             print(f"[DEBUG] Handling search request: {request}")
@@ -636,25 +636,50 @@ Return only one word (search/analyze/conversation)."""
 
             # Update state with search results
             if isinstance(search_result, dict) and "papers" in search_result:
-                self.state.search_context.results = search_result["papers"]
+                # Convert papers to PaperContext objects
+                paper_contexts = []
+                for paper in search_result["papers"]:
+                    try:
+                        paper_ctx = PaperContext(
+                            paperId=paper.get("id") or paper.get("paperId"),
+                            title=paper.get("title", "Untitled"),
+                            authors=[
+                                {"name": a}
+                                if isinstance(a, str)
+                                else {"name": a.get("name", "Unknown")}
+                                for a in paper.get("authors", [])
+                            ],
+                            year=paper.get("year"),
+                            citations=paper.get("citations", 0),
+                            abstract=paper.get("abstract", ""),
+                            url=paper.get("url", ""),
+                        )
+                        paper_contexts.append(paper_ctx)
+                    except Exception as e:
+                        print(f"[DEBUG] Error creating PaperContext: {str(e)}")
+                        continue
+
+                # Update state
+                self.state.search_context.results = paper_contexts
                 self.state.search_context.query = request
 
                 # Format and add response
-                response = self._format_search_results(search_result)
+                response = self._format_search_results({"papers": paper_contexts})
                 self.state.add_message("system", response)
-                print(
-                    f"[DEBUG] Search successful, found {len(search_result['papers'])} papers"
-                )
+                print(f"[DEBUG] Search successful, found {len(paper_contexts)} papers")
 
-            return {"status": AgentStatus.SUCCESS, "current_step": "search_completed"}
+            # Update state status
+            self.state.status = AgentStatus.SUCCESS
+            self.state.current_step = "search_completed"
+
+            return self.state
 
         except Exception as e:
             print(f"[DEBUG] Error in search handler: {str(e)}")
-            return {
-                "status": AgentStatus.ERROR,
-                "error_message": str(e),
-                "current_step": "search_failed",
-            }
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            self.state.current_step = "search_failed"
+            return self.state
 
     def _extract_search_params(self, request: str) -> Dict[str, Any]:
         """Extract search parameters from request"""
@@ -696,34 +721,36 @@ Return only one word (search/analyze/conversation)."""
 
     def _format_search_results(self, results: Dict[str, Any]) -> str:
         """Format search results for display"""
-        if results.get("status") == "error":
-            return f"Error performing search: {results.get('error')}"
-
-        papers = results.get("papers", [])
-        if not papers:
+        if not results.get("papers"):
             return "No papers found matching your criteria."
 
-        formatted_parts = [f"Found {len(papers)} papers matching your criteria:\n"]
+        paper_contexts = results["papers"]
+        formatted_parts = ["Found papers matching your criteria:\n"]
 
-        for i, paper in enumerate(papers, 1):
-            paper_info = [
-                f"\n{i}. {paper.get('title', 'Untitled')}",
-                f"Authors: {', '.join(paper.get('authors', []))}",
-                f"Year: {paper.get('year', 'N/A')} | Citations: {paper.get('citations', 0)}",
-            ]
+        for i, paper in enumerate(paper_contexts, 1):
+            try:
+                # Handle PaperContext objects
+                paper_info = [
+                    f"\n{i}. {paper.title}",
+                    f"Authors: {', '.join(author['name'] for author in paper.authors)}",
+                    f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                ]
 
-            if paper.get("abstract"):
-                abstract = paper["abstract"]
-                paper_info.append(
-                    f"Abstract: {abstract[:300]}..."
-                    if len(abstract) > 300
-                    else f"Abstract: {abstract}"
-                )
+                if paper.abstract:
+                    abstract = paper.abstract
+                    paper_info.append(
+                        f"Abstract: {abstract[:300]}..."
+                        if len(abstract) > 300
+                        else f"Abstract: {abstract}"
+                    )
 
-            if paper.get("url"):
-                paper_info.append(f"URL: {paper.get('url')}\n")
+                if paper.url:
+                    paper_info.append(f"URL: {paper.url}\n")
 
-            formatted_parts.extend(paper_info)
+                formatted_parts.extend(paper_info)
+            except Exception as e:
+                print(f"[DEBUG] Error formatting paper {i}: {str(e)}")
+                continue
 
         return "\n".join(formatted_parts)
 
@@ -865,31 +892,33 @@ Please provide a clear response that addresses the question while considering:
 
         return "\n".join(context_parts)
 
-    async def _handle_history_query(self, request: str) -> Dict[str, Any]:
+    def _handle_history_query(self, request: str) -> str:
         """Handle queries about conversation history"""
         try:
-            print("[DEBUG] Handling history query")
+            # Get relevant history information
+            if "last search" in request.lower():
+                if self.state.search_context.query:
+                    return (
+                        f"Your last search was about: {self.state.search_context.query}"
+                    )
+                return "You haven't performed any searches yet."
 
-            # Get conversation history
-            history = self.state.memory.messages
-            context = self._build_conversation_context(self.state)
+            if "paper" in request.lower():
+                if self.state.memory.focused_paper:
+                    paper = self.state.memory.focused_paper
+                    return f"We were discussing: {paper.title} ({paper.year}) by {', '.join(a['name'] for a in paper.authors)}"
+                elif self.state.search_context.results:
+                    papers = self.state.search_context.results
+                    return "The most recent papers we found were: \n" + "\n".join(
+                        f"{i + 1}. {p.title}" for i, p in enumerate(papers[:3])
+                    )
+                return "We haven't looked at any papers yet."
 
-            # Generate response using context
-            response = await self.conversation_agent.generate_response(
-                prompt=f"Based on our conversation history:\n{context}\n\nUser question: {request}",
-                system_prompt="You are a helpful research assistant. Use the conversation history to answer the user's question.",
-            )
-
-            if isinstance(response, dict) and response.get("status") == "error":
-                raise Exception(f"Error generating response: {response.get('error')}")
-
-            # Update state
-            self.state.add_message("system", response.get("response", response))
-            return {"status": AgentStatus.SUCCESS}
+            return "I'm not sure what history you're asking about. Could you be more specific?"
 
         except Exception as e:
             print(f"[DEBUG] Error handling history query: {str(e)}")
-            return {"status": AgentStatus.ERROR, "error_message": str(e)}
+            return f"I encountered an error while retrieving history: {str(e)}"
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
@@ -1142,24 +1171,29 @@ Please provide a structured response that:
                     else None,
                 },
             )
-            print(f"[DEBUG] Determined intent: {intent}")
-
-            # Process based on intent
             print(f"[DEBUG] Intent analysis result: {intent}")
 
-            if intent.get("intent") == "conversation" and intent.get(
-                "requires_context", False
+            # Check for search keywords
+            if any(
+                keyword in request.lower()
+                for keyword in [
+                    "find",
+                    "search",
+                    "papers about",
+                    "papers on",
+                    "papers by",
+                ]
             ):
-                if self._is_history_query(request):
-                    result = await self._handle_history_query(request)
-                else:
-                    result = await self._handle_conversation(request)
-            else:  # search intent
-                result = await self._handle_search(request)
+                return await self._handle_search(request)
 
-            # Update state with final result
-            if isinstance(result, dict):
-                self.state.update_state(**result)
+            # Process based on intent
+            if intent.get("intent") == "conversation":
+                if self._is_history_query(request):
+                    await self._handle_history_query(request)
+                else:
+                    await self._handle_conversation(request)
+            else:  # search intent
+                await self._handle_search(request)
 
             self.state.status = AgentStatus.SUCCESS
             return self.state
