@@ -721,34 +721,36 @@ Return only one word (search/analyze/conversation)."""
 
     def _format_search_results(self, results: Dict[str, Any]) -> str:
         """Format search results for display"""
-        if results.get("status") == "error":
-            return f"Error performing search: {results.get('error')}"
-
-        papers = results.get("papers", [])
-        if not papers:
+        if not results.get("papers"):
             return "No papers found matching your criteria."
 
-        formatted_parts = [f"Found {len(papers)} papers matching your criteria:\n"]
+        paper_contexts = results["papers"]
+        formatted_parts = ["Found papers matching your criteria:\n"]
 
-        for i, paper in enumerate(papers, 1):
-            paper_info = [
-                f"\n{i}. {paper.get('title', 'Untitled')}",
-                f"Authors: {', '.join(paper.get('authors', []))}",
-                f"Year: {paper.get('year', 'N/A')} | Citations: {paper.get('citations', 0)}",
-            ]
+        for i, paper in enumerate(paper_contexts, 1):
+            try:
+                # Handle PaperContext objects
+                paper_info = [
+                    f"\n{i}. {paper.title}",
+                    f"Authors: {', '.join(author['name'] for author in paper.authors)}",
+                    f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+                ]
 
-            if paper.get("abstract"):
-                abstract = paper["abstract"]
-                paper_info.append(
-                    f"Abstract: {abstract[:300]}..."
-                    if len(abstract) > 300
-                    else f"Abstract: {abstract}"
-                )
+                if paper.abstract:
+                    abstract = paper.abstract
+                    paper_info.append(
+                        f"Abstract: {abstract[:300]}..."
+                        if len(abstract) > 300
+                        else f"Abstract: {abstract}"
+                    )
 
-            if paper.get("url"):
-                paper_info.append(f"URL: {paper.get('url')}\n")
+                if paper.url:
+                    paper_info.append(f"URL: {paper.url}\n")
 
-            formatted_parts.extend(paper_info)
+                formatted_parts.extend(paper_info)
+            except Exception as e:
+                print(f"[DEBUG] Error formatting paper {i}: {str(e)}")
+                continue
 
         return "\n".join(formatted_parts)
 
