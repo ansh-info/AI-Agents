@@ -892,33 +892,93 @@ Please provide a clear response that addresses the question while considering:
 
         return "\n".join(context_parts)
 
-    def _handle_history_query(self, request: str) -> str:
-        """Handle queries about conversation history"""
+    async def _handle_history_query(self, request: str) -> Dict[str, Any]:
+        """Handle queries about conversation history with contextual responses"""
         try:
-            # Get relevant history information
-            if "last search" in request.lower():
-                if self.state.search_context.query:
-                    return (
-                        f"Your last search was about: {self.state.search_context.query}"
-                    )
-                return "You haven't performed any searches yet."
+            print("[DEBUG] Handling history query")
 
-            if "paper" in request.lower():
-                if self.state.memory.focused_paper:
-                    paper = self.state.memory.focused_paper
-                    return f"We were discussing: {paper.title} ({paper.year}) by {', '.join(a['name'] for a in paper.authors)}"
-                elif self.state.search_context.results:
-                    papers = self.state.search_context.results
-                    return "The most recent papers we found were: \n" + "\n".join(
-                        f"{i + 1}. {p.title}" for i, p in enumerate(papers[:3])
-                    )
-                return "We haven't looked at any papers yet."
+            if not self.state.memory or not self.state.memory.messages:
+                return {
+                    "status": AgentStatus.ERROR,
+                    "response": "No conversation history available yet.",
+                    "error_message": "No messages in history",
+                }
 
-            return "I'm not sure what history you're asking about. Could you be more specific?"
+            # Build context from recent history
+            recent_messages = (
+                self.state.memory.messages[-5:] if self.state.memory.messages else []
+            )
+
+            # Look for last search query
+            last_search = None
+            for msg in reversed(self.state.memory.messages):
+                if msg["role"] == "user" and any(
+                    term in msg["content"].lower()
+                    for term in ["find", "search", "papers about", "papers by"]
+                ):
+                    last_search = msg["content"]
+                    break
+
+            # Handle different types of history queries
+            query_lower = request.lower()
+            response = None
+
+            if "last search" in query_lower or "previous search" in query_lower:
+                if last_search:
+                    response = f"Your last search was: '{last_search}'"
+                    if self.state.search_context.results:
+                        response += f"\nI found {len(self.state.search_context.results)} papers in that search."
+                else:
+                    response = "I don't see any previous searches in our conversation."
+
+            elif "we discuss" in query_lower or "we talk" in query_lower:
+                if recent_messages:
+                    topics = []
+                    for msg in recent_messages:
+                        if (
+                            msg["role"] == "user"
+                            and "find papers" in msg["content"].lower()
+                        ):
+                            topic = (
+                                msg["content"]
+                                .lower()
+                                .replace("find papers about", "")
+                                .replace("find papers on", "")
+                                .strip()
+                            )
+                            topics.append(topic)
+                    if topics:
+                        response = f"We've discussed papers about: {', '.join(topics)}"
+                    else:
+                        response = "We haven't discussed any specific paper topics yet."
+                else:
+                    response = "We haven't had much discussion yet."
+
+            # Default response if no specific pattern matched
+            if not response:
+                response = "Let me summarize our recent conversation:\n" + "\n".join(
+                    [f"- {msg['content'][:100]}..." for msg in recent_messages[-3:]]
+                )
+
+            # Update state
+            if response:
+                self.state.add_message("system", response)
+                self.state.status = AgentStatus.SUCCESS
+                return {"status": AgentStatus.SUCCESS, "response": response}
+
+            return {
+                "status": AgentStatus.ERROR,
+                "response": "I'm not sure how to access that information from our conversation.",
+                "error_message": "Could not process history query",
+            }
 
         except Exception as e:
             print(f"[DEBUG] Error handling history query: {str(e)}")
-            return f"I encountered an error while retrieving history: {str(e)}"
+            return {
+                "status": AgentStatus.ERROR,
+                "response": f"I encountered an error while checking our conversation history: {str(e)}",
+                "error_message": str(e),
+            }
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
