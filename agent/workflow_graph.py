@@ -1019,36 +1019,120 @@ Please provide a structured response that:
 
     def _extract_paper_reference(
         self, message: str, state: AgentState
-    ) -> Optional[Dict]:
-        """Extract paper reference from message"""
-        if not state.search_context.results:
+    ) -> Optional[PaperContext]:
+        """Extract paper reference from message with enhanced pattern matching"""
+        try:
+            if not state.search_context.results:
+                return None
+
+            message_lower = message.lower()
+
+            # Check for direct number references (e.g., "paper 1", "first paper")
+            number_mapping = {
+                "first": 1,
+                "second": 2,
+                "third": 3,
+                "fourth": 4,
+                "fifth": 5,
+                "1": 1,
+                "2": 2,
+                "3": 3,
+                "4": 4,
+                "5": 5,
+                "one": 1,
+                "two": 2,
+                "three": 3,
+                "four": 4,
+                "five": 5,
+            }
+
+            # Look for number patterns
+            for word in message_lower.split():
+                if word in number_mapping:
+                    index = number_mapping[word] - 1
+                    if 0 <= index < len(state.search_context.results):
+                        return state.search_context.results[index]
+
+            # Look for "paper X" pattern
+            words = message_lower.split()
+            for i, word in enumerate(words):
+                if word == "paper" and i + 1 < len(words):
+                    next_word = words[i + 1]
+                    if next_word in number_mapping:
+                        index = number_mapping[next_word] - 1
+                        if 0 <= index < len(state.search_context.results):
+                            return state.search_context.results[index]
+
+            # Check for title references
+            if state.search_context.results:
+                for paper in state.search_context.results:
+                    if paper.title.lower() in message_lower:
+                        return paper
+
+            # Return currently focused paper if available
+            if state.memory.focused_paper:
+                return state.memory.focused_paper
+
             return None
 
-        words = message.split()
-        for i, word in enumerate(words):
-            if word.isdigit():
-                try:
-                    paper_num = int(word)
-                    if 1 <= paper_num <= len(state.search_context.results):
-                        return state.search_context.get_paper_by_index(paper_num)
-                except ValueError:
-                    continue
-            elif word in ["paper", "study", "article"] and i > 0:
-                try:
-                    prev_word = words[i - 1]
-                    if prev_word.isdigit():
-                        paper_num = int(prev_word)
-                        if 1 <= paper_num <= len(state.search_context.results):
-                            return state.search_context.get_paper_by_index(paper_num)
-                except ValueError:
-                    continue
+        except Exception as e:
+            print(f"[DEBUG] Error extracting paper reference: {str(e)}")
+            return None
 
-        # Check for title references
-        for paper in state.search_context.results:
-            if paper.title.lower() in message.lower():
-                return paper
+    async def _handle_paper_reference(self, state: AgentState) -> Dict[str, Any]:
+        """Handle requests about specific papers"""
+        try:
+            # Get latest message
+            if not state.memory.messages:
+                return {
+                    "status": AgentStatus.ERROR,
+                    "response": "No message found to process.",
+                    "error_message": "Empty message history",
+                }
 
-        return None
+            last_message = state.memory.messages[-1]["content"]
+
+            # Extract paper reference
+            paper = self._extract_paper_reference(last_message, state)
+
+            if not paper:
+                return {
+                    "status": AgentStatus.ERROR,
+                    "response": "I'm not sure which paper you're referring to. Could you specify the paper number or title?",
+                    "error_message": "No paper reference found",
+                }
+
+            # Update state with focused paper
+            state.memory.focused_paper = paper
+
+            # Generate response based on paper information
+            response = (
+                f"I found the paper you're referring to:\n\n"
+                f"Title: {paper.title}\n"
+                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
+                f"Year: {paper.year or 'N/A'}\n"
+                f"Citations: {paper.citations or 0}\n\n"
+            )
+
+            if paper.abstract:
+                response += f"Abstract: {paper.abstract[:300]}...\n\n"
+
+            response += "What would you like to know about this paper?"
+
+            # Update state
+            state.add_message("system", response)
+            state.status = AgentStatus.SUCCESS
+
+            return {"status": AgentStatus.SUCCESS, "response": response, "paper": paper}
+
+        except Exception as e:
+            error_msg = f"Error handling paper reference: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return {
+                "status": AgentStatus.ERROR,
+                "response": "I encountered an error while processing the paper reference.",
+                "error_message": str(e),
+            }
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
