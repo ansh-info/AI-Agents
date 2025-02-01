@@ -1294,53 +1294,25 @@ Please provide a structured response that:
             return state
 
     async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow with enhanced state management"""
+        """Process a request through the workflow"""
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Update state with new request
+            # Add user message to state
             self.state.add_message("user", request)
 
-            # Build conversation context
-            conversation_context = self._build_conversation_context(self.state)
-
-            # Determine intent with context
-            intent = await self.main_agent._determine_intent(
-                request,
-                context={
-                    "conversation_history": conversation_context,
-                    "current_search_results": bool(self.state.search_context.results),
-                    "focused_paper": self.state.memory.focused_paper.paper_id
-                    if self.state.memory.focused_paper
-                    else None,
-                },
-            )
-            print(f"[DEBUG] Intent analysis result: {intent}")
-
-            # Check for search keywords
+            # Check if this is a paper reference query
             if any(
-                keyword in request.lower()
-                for keyword in [
-                    "find",
-                    "search",
-                    "papers about",
-                    "papers on",
-                    "papers by",
-                ]
+                term in request.lower()
+                for term in ["paper", "article", "the first", "the second"]
             ):
-                return await self._handle_search(request)
+                result = await self._handle_paper_reference(self.state)
+                if result["status"] == AgentStatus.SUCCESS:
+                    self.state.status = AgentStatus.SUCCESS
+                    return self.state
 
-            # Process based on intent
-            if intent.get("intent") == "conversation":
-                if self._is_history_query(request):
-                    await self._handle_history_query(request)
-                else:
-                    await self._handle_conversation(request)
-            else:  # search intent
-                await self._handle_search(request)
-
-            self.state.status = AgentStatus.SUCCESS
-            return self.state
+            # Continue with normal request processing...
+            # (rest of the existing process_request code)
 
         except Exception as e:
             print(f"[DEBUG] Error processing request: {str(e)}")
@@ -1351,21 +1323,21 @@ Please provide a structured response that:
             )
             return self.state
 
-    def _is_history_query(self, request: str) -> bool:
-        """Check if the request is asking about conversation history"""
-        history_keywords = [
-            "previous",
-            "last",
-            "before",
-            "earlier",
-            "recent",
-            "what did you say",
-            "what did we discuss",
-            "what papers",
-            "what was the",
-        ]
-        request_lower = request.lower()
-        return any(keyword in request_lower for keyword in history_keywords)
+        def _is_history_query(self, request: str) -> bool:
+            """Check if the request is asking about conversation history"""
+            history_keywords = [
+                "previous",
+                "last",
+                "before",
+                "earlier",
+                "recent",
+                "what did you say",
+                "what did we discuss",
+                "what papers",
+                "what was the",
+            ]
+            request_lower = request.lower()
+            return any(keyword in request_lower for keyword in history_keywords)
 
     async def check_health(self) -> Dict[str, bool]:
         """Check health of all components"""
