@@ -219,92 +219,148 @@ class AgentState(BaseModel):
 
     def add_message(
         self, role: str, content: str, context: Optional[Dict[str, Any]] = None
-    ):
-        """Add message with state tracking"""
-        # Add message directly to memory
-        self.memory.add_message(role, content, context)
-        self._track_state_change("message_added")
-        # Ensure state fields are updated
-        self.last_update = datetime.now()
+    ) -> None:
+        """Enhanced message addition with context tracking"""
+        try:
+            # Ensure memory exists
+            if not hasattr(self, "memory"):
+                self.memory = ConversationMemory()
 
-    def update_search_results(self, papers: List[Dict[str, Any]], total_results: int):
-        """Update search results with state tracking"""
-        self.search_context.results = []
-        for paper in papers:
-            self.search_context.add_paper(paper)
-        self.search_context.total_results = total_results
-        self.status = AgentStatus.SUCCESS
-        self._track_state_change("search_updated")
+            timestamp = datetime.now()
 
-    def focus_on_paper(self, paper_id: str) -> Optional[PaperContext]:
-        """Focus conversation on specific paper with state tracking"""
-        paper = self.search_context.get_paper_by_id(paper_id)
-        if paper:
-            self.memory.set_focused_paper(paper)
-            self._track_state_change("paper_focused")
-        return paper
+            # Create message with metadata
+            message = {
+                "role": role,
+                "content": content,
+                "timestamp": timestamp,
+                "context": context or {},
+                "state_snapshot": {
+                    "current_step": self.current_step,
+                    "status": self.status.value,
+                    "has_search_results": bool(self.search_context.results),
+                    "focused_paper": self.memory.focused_paper.paper_id
+                    if self.memory.focused_paper
+                    else None,
+                },
+            }
 
-    def get_referenced_paper(self, message: str) -> Optional[PaperContext]:
-        """Enhanced paper reference extraction from message"""
-        # Check numeric references
-        words = message.lower().split()
-        for i, word in enumerate(words):
-            if word.isdigit():
-                try:
-                    paper_num = int(word)
-                    return self.search_context.get_paper_by_index(paper_num)
-                except ValueError:
-                    continue
-            elif word in ["paper", "study", "article"] and i > 0:
-                try:
-                    prev_word = words[i - 1]
-                    if prev_word.isdigit():
-                        paper_num = int(prev_word)
-                        return self.search_context.get_paper_by_index(paper_num)
-                except ValueError:
-                    continue
+            # Add message to memory
+            self.memory.messages.append(message)
 
-        # Check title references
-        for paper in self.search_context.results:
-            if paper.title.lower() in message.lower():
-                return paper
+            # Track search queries
+            if role == "user":
+                self._track_search_query(content)
 
-        return None
+            # Update state history
+            self._track_state_change(
+                "message_added", {"role": role, "timestamp": timestamp}
+            )
 
-    def _track_state_change(self, change_type: str):
-        """Track state changes"""
-        state_change = {
-            "timestamp": datetime.now(),
-            "change_type": change_type,
-            "status": self.status,
-            "current_step": self.current_step,
-            "focused_paper": (
-                self.memory.focused_paper.paper_id
-                if self.memory.focused_paper
-                else None
-            ),
-        }
-        self.state_history.append(state_change)
-        self.last_update = datetime.now()
+            # Update last interaction time
+            self.last_update = timestamp
 
-    def update_state(self, **kwargs):
-        """Update state fields safely"""
+        except Exception as e:
+            print(f"[DEBUG] Error adding message to state: {str(e)}")
+            raise
+
+    def _track_search_query(self, content: str) -> None:
+        """Track search queries for history"""
+        try:
+            content_lower = content.lower()
+            if any(
+                term in content_lower
+                for term in ["find", "search", "papers about", "papers by"]
+            ):
+                if not hasattr(self.search_context, "search_history"):
+                    self.search_context.search_history = []
+
+                self.search_context.search_history.append(
+                    {
+                        "timestamp": datetime.now(),
+                        "query": content,
+                        "results_count": len(self.search_context.results)
+                        if self.search_context.results
+                        else 0,
+                    }
+                )
+                self.search_context.last_search_time = datetime.now()
+
+        except Exception as e:
+            print(f"[DEBUG] Error tracking search query: {str(e)}")
+
+    def _track_state_change(self, change_type: str, metadata: Dict[str, Any]) -> None:
+        """Enhanced state change tracking"""
+        try:
+            if not hasattr(self, "state_history"):
+                self.state_history = []
+
+            state_change = {
+                "timestamp": datetime.now(),
+                "change_type": change_type,
+                "current_step": self.current_step,
+                "status": self.status.value,
+                "metadata": metadata,
+                "focused_paper": (
+                    self.memory.focused_paper.paper_id
+                    if self.memory.focused_paper
+                    else None
+                ),
+                "search_context": {
+                    "has_results": bool(self.search_context.results),
+                    "results_count": len(self.search_context.results)
+                    if self.search_context.results
+                    else 0,
+                    "last_search_time": self.search_context.last_search_time
+                    if hasattr(self.search_context, "last_search_time")
+                    else None,
+                },
+            }
+
+            self.state_history.append(state_change)
+
+        except Exception as e:
+            print(f"[DEBUG] Error tracking state change: {str(e)}")
+
+    def get_conversation_context(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get recent conversation context"""
+        if not self.memory or not self.memory.messages:
+            return []
+        return self.memory.messages[-limit:]
+
+    def get_search_history(self) -> List[Dict[str, Any]]:
+        """Get search history"""
+        if not hasattr(self.search_context, "search_history"):
+            return []
+        return self.search_context.search_history
+
+    def get_focused_paper_history(self) -> List[Dict[str, Any]]:
+        """Get history of focused papers"""
+        if not hasattr(self.memory, "paper_history"):
+            self.memory.paper_history = []
+        return self.memory.paper_history
+
+    def update_state(self, **kwargs) -> None:
+        """Update state fields with tracking"""
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
-        self.last_update = datetime.now()
-        self._track_state_change("state_updated")
 
-    def clear(self):
-        """Enhanced state reset with history preservation"""
-        # Store final state before clearing
+        self.last_update = datetime.now()
+        self._track_state_change("state_updated", kwargs)
+
+    def clear_state(self, preserve_history: bool = True) -> None:
+        """Clear state with option to preserve history"""
         final_state = {
             "timestamp": datetime.now(),
             "change_type": "state_cleared",
             "final_status": self.status,
-            "conversation_length": len(self.memory.messages),
+            "conversation_length": len(self.memory.messages)
+            if self.memory.messages
+            else 0,
         }
-        self.state_history.append(final_state)
+
+        # Store history if requested
+        old_history = self.state_history if preserve_history else []
 
         # Reset state
         self.status = AgentStatus.IDLE
@@ -314,6 +370,12 @@ class AgentState(BaseModel):
         self.current_step = "initial"
         self.next_steps = []
         self.last_update = datetime.now()
+
+        # Restore history if preserved
+        if preserve_history:
+            self.state_history = old_history + [final_state]
+        else:
+            self.state_history = [final_state]
 
     class Config:
         arbitrary_types_allowed = True
