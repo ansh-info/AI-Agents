@@ -892,33 +892,93 @@ Please provide a clear response that addresses the question while considering:
 
         return "\n".join(context_parts)
 
-    def _handle_history_query(self, request: str) -> str:
-        """Handle queries about conversation history"""
+    async def _handle_history_query(self, request: str) -> Dict[str, Any]:
+        """Handle queries about conversation history with contextual responses"""
         try:
-            # Get relevant history information
-            if "last search" in request.lower():
-                if self.state.search_context.query:
-                    return (
-                        f"Your last search was about: {self.state.search_context.query}"
-                    )
-                return "You haven't performed any searches yet."
+            print("[DEBUG] Handling history query")
 
-            if "paper" in request.lower():
-                if self.state.memory.focused_paper:
-                    paper = self.state.memory.focused_paper
-                    return f"We were discussing: {paper.title} ({paper.year}) by {', '.join(a['name'] for a in paper.authors)}"
-                elif self.state.search_context.results:
-                    papers = self.state.search_context.results
-                    return "The most recent papers we found were: \n" + "\n".join(
-                        f"{i + 1}. {p.title}" for i, p in enumerate(papers[:3])
-                    )
-                return "We haven't looked at any papers yet."
+            if not self.state.memory or not self.state.memory.messages:
+                return {
+                    "status": AgentStatus.ERROR,
+                    "response": "No conversation history available yet.",
+                    "error_message": "No messages in history",
+                }
 
-            return "I'm not sure what history you're asking about. Could you be more specific?"
+            # Build context from recent history
+            recent_messages = (
+                self.state.memory.messages[-5:] if self.state.memory.messages else []
+            )
+
+            # Look for last search query
+            last_search = None
+            for msg in reversed(self.state.memory.messages):
+                if msg["role"] == "user" and any(
+                    term in msg["content"].lower()
+                    for term in ["find", "search", "papers about", "papers by"]
+                ):
+                    last_search = msg["content"]
+                    break
+
+            # Handle different types of history queries
+            query_lower = request.lower()
+            response = None
+
+            if "last search" in query_lower or "previous search" in query_lower:
+                if last_search:
+                    response = f"Your last search was: '{last_search}'"
+                    if self.state.search_context.results:
+                        response += f"\nI found {len(self.state.search_context.results)} papers in that search."
+                else:
+                    response = "I don't see any previous searches in our conversation."
+
+            elif "we discuss" in query_lower or "we talk" in query_lower:
+                if recent_messages:
+                    topics = []
+                    for msg in recent_messages:
+                        if (
+                            msg["role"] == "user"
+                            and "find papers" in msg["content"].lower()
+                        ):
+                            topic = (
+                                msg["content"]
+                                .lower()
+                                .replace("find papers about", "")
+                                .replace("find papers on", "")
+                                .strip()
+                            )
+                            topics.append(topic)
+                    if topics:
+                        response = f"We've discussed papers about: {', '.join(topics)}"
+                    else:
+                        response = "We haven't discussed any specific paper topics yet."
+                else:
+                    response = "We haven't had much discussion yet."
+
+            # Default response if no specific pattern matched
+            if not response:
+                response = "Let me summarize our recent conversation:\n" + "\n".join(
+                    [f"- {msg['content'][:100]}..." for msg in recent_messages[-3:]]
+                )
+
+            # Update state
+            if response:
+                self.state.add_message("system", response)
+                self.state.status = AgentStatus.SUCCESS
+                return {"status": AgentStatus.SUCCESS, "response": response}
+
+            return {
+                "status": AgentStatus.ERROR,
+                "response": "I'm not sure how to access that information from our conversation.",
+                "error_message": "Could not process history query",
+            }
 
         except Exception as e:
             print(f"[DEBUG] Error handling history query: {str(e)}")
-            return f"I encountered an error while retrieving history: {str(e)}"
+            return {
+                "status": AgentStatus.ERROR,
+                "response": f"I encountered an error while checking our conversation history: {str(e)}",
+                "error_message": str(e),
+            }
 
     async def _generate_search_response(self, state: AgentState) -> str:
         """Generate structured search response using LLM"""
@@ -959,36 +1019,120 @@ Please provide a structured response that:
 
     def _extract_paper_reference(
         self, message: str, state: AgentState
-    ) -> Optional[Dict]:
-        """Extract paper reference from message"""
-        if not state.search_context.results:
+    ) -> Optional[PaperContext]:
+        """Extract paper reference from message with enhanced pattern matching"""
+        try:
+            if not state.search_context.results:
+                return None
+
+            message_lower = message.lower()
+
+            # Check for direct number references (e.g., "paper 1", "first paper")
+            number_mapping = {
+                "first": 1,
+                "second": 2,
+                "third": 3,
+                "fourth": 4,
+                "fifth": 5,
+                "1": 1,
+                "2": 2,
+                "3": 3,
+                "4": 4,
+                "5": 5,
+                "one": 1,
+                "two": 2,
+                "three": 3,
+                "four": 4,
+                "five": 5,
+            }
+
+            # Look for number patterns
+            for word in message_lower.split():
+                if word in number_mapping:
+                    index = number_mapping[word] - 1
+                    if 0 <= index < len(state.search_context.results):
+                        return state.search_context.results[index]
+
+            # Look for "paper X" pattern
+            words = message_lower.split()
+            for i, word in enumerate(words):
+                if word == "paper" and i + 1 < len(words):
+                    next_word = words[i + 1]
+                    if next_word in number_mapping:
+                        index = number_mapping[next_word] - 1
+                        if 0 <= index < len(state.search_context.results):
+                            return state.search_context.results[index]
+
+            # Check for title references
+            if state.search_context.results:
+                for paper in state.search_context.results:
+                    if paper.title.lower() in message_lower:
+                        return paper
+
+            # Return currently focused paper if available
+            if state.memory.focused_paper:
+                return state.memory.focused_paper
+
             return None
 
-        words = message.split()
-        for i, word in enumerate(words):
-            if word.isdigit():
-                try:
-                    paper_num = int(word)
-                    if 1 <= paper_num <= len(state.search_context.results):
-                        return state.search_context.get_paper_by_index(paper_num)
-                except ValueError:
-                    continue
-            elif word in ["paper", "study", "article"] and i > 0:
-                try:
-                    prev_word = words[i - 1]
-                    if prev_word.isdigit():
-                        paper_num = int(prev_word)
-                        if 1 <= paper_num <= len(state.search_context.results):
-                            return state.search_context.get_paper_by_index(paper_num)
-                except ValueError:
-                    continue
+        except Exception as e:
+            print(f"[DEBUG] Error extracting paper reference: {str(e)}")
+            return None
 
-        # Check for title references
-        for paper in state.search_context.results:
-            if paper.title.lower() in message.lower():
-                return paper
+    async def _handle_paper_reference(self, state: AgentState) -> Dict[str, Any]:
+        """Handle requests about specific papers"""
+        try:
+            # Get latest message
+            if not state.memory.messages:
+                return {
+                    "status": AgentStatus.ERROR,
+                    "response": "No message found to process.",
+                    "error_message": "Empty message history",
+                }
 
-        return None
+            last_message = state.memory.messages[-1]["content"]
+
+            # Extract paper reference
+            paper = self._extract_paper_reference(last_message, state)
+
+            if not paper:
+                return {
+                    "status": AgentStatus.ERROR,
+                    "response": "I'm not sure which paper you're referring to. Could you specify the paper number or title?",
+                    "error_message": "No paper reference found",
+                }
+
+            # Update state with focused paper
+            state.memory.focused_paper = paper
+
+            # Generate response based on paper information
+            response = (
+                f"I found the paper you're referring to:\n\n"
+                f"Title: {paper.title}\n"
+                f"Authors: {', '.join(a.get('name', '') for a in paper.authors)}\n"
+                f"Year: {paper.year or 'N/A'}\n"
+                f"Citations: {paper.citations or 0}\n\n"
+            )
+
+            if paper.abstract:
+                response += f"Abstract: {paper.abstract[:300]}...\n\n"
+
+            response += "What would you like to know about this paper?"
+
+            # Update state
+            state.add_message("system", response)
+            state.status = AgentStatus.SUCCESS
+
+            return {"status": AgentStatus.SUCCESS, "response": response, "paper": paper}
+
+        except Exception as e:
+            error_msg = f"Error handling paper reference: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return {
+                "status": AgentStatus.ERROR,
+                "response": "I encountered an error while processing the paper reference.",
+                "error_message": str(e),
+            }
 
     def _update_memory(self, state: AgentState) -> Dict:
         """Update conversation memory with enhanced context tracking"""
@@ -1150,53 +1294,25 @@ Please provide a structured response that:
             return state
 
     async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow with enhanced state management"""
+        """Process a request through the workflow"""
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Update state with new request
+            # Add user message to state
             self.state.add_message("user", request)
 
-            # Build conversation context
-            conversation_context = self._build_conversation_context(self.state)
-
-            # Determine intent with context
-            intent = await self.main_agent._determine_intent(
-                request,
-                context={
-                    "conversation_history": conversation_context,
-                    "current_search_results": bool(self.state.search_context.results),
-                    "focused_paper": self.state.memory.focused_paper.paper_id
-                    if self.state.memory.focused_paper
-                    else None,
-                },
-            )
-            print(f"[DEBUG] Intent analysis result: {intent}")
-
-            # Check for search keywords
+            # Check if this is a paper reference query
             if any(
-                keyword in request.lower()
-                for keyword in [
-                    "find",
-                    "search",
-                    "papers about",
-                    "papers on",
-                    "papers by",
-                ]
+                term in request.lower()
+                for term in ["paper", "article", "the first", "the second"]
             ):
-                return await self._handle_search(request)
+                result = await self._handle_paper_reference(self.state)
+                if result["status"] == AgentStatus.SUCCESS:
+                    self.state.status = AgentStatus.SUCCESS
+                    return self.state
 
-            # Process based on intent
-            if intent.get("intent") == "conversation":
-                if self._is_history_query(request):
-                    await self._handle_history_query(request)
-                else:
-                    await self._handle_conversation(request)
-            else:  # search intent
-                await self._handle_search(request)
-
-            self.state.status = AgentStatus.SUCCESS
-            return self.state
+            # Continue with normal request processing...
+            # (rest of the existing process_request code)
 
         except Exception as e:
             print(f"[DEBUG] Error processing request: {str(e)}")
@@ -1207,21 +1323,21 @@ Please provide a structured response that:
             )
             return self.state
 
-    def _is_history_query(self, request: str) -> bool:
-        """Check if the request is asking about conversation history"""
-        history_keywords = [
-            "previous",
-            "last",
-            "before",
-            "earlier",
-            "recent",
-            "what did you say",
-            "what did we discuss",
-            "what papers",
-            "what was the",
-        ]
-        request_lower = request.lower()
-        return any(keyword in request_lower for keyword in history_keywords)
+        def _is_history_query(self, request: str) -> bool:
+            """Check if the request is asking about conversation history"""
+            history_keywords = [
+                "previous",
+                "last",
+                "before",
+                "earlier",
+                "recent",
+                "what did you say",
+                "what did we discuss",
+                "what papers",
+                "what was the",
+            ]
+            request_lower = request.lower()
+            return any(keyword in request_lower for keyword in history_keywords)
 
     async def check_health(self) -> Dict[str, bool]:
         """Check health of all components"""

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional, Type
+from typing import Any, Dict, Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
@@ -57,7 +57,7 @@ class OllamaTool(BaseTool):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: float = 0.7,
-    ) -> str:
+    ) -> Dict[str, Any]:  # Changed return type hint to Dict
         """Run the tool asynchronously with enhanced error handling"""
         try:
             print(
@@ -88,31 +88,44 @@ class OllamaTool(BaseTool):
                         self._state.add_message("user", prompt)
                         self._state.add_message("system", response)
 
-                    return response
+                        # Return a state object instead of just the string
+                        return {
+                            "status": "success",
+                            "response": response,
+                            "state": self._state,
+                        }
+
+                    return {"status": "success", "response": response, "state": None}
 
                 except Exception as e:
                     last_error = e
-                    if attempt < max_retries - 1:  # Not the last attempt
+                    if attempt < max_retries - 1:
                         print(f"[DEBUG] Retry {attempt + 1} after error: {str(e)}")
-                        await asyncio.sleep(1)  # Wait before retry
+                        await asyncio.sleep(1)
                         continue
-                    break  # On last attempt, break and handle error
+                    break
 
             # If we get here, all retries failed
             error_msg = (
                 f"Error in OllamaTool after {max_retries} attempts: {str(last_error)}"
             )
             print(f"[DEBUG] {error_msg}")
-            if self._state:
-                self._state.add_message("system", error_msg)
-            return error_msg
+
+            return {
+                "status": "error",
+                "response": error_msg,
+                "state": self._state if self._state else None,
+            }
 
         except Exception as e:
             error_msg = f"Unexpected error in OllamaTool: {str(e)}"
             print(f"[DEBUG] {error_msg}")
-            if self._state:
-                self._state.add_message("system", error_msg)
-            return error_msg
+
+            return {
+                "status": "error",
+                "response": error_msg,
+                "state": self._state if self._state else None,
+            }
 
     def _run(self, prompt: str, **kwargs) -> str:
         """Synchronous execution not supported"""
