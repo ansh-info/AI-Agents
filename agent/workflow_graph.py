@@ -1348,6 +1348,14 @@ Please provide a structured response that:
 
             # Process based on enhanced intent classification
             try:
+                # Check for history query first
+                if self._is_history_query(request):
+                    history_result = await self._handle_history_query(request)
+                    if history_result["status"] == AgentStatus.SUCCESS:
+                        self.state.add_message("system", history_result["response"])
+                        return self.state
+
+                # Then handle other intents
                 if intent["intent"] == "search" or any(
                     keyword in request.lower()
                     for keyword in [
@@ -1359,10 +1367,6 @@ Please provide a structured response that:
                     ]
                 ):
                     await self._handle_search(request)
-                elif intent["intent"] == "history" or self._is_history_query(request):
-                    history_result = await self._handle_history_query(request)
-                    if history_result and "response" in history_result:
-                        self.state.add_message("system", history_result["response"])
                 elif intent["intent"] == "paper_analysis":
                     # Paper reference was already handled above
                     pass
