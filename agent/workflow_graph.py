@@ -893,7 +893,7 @@ Please provide a clear response that addresses the question while considering:
         return "\n".join(context_parts)
 
     async def _handle_history_query(self, request: str) -> Dict[str, Any]:
-        """Handle queries about conversation history with contextual responses"""
+        """Handle queries about conversation history"""
         try:
             print("[DEBUG] Handling history query")
             if not self.state.memory or not self.state.memory.messages:
@@ -908,24 +908,18 @@ Please provide a clear response that addresses the question while considering:
                 self.state.memory.messages[-5:] if self.state.memory.messages else []
             )
 
-            # Look for last search query
+            # Look for last search query and its response
             last_search = None
             search_results = None
-            for msg in reversed(self.state.memory.messages):
+            for i, msg in enumerate(self.state.memory.messages):  # Added index 'i' here
                 if msg["role"] == "user" and any(
                     term in msg["content"].lower()
                     for term in ["find", "search", "papers about", "papers by"]
                 ):
                     last_search = msg["content"]
-                    # Store the corresponding system response
-                    search_results = next(
-                        (
-                            m["content"]
-                            for m in self.state.memory.messages[i + 1 :]
-                            if m["role"] == "system"
-                        ),
-                        None,
-                    )
+                    # Get the corresponding response
+                    if i + 1 < len(self.state.memory.messages):
+                        search_results = self.state.memory.messages[i + 1]["content"]
                     break
 
             # Handle different types of history queries
@@ -1306,20 +1300,18 @@ Please provide a structured response that:
             return state
 
     async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow with enhanced state management"""
         try:
             print(f"[DEBUG] Processing request: {request}")
 
             # Update state with new request
             self.state.add_message("user", request)
 
-            # Check if this is a paper reference query first
-            if any(
-                term in request.lower()
-                for term in ["paper", "article", "the first", "the second"]
-            ):
-                paper_result = await self._handle_paper_reference(self.state)
-                if paper_result["status"] == AgentStatus.SUCCESS:
+            # Check if this is a history query first
+            if self._is_history_query(request):
+                print("[DEBUG] Detected history query")
+                history_result = await self._handle_history_query(request)
+                if history_result and "response" in history_result:
+                    self.state.add_message("system", history_result["response"])
                     self.state.status = AgentStatus.SUCCESS
                     return self.state
 
