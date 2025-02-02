@@ -328,10 +328,15 @@ Return only one word (search/analyze/conversation)."""
             # Build context if needed
             context = self._build_conversation_context(self.state)
 
+            # Combine context with request
+            full_prompt = (
+                f"{context}\n\nUser request: {request}" if context else request
+            )
+
+            # Call _arun without context parameter
             response = await self.ollama_tool._arun(
-                prompt=request,
+                prompt=full_prompt,
                 system_prompt="You are a helpful academic research assistant.",
-                context=context,
             )
 
             # Handle response based on type
