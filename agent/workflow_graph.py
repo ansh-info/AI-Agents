@@ -896,7 +896,6 @@ Please provide a clear response that addresses the question while considering:
         """Handle queries about conversation history with contextual responses"""
         try:
             print("[DEBUG] Handling history query")
-
             if not self.state.memory or not self.state.memory.messages:
                 return {
                     "status": AgentStatus.ERROR,
@@ -911,12 +910,22 @@ Please provide a clear response that addresses the question while considering:
 
             # Look for last search query
             last_search = None
+            search_results = None
             for msg in reversed(self.state.memory.messages):
                 if msg["role"] == "user" and any(
                     term in msg["content"].lower()
                     for term in ["find", "search", "papers about", "papers by"]
                 ):
                     last_search = msg["content"]
+                    # Store the corresponding system response
+                    search_results = next(
+                        (
+                            m["content"]
+                            for m in self.state.memory.messages[i + 1 :]
+                            if m["role"] == "system"
+                        ),
+                        None,
+                    )
                     break
 
             # Handle different types of history queries
@@ -926,11 +935,14 @@ Please provide a clear response that addresses the question while considering:
             if "last search" in query_lower or "previous search" in query_lower:
                 if last_search:
                     response = f"Your last search was: '{last_search}'"
-                    if self.state.search_context.results:
+                    if search_results:
+                        response += f"\n\nHere were the results:\n{search_results}"
+                    elif self.state.search_context.results:
                         response += f"\nI found {len(self.state.search_context.results)} papers in that search."
                 else:
                     response = "I don't see any previous searches in our conversation."
 
+            # Rest of your existing code remains the same
             elif "we discuss" in query_lower or "we talk" in query_lower:
                 if recent_messages:
                     topics = []
@@ -960,7 +972,7 @@ Please provide a clear response that addresses the question while considering:
                     [f"- {msg['content'][:100]}..." for msg in recent_messages[-3:]]
                 )
 
-            # Update state
+            # Update state with the response
             if response:
                 self.state.add_message("system", response)
                 self.state.status = AgentStatus.SUCCESS
