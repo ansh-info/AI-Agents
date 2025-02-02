@@ -320,30 +320,42 @@ Return only one word (search/analyze/conversation)."""
             state.error_message = str(e)
             return {"state": state, "next": "update_state"}
 
-    async def _handle_conversation(self, state: AgentState) -> Dict:
+    async def _handle_conversation(self, request: str) -> Dict[str, Any]:
         """Handle general conversation"""
         try:
             print("[DEBUG] Processing conversation")
-            message = state.memory.messages[-1]["content"]
 
-            # Generate response
-            result = await self.ollama_tool._arun(message)
+            # Build context if needed
+            context = self._build_conversation_context(self.state)
 
-            # Update state
-            state.add_message("system", result)
-            state.update_state(
-                current_step="conversation_completed",
-                next_steps=["update_state"],
-                status=AgentStatus.SUCCESS,
+            response = await self.ollama_tool._arun(
+                prompt=request,
+                system_prompt="You are a helpful academic research assistant.",
+                context=context,
             )
 
-            return {"state": state, "next": "update_state"}
+            # Handle response based on type
+            if isinstance(response, dict):
+                if response["status"] == "success":
+                    return {
+                        "status": AgentStatus.SUCCESS,
+                        "response": response["response"],
+                    }
+                else:
+                    return {
+                        "status": AgentStatus.ERROR,
+                        "response": f"Error in conversation: {response.get('error', 'Unknown error')}",
+                    }
+
+            # If response is string (backward compatibility)
+            return {"status": AgentStatus.SUCCESS, "response": response}
 
         except Exception as e:
             print(f"[DEBUG] Error in conversation: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            return {"state": state, "next": "update_state"}
+            return {
+                "status": AgentStatus.ERROR,
+                "response": f"Error in conversation: {str(e)}",
+            }
 
     async def _update_state(self, state: AgentState) -> Dict:
         """Update final state after processing"""
