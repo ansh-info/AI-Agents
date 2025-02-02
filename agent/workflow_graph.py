@@ -1318,7 +1318,25 @@ Please provide a structured response that:
             # Update state with new request
             self.state.add_message("user", request)
 
-            # Check if this is a history query first
+            # Check if this is a paper reference query first
+            if any(
+                term in request.lower()
+                for term in ["paper", "article", "the first", "the second"]
+            ):
+                print("[DEBUG] Detected paper reference query")
+                try:
+                    paper_result = await self._handle_paper_reference(self.state)
+                    if (
+                        paper_result
+                        and paper_result.get("status") == AgentStatus.SUCCESS
+                    ):
+                        self.state.add_message("system", paper_result["response"])
+                        self.state.status = AgentStatus.SUCCESS
+                        return self.state
+                except Exception as e:
+                    print(f"[DEBUG] Error handling paper reference: {str(e)}")
+
+            # Check for history query
             if self._is_history_query(request):
                 print("[DEBUG] Detected history query")
                 history_result = await self._handle_history_query(request)
@@ -1350,16 +1368,8 @@ Please provide a structured response that:
             )
             print(f"[DEBUG] Intent analysis result: {intent}")
 
-            # Process based on enhanced intent classification
             try:
-                # Check for history query first
-                if self._is_history_query(request):
-                    history_result = await self._handle_history_query(request)
-                    if history_result["status"] == AgentStatus.SUCCESS:
-                        self.state.add_message("system", history_result["response"])
-                        return self.state
-
-                # Then handle other intents
+                # Handle different intents
                 if intent["intent"] == "search" or any(
                     keyword in request.lower()
                     for keyword in [
