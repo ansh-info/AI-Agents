@@ -320,30 +320,47 @@ Return only one word (search/analyze/conversation)."""
             state.error_message = str(e)
             return {"state": state, "next": "update_state"}
 
-    async def _handle_conversation(self, state: AgentState) -> Dict:
+    async def _handle_conversation(self, request: str) -> Dict[str, Any]:
         """Handle general conversation"""
         try:
             print("[DEBUG] Processing conversation")
-            message = state.memory.messages[-1]["content"]
 
-            # Generate response
-            result = await self.ollama_tool._arun(message)
+            # Build context if needed
+            context = self._build_conversation_context(self.state)
 
-            # Update state
-            state.add_message("system", result)
-            state.update_state(
-                current_step="conversation_completed",
-                next_steps=["update_state"],
-                status=AgentStatus.SUCCESS,
+            # Combine context with request
+            full_prompt = (
+                f"{context}\n\nUser request: {request}" if context else request
             )
 
-            return {"state": state, "next": "update_state"}
+            # Call _arun without context parameter
+            response = await self.ollama_tool._arun(
+                prompt=full_prompt,
+                system_prompt="You are a helpful academic research assistant.",
+            )
+
+            # Handle response based on type
+            if isinstance(response, dict):
+                if response["status"] == "success":
+                    return {
+                        "status": AgentStatus.SUCCESS,
+                        "response": response["response"],
+                    }
+                else:
+                    return {
+                        "status": AgentStatus.ERROR,
+                        "response": f"Error in conversation: {response.get('error', 'Unknown error')}",
+                    }
+
+            # If response is string (backward compatibility)
+            return {"status": AgentStatus.SUCCESS, "response": response}
 
         except Exception as e:
             print(f"[DEBUG] Error in conversation: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            return {"state": state, "next": "update_state"}
+            return {
+                "status": AgentStatus.ERROR,
+                "response": f"Error in conversation: {str(e)}",
+            }
 
     async def _update_state(self, state: AgentState) -> Dict:
         """Update final state after processing"""
@@ -893,10 +910,9 @@ Please provide a clear response that addresses the question while considering:
         return "\n".join(context_parts)
 
     async def _handle_history_query(self, request: str) -> Dict[str, Any]:
-        """Handle queries about conversation history with contextual responses"""
+        """Handle queries about conversation history"""
         try:
             print("[DEBUG] Handling history query")
-
             if not self.state.memory or not self.state.memory.messages:
                 return {
                     "status": AgentStatus.ERROR,
@@ -909,14 +925,18 @@ Please provide a clear response that addresses the question while considering:
                 self.state.memory.messages[-5:] if self.state.memory.messages else []
             )
 
-            # Look for last search query
+            # Look for last search query and its response
             last_search = None
-            for msg in reversed(self.state.memory.messages):
+            search_results = None
+            for i, msg in enumerate(self.state.memory.messages):  # Added index 'i' here
                 if msg["role"] == "user" and any(
                     term in msg["content"].lower()
                     for term in ["find", "search", "papers about", "papers by"]
                 ):
                     last_search = msg["content"]
+                    # Get the corresponding response
+                    if i + 1 < len(self.state.memory.messages):
+                        search_results = self.state.memory.messages[i + 1]["content"]
                     break
 
             # Handle different types of history queries
@@ -926,11 +946,14 @@ Please provide a clear response that addresses the question while considering:
             if "last search" in query_lower or "previous search" in query_lower:
                 if last_search:
                     response = f"Your last search was: '{last_search}'"
-                    if self.state.search_context.results:
+                    if search_results:
+                        response += f"\n\nHere were the results:\n{search_results}"
+                    elif self.state.search_context.results:
                         response += f"\nI found {len(self.state.search_context.results)} papers in that search."
                 else:
                     response = "I don't see any previous searches in our conversation."
 
+            # Rest of your existing code remains the same
             elif "we discuss" in query_lower or "we talk" in query_lower:
                 if recent_messages:
                     topics = []
@@ -960,7 +983,7 @@ Please provide a clear response that addresses the question while considering:
                     [f"- {msg['content'][:100]}..." for msg in recent_messages[-3:]]
                 )
 
-            # Update state
+            # Update state with the response
             if response:
                 self.state.add_message("system", response)
                 self.state.status = AgentStatus.SUCCESS
@@ -1294,25 +1317,109 @@ Please provide a structured response that:
             return state
 
     async def process_request(self, request: str) -> AgentState:
-        """Process a request through the workflow"""
         try:
             print(f"[DEBUG] Processing request: {request}")
 
-            # Add user message to state
+            # Update state with new request
             self.state.add_message("user", request)
 
-            # Check if this is a paper reference query
+            # Check if this is a paper reference query first
             if any(
                 term in request.lower()
                 for term in ["paper", "article", "the first", "the second"]
             ):
-                result = await self._handle_paper_reference(self.state)
-                if result["status"] == AgentStatus.SUCCESS:
+                print("[DEBUG] Detected paper reference query")
+                try:
+                    paper_result = await self._handle_paper_reference(self.state)
+                    if (
+                        paper_result
+                        and paper_result.get("status") == AgentStatus.SUCCESS
+                    ):
+                        self.state.add_message("system", paper_result["response"])
+                        self.state.status = AgentStatus.SUCCESS
+                        return self.state
+                except Exception as e:
+                    print(f"[DEBUG] Error handling paper reference: {str(e)}")
+
+            # Check for history query
+            if self._is_history_query(request):
+                print("[DEBUG] Detected history query")
+                history_result = await self._handle_history_query(request)
+                if history_result and "response" in history_result:
+                    self.state.add_message("system", history_result["response"])
                     self.state.status = AgentStatus.SUCCESS
                     return self.state
 
-            # Continue with normal request processing...
-            # (rest of the existing process_request code)
+            # Build conversation context
+            conversation_context = self._build_conversation_context(self.state)
+
+            # Determine intent with enhanced context
+            intent = await self.main_agent._determine_intent(
+                request,
+                context={
+                    "conversation_history": conversation_context,
+                    "current_search_results": bool(self.state.search_context.results),
+                    "focused_paper": (
+                        self.state.memory.focused_paper.paper_id
+                        if self.state.memory.focused_paper
+                        else None
+                    ),
+                    "last_search": (
+                        self.state.search_context.last_search_time
+                        if hasattr(self.state.search_context, "last_search_time")
+                        else None
+                    ),
+                },
+            )
+            print(f"[DEBUG] Intent analysis result: {intent}")
+
+            try:
+                # Handle different intents
+                if intent["intent"] == "search" or any(
+                    keyword in request.lower()
+                    for keyword in [
+                        "find",
+                        "search",
+                        "papers about",
+                        "papers on",
+                        "papers by",
+                    ]
+                ):
+                    await self._handle_search(request)
+                elif intent["intent"] == "paper_analysis":
+                    # Paper reference was already handled above
+                    pass
+                else:  # conversation intent
+                    conversation_result = await self._handle_conversation(request)
+                    if conversation_result and "response" in conversation_result:
+                        self.state.add_message(
+                            "system", conversation_result["response"]
+                        )
+
+                # Update state status
+                self.state.status = AgentStatus.SUCCESS
+
+                # Track state change
+                self.state._track_state_change(
+                    "request_processed",
+                    {
+                        "intent": intent["intent"],
+                        "confidence": intent.get("confidence", "low"),
+                        "timestamp": datetime.now(),
+                    },
+                )
+
+                return self.state
+
+            except Exception as e:
+                print(f"[DEBUG] Error in request handling: {str(e)}")
+                self.state.status = AgentStatus.ERROR
+                self.state.error_message = f"Error handling request: {str(e)}"
+                self.state.add_message(
+                    "system",
+                    f"I apologize, but I encountered an error while processing your request: {str(e)}",
+                )
+                return self.state
 
         except Exception as e:
             print(f"[DEBUG] Error processing request: {str(e)}")
@@ -1321,6 +1428,18 @@ Please provide a structured response that:
             self.state.add_message(
                 "system", f"I apologize, but I encountered an error: {str(e)}"
             )
+
+            # Track error in state history
+            if hasattr(self.state, "_track_state_change"):
+                self.state._track_state_change(
+                    "error",
+                    {
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "timestamp": datetime.now(),
+                    },
+                )
+
             return self.state
 
         def _is_history_query(self, request: str) -> bool:
