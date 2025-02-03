@@ -1,9 +1,9 @@
-from typing import Annotated, Any, Dict, Optional, Type
+from typing import Optional, Type
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
 
-from state.agent_state import AgentState, PaperContext
+from state.agent_state import AgentState
 
 
 class GetPaperContextSchema(BaseModel):
@@ -39,23 +39,20 @@ class StateTool(BaseTool):
             if paper:
                 return f"""
 Title: {paper.title}
-Authors: {', '.join(a.get('name', '') for a in paper.authors)}
-Year: {paper.year or 'N/A'}
+Authors: {", ".join(a.get("name", "") for a in paper.authors)}
+Year: {paper.year or "N/A"}
 Citations: {paper.citations or 0}
-Abstract: {paper.abstract or 'No abstract available'}
+Abstract: {paper.abstract or "No abstract available"}
 """
             return "Paper not found in current context"
         except Exception as e:
             return f"Error retrieving paper context: {str(e)}"
 
-    @tool
     def update_paper_reference(
         self,
-        paper_id: Annotated[str, "ID of the paper to update"],
-        reference_count: Annotated[Optional[int], "New reference count"] = None,
-        discussed_aspects: Annotated[
-            Optional[list], "List of discussed aspects"
-        ] = None,
+        paper_id: str,
+        reference_count: Optional[int] = None,
+        discussed_aspects: Optional[list] = None,
     ) -> str:
         """Update paper reference information in state."""
         try:
@@ -70,7 +67,6 @@ Abstract: {paper.abstract or 'No abstract available'}
         except Exception as e:
             return f"Error updating paper reference: {str(e)}"
 
-    @tool
     def get_conversation_context(self) -> str:
         """Get current conversation context."""
         try:
@@ -84,7 +80,6 @@ Abstract: {paper.abstract or 'No abstract available'}
         except Exception as e:
             return f"Error retrieving conversation context: {str(e)}"
 
-    @tool
     def get_state_summary(self) -> str:
         """Get a summary of current state."""
         try:
@@ -92,7 +87,7 @@ Abstract: {paper.abstract or 'No abstract available'}
 State Summary:
 Status: {self.state.status}
 Current Step: {self.state.current_step}
-Error (if any): {self.state.error_message or 'None'}
+Error (if any): {self.state.error_message or "None"}
 Search Results: {len(self.state.search_context.results) if self.state.search_context else 0}
 Messages: {len(self.state.memory.messages) if self.state.memory else 0}
 """
