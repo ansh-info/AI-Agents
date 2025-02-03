@@ -267,20 +267,46 @@ class DashboardApp:
 
     def format_paper_results(self, papers: List[PaperContext]) -> str:
         """Format paper results with proper markdown"""
-        formatted_results = []
+        # First, let's add some custom CSS to control sizes
+        css = """
+        <style>
+        .paper-title {
+            font-size: 1.4em;
+            font-weight: bold;
+            margin-bottom: 1em;
+        }
+        .paper-metadata {
+            font-size: 1em;
+            margin-bottom: 0.8em;
+        }
+        .paper-abstract {
+            font-size: 1.1em;
+            margin: 1em 0;
+        }
+        .paper-link {
+            font-size: 0.9em;
+            color: #4169E1;
+        }
+        </style>
+        """
+
+        formatted_results = [css]
 
         for i, paper in enumerate(papers, 1):
             paper_text = [
-                f"**{i}. {paper.title}**",
-                "",  # Empty line for spacing
+                f'<div class="paper-title">{i}. {paper.title}</div>',
+                '<div class="paper-metadata">',
                 f"**Authors:** {', '.join(author.get('name', '') for author in paper.authors)}",
                 f"**Year:** {paper.year or 'N/A'} | **Citations:** {paper.citations or 0}",
-                "",  # Empty line for spacing
+                "</div>",
+                '<div class="paper-abstract">',
                 "**Abstract:**",
                 paper.abstract if paper.abstract else "No abstract available",
-                "",  # Empty line for spacing
-                f"[View Paper]({paper.url})" if paper.url else "",
-                "---",  # Horizontal line
+                "</div>",
+                f'<div class="paper-link">[View Paper]({paper.url})</div>'
+                if paper.url
+                else "",
+                "<hr>",
             ]
             formatted_results.append("\n".join(paper_text))
 
