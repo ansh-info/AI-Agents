@@ -270,21 +270,19 @@ class DashboardApp:
         formatted_results = []
 
         for i, paper in enumerate(papers, 1):
-            # Format each paper with markdown
-            paper_text = f"""
-### {i}. {paper.title}
-
-    **Authors:** {", ".join(author.get("name", "") for author in paper.authors)}  
-    **Year:** {paper.year or "N/A"} | **Citations:** {paper.citations or 0}
-
-    **Abstract:**  
-    {paper.abstract if paper.abstract else "No abstract available."}
-
-    **URL:** [{paper.url}]({paper.url})
-
-    ---
-    """
-            formatted_results.append(paper_text)
+            paper_text = [
+                f"**{i}. {paper.title}**",
+                "",  # Empty line for spacing
+                f"**Authors:** {', '.join(author.get('name', '') for author in paper.authors)}",
+                f"**Year:** {paper.year or 'N/A'} | **Citations:** {paper.citations or 0}",
+                "",  # Empty line for spacing
+                "**Abstract:**",
+                paper.abstract if paper.abstract else "No abstract available",
+                "",  # Empty line for spacing
+                f"[View Paper]({paper.url})" if paper.url else "",
+                "---",  # Horizontal line
+            ]
+            formatted_results.append("\n".join(paper_text))
 
         return "\n".join(formatted_results)
 
@@ -292,16 +290,13 @@ class DashboardApp:
         """Render chat interface"""
         st.title("Talk2Papers - Academic Research Assistant")
 
-        # Display chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                # Use markdown for assistant messages to preserve formatting
                 if message["role"] == "assistant":
-                    st.markdown(message["content"])
+                    st.markdown(message["content"], unsafe_allow_html=True)
                 else:
                     st.write(message["content"])
 
-        # Chat input
         if prompt := st.chat_input("Ask me anything about research papers..."):
             with st.chat_message("user"):
                 st.write(prompt)
@@ -309,7 +304,6 @@ class DashboardApp:
             with st.spinner("Processing..."):
                 asyncio.run(self.process_input(prompt))
 
-            # Use rerun to update the UI
             st.rerun()
 
     async def process_search(
