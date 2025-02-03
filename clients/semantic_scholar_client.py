@@ -1,7 +1,7 @@
 import asyncio
-import datetime
 import os
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -231,68 +231,6 @@ class SemanticScholarClient:
         except Exception as e:
             print(f"Search error: {str(e)}")
             raise
-
-    async def get_paper_details(self, paper_id: str) -> PaperMetadata:
-        """Get detailed information about a specific paper"""
-        fields = [
-            "paperId",
-            "title",
-            "abstract",
-            "year",
-            "authors",
-            "venue",
-            "citationCount",
-            "referenceCount",
-            "fieldsOfStudy",
-            "topics",
-            "isOpenAccess",
-            "tldr",
-            "url",
-        ]
-
-        try:
-            await self._wait_for_rate_limit()
-
-            async with aiohttp.ClientSession(headers=self.headers) as session:
-                async with session.get(
-                    f"{self.base_url}/paper/{paper_id}",
-                    params={"fields": ",".join(fields)},
-                    timeout=self.timeout,
-                ) as response:
-                    if response.status != 200:
-                        raise Exception(f"API error ({response.status})")
-
-                    paper_data = await response.json()
-
-                    # Convert authors
-                    authors = [
-                        Author(
-                            authorId=author.get("authorId"),
-                            name=author.get("name", ""),
-                            url=author.get("url"),
-                            affiliations=author.get("affiliations", []),
-                        )
-                        for author in paper_data.get("authors", [])
-                    ]
-
-                    return PaperMetadata(
-                        paperId=paper_data.get("paperId", ""),
-                        title=paper_data.get("title", ""),
-                        abstract=paper_data.get("abstract"),
-                        year=paper_data.get("year"),
-                        authors=authors,
-                        venue=paper_data.get("venue"),
-                        citations=paper_data.get("citationCount"),
-                        references=paper_data.get("referenceCount"),
-                        url=paper_data.get("url"),
-                        topics=paper_data.get("topics", []),
-                        fieldsOfStudy=paper_data.get("fieldsOfStudy", []),
-                        isOpenAccess=paper_data.get("isOpenAccess"),
-                        tldr=paper_data.get("tldr", {}).get("text"),
-                    )
-
-        except Exception as e:
-            raise Exception(f"Error getting paper details: {str(e)}")
 
     def _process_search_results(self, data: dict) -> SearchResults:
         """Process search results with error handling"""
