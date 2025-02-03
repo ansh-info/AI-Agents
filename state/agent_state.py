@@ -181,29 +181,6 @@ class ConversationMemory(BaseModel):
             self.referenced_papers.get(paper.paper_id, 0) + 1
         )
 
-    def get_context_window(self, size: int = 5) -> List[Dict[str, Any]]:
-        """Get recent conversation context with enhanced metadata"""
-        recent_messages = self.messages[-size:] if self.messages else []
-        context_window = []
-
-        for msg in recent_messages:
-            context_msg = msg.copy()
-            if msg.get("context"):
-                context_msg["context"]["focused_paper_id"] = (
-                    self.focused_paper.paper_id if self.focused_paper else None
-                )
-            context_window.append(context_msg)
-
-        return context_window
-
-    def get_paper_discussion_history(self, paper_id: str) -> List[Dict[str, Any]]:
-        """Get history of discussions about a specific paper"""
-        paper_messages = []
-        for msg in self.messages:
-            if msg.get("context") and msg["context"].get("paper_id") == paper_id:
-                paper_messages.append(msg)
-        return paper_messages
-
 
 class AgentState(BaseModel):
     """Enhanced main state management class"""
@@ -238,9 +215,11 @@ class AgentState(BaseModel):
                     "current_step": self.current_step,
                     "status": self.status.value,
                     "has_search_results": bool(self.search_context.results),
-                    "focused_paper": self.memory.focused_paper.paper_id
-                    if self.memory.focused_paper
-                    else None,
+                    "focused_paper": (
+                        self.memory.focused_paper.paper_id
+                        if self.memory.focused_paper
+                        else None
+                    ),
                 },
             }
 
@@ -278,9 +257,11 @@ class AgentState(BaseModel):
                     {
                         "timestamp": datetime.now(),
                         "query": content,
-                        "results_count": len(self.search_context.results)
-                        if self.search_context.results
-                        else 0,
+                        "results_count": (
+                            len(self.search_context.results)
+                            if self.search_context.results
+                            else 0
+                        ),
                     }
                 )
                 self.search_context.last_search_time = datetime.now()
@@ -307,12 +288,16 @@ class AgentState(BaseModel):
                 ),
                 "search_context": {
                     "has_results": bool(self.search_context.results),
-                    "results_count": len(self.search_context.results)
-                    if self.search_context.results
-                    else 0,
-                    "last_search_time": self.search_context.last_search_time
-                    if hasattr(self.search_context, "last_search_time")
-                    else None,
+                    "results_count": (
+                        len(self.search_context.results)
+                        if self.search_context.results
+                        else 0
+                    ),
+                    "last_search_time": (
+                        self.search_context.last_search_time
+                        if hasattr(self.search_context, "last_search_time")
+                        else None
+                    ),
                 },
             }
 
@@ -354,9 +339,9 @@ class AgentState(BaseModel):
             "timestamp": datetime.now(),
             "change_type": "state_cleared",
             "final_status": self.status,
-            "conversation_length": len(self.memory.messages)
-            if self.memory.messages
-            else 0,
+            "conversation_length": (
+                len(self.memory.messages) if self.memory.messages else 0
+            ),
         }
 
         # Store history if requested
@@ -376,6 +361,3 @@ class AgentState(BaseModel):
             self.state_history = old_history + [final_state]
         else:
             self.state_history = [final_state]
-
-    class Config:
-        arbitrary_types_allowed = True

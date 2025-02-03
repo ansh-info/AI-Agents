@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional
 
 from langchain.tools import BaseTool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import START, MessagesState, StateGraph
+from langchain_core.tools import BaseTool
+from langgraph.graph import (
+    START,
+    MessagesState,
+    StateGraph,
+)
 
 from clients.ollama_client import OllamaClient
 from state.agent_state import AgentState, AgentStatus
@@ -196,72 +201,101 @@ class MainAgent:
     async def _determine_intent(
         self, message: str, context: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """Determine the intent of a message using enhanced classification"""
+        """Determine the intent of a message using LLM with enhanced classification"""
         try:
             print(f"[DEBUG] MainAgent: Analyzing intent for message: {message}")
 
-            # Quick pattern matching for common cases
-            intent_data = self._check_direct_patterns(message)
-            if intent_data["confidence"] == "high":
-                print(f"[DEBUG] Direct pattern match found: {intent_data['intent']}")
-                return intent_data
-
             # Build context string
-            context_str = self._build_intent_context(context)
+            context_str = ""
+            if context:
+                if context.get("conversation_history"):
+                    context_str += (
+                        f"\nConversation history:\n{context['conversation_history']}"
+                    )
+                if context.get("current_search_results"):
+                    context_str += "\nHas current search results: Yes"
+                if context.get("focused_paper"):
+                    context_str += (
+                        f"\nCurrently focused on paper: {context['focused_paper']}"
+                    )
 
-            # Generate LLM-based intent analysis
-            intent_prompt = f"""Analyze this user message in the context of an academic research assistant conversation.
+            intent_prompt = f"""You are an academic research assistant that helps users find and understand papers.
 
-MESSAGE: "{message}"
-{context_str}
+    MESSAGE: "{message}"
+    {context_str}
 
-TASK: Classify the user's intent into one of these categories:
-1. search - User wants to find papers (e.g., "find papers about X", "search for papers", "papers on X")
-2. paper_analysis - User wants information about specific papers (e.g., "tell me about paper 1", "explain the first paper")
-3. history - User asks about previous interactions (e.g., "what did we discuss", "previous search")
-4. conversation - General questions or chat
+    TASK: Determine if this is a paper search request or a conversation.
 
-Return a JSON object with these EXACT fields:
-{
-    "intent": "search|paper_analysis|history|conversation",
-    "confidence": "high|medium|low",
-    "explanation": "brief reason for classification",
-    "requires_context": boolean,
-    "search_params": {} # Only for search intent
-}"""
+    CHOOSE "search" if ANY of these are true:
+    1. Message starts with "find", "search", "get papers", "look for"
+    2. Message includes "papers about", "papers on", "papers by"
+    3. Message has search criteria like "since 2020", "at least 10 citations"
 
+    CHOOSE "conversation" if:
+    1. Message asks for explanations ("explain", "what is", "tell me about")
+    2. Message asks about previous context ("what did we", "previous", "last")
+    3. Message asks about general concepts without mentioning papers
+
+    Examples:
+    SEARCH: "find papers about LLMs" (has "find papers about")
+    SEARCH: "papers on deep learning" (has "papers on")
+    CONVERSATION: "explain what transformers are" (asks for explanation)
+    CONVERSATION: "what was my last search" (asks about previous context)
+
+    Return intent as a JSON object with these exact fields:
+    - intent: either "search" or "conversation"
+    - explanation: brief reason for the intent choice
+    - requires_context: boolean (true/false)
+    - search_params: empty object if conversation intent
+
+    Example response:
+    {{
+        "intent": "search",
+        "explanation": "User explicitly asks to find papers",
+        "requires_context": false,
+        "search_params": {{}}
+    }}"""
+
+            # Generate response
             response = await self._ollama_client.generate(
                 prompt=intent_prompt,
-                system_prompt="You are an intent classifier. Return only valid JSON.",
+                system_prompt="Return only valid JSON with exact format shown.",
                 temperature=0.1,
             )
 
+            # Clean and parse response
             try:
-                # Clean and parse response
                 clean_response = self._clean_json_response(response)
-                intent_data = json.loads(clean_response)
-                
+                parsed_response = json.loads(clean_response)
+                print(f"[DEBUG] Successfully parsed intent response: {parsed_response}")
+
                 # Add search parameters for search intents
-                if intent_data["intent"] == "search":
-                    intent_data["search_params"] = self._extract_search_params(message)
+                if parsed_response["intent"] == "search":
+                    parsed_response["search_params"] = self._extract_search_params(
+                        message
+                    )
 
-                print(f"[DEBUG] LLM intent analysis: {intent_data}")
-                return intent_data
+                return parsed_response
 
-            except json.JSONDecodeError:
-                print(f"[DEBUG] Failed to parse LLM response, using pattern matching")
-                return self._check_direct_patterns(message)
+            except json.JSONDecodeError as e:
+                print(
+                    f"[DEBUG] JSON parse error: {str(e)}\nResponse was: {clean_response}"
+                )
+                return {
+                    "intent": "conversation",
+                    "explanation": "Failed to parse intent, defaulting to conversation",
+                    "requires_context": False,
+                    "search_params": {},
+                }
 
         except Exception as e:
-            print(f"[DEBUG] Error in intent determination: {str(e)}")
+            print(f"[DEBUG] Error determining intent: {str(e)}")
             return {
                 "intent": "conversation",
-                "confidence": "low",
                 "explanation": f"Error in intent analysis: {str(e)}",
                 "requires_context": False,
-                "search_params": {}
+                "search_params": {},
             }
-
 
     def _check_direct_patterns(self, message: str) -> Dict[str, Any]:
         """Check for direct intent patterns in the message"""
@@ -269,8 +303,14 @@ Return a JSON object with these EXACT fields:
 
         # Search patterns
         search_patterns = [
-            "find", "search", "look for", "papers about", "papers on",
-            "papers by", "articles about", "research on"
+            "find",
+            "search",
+            "look for",
+            "papers about",
+            "papers on",
+            "papers by",
+            "articles about",
+            "research on",
         ]
         if any(pattern in message_lower for pattern in search_patterns):
             return {
@@ -278,13 +318,18 @@ Return a JSON object with these EXACT fields:
                 "confidence": "high",
                 "explanation": "Direct search request detected",
                 "requires_context": False,
-                "search_params": self._extract_search_params(message)
+                "search_params": self._extract_search_params(message),
             }
 
         # Paper analysis patterns
         paper_patterns = [
-            "paper 1", "paper 2", "first paper", "second paper",
-            "tell me about paper", "explain paper", "analyze paper"
+            "paper 1",
+            "paper 2",
+            "first paper",
+            "second paper",
+            "tell me about paper",
+            "explain paper",
+            "analyze paper",
         ]
         if any(pattern in message_lower for pattern in paper_patterns):
             return {
@@ -292,13 +337,18 @@ Return a JSON object with these EXACT fields:
                 "confidence": "high",
                 "explanation": "Direct paper reference detected",
                 "requires_context": True,
-                "search_params": {}
+                "search_params": {},
             }
 
         # History patterns
         history_patterns = [
-            "previous", "last search", "what did we", "earlier",
-            "before", "history", "discussed"
+            "previous",
+            "last search",
+            "what did we",
+            "earlier",
+            "before",
+            "history",
+            "discussed",
         ]
         if any(pattern in message_lower for pattern in history_patterns):
             return {
@@ -306,7 +356,7 @@ Return a JSON object with these EXACT fields:
                 "confidence": "high",
                 "explanation": "History query detected",
                 "requires_context": True,
-                "search_params": {}
+                "search_params": {},
             }
 
         # Default to conversation with low confidence
@@ -315,9 +365,8 @@ Return a JSON object with these EXACT fields:
             "confidence": "low",
             "explanation": "No clear intent patterns detected",
             "requires_context": False,
-            "search_params": {}
+            "search_params": {},
         }
-   
 
     def _build_intent_context(self, context: Optional[Dict]) -> str:
         """Build context string for intent analysis"""
@@ -325,7 +374,7 @@ Return a JSON object with these EXACT fields:
             return ""
 
         context_parts = []
-        
+
         if context.get("conversation_history"):
             context_parts.append("Recent conversation:")
             for msg in context["conversation_history"][-3:]:
@@ -335,7 +384,9 @@ Return a JSON object with these EXACT fields:
             context_parts.append("\nHas active search results: Yes")
 
         if context.get("focused_paper"):
-            context_parts.append(f"\nCurrently focused on paper: {context['focused_paper']}")
+            context_parts.append(
+                f"\nCurrently focused on paper: {context['focused_paper']}"
+            )
 
         return "\n".join(context_parts)
 

@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, Type
 
 from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from clients.semantic_scholar_client import SearchFilters, SemanticScholarClient
@@ -59,27 +60,32 @@ class SemanticScholarTool(BaseTool):
         min_citations: Optional[int] = None,
         max_results: int = 10,
     ) -> Dict[str, Any]:
-        """Execute the search asynchronously"""
+        """Execute search with proper parameter handling"""
         try:
             print(f"[DEBUG] SemanticScholarTool: Processing query: {query}")
 
-            # Clean the query - extract just the text if it's an AIMessage or similar
-            if hasattr(query, "content"):
-                query = query.content
-            # Remove any markdown formatting or extra whitespace
+            # Clean query
             clean_query = " ".join(query.split())[:1000]  # Limit query length
 
-            # Create search filters
+            # Create search filters with proper formatting
             filters = SearchFilters(
                 year_start=year_start, year_end=year_end, min_citations=min_citations
             )
 
-            # Perform search with cleaned query
+            # Get properly formatted parameters
+            params = {
+                "query": clean_query,
+                "offset": 0,
+                "limit": max_results,
+                "fields": "paperId,title,abstract,year,authors,citationCount,url",
+            }
+            params.update(filters.to_params())
+
+            print(f"[DEBUG] Making request with params: {params}")
             results = await self._client.search_papers(
                 query=clean_query, filters=filters, limit=max_results
             )
 
-            # Rest of your existing implementation...
             if self._state and results.papers:
                 for paper in results.papers:
                     self._state.search_context.add_paper(
@@ -121,6 +127,39 @@ class SemanticScholarTool(BaseTool):
         except Exception as e:
             print(f"[DEBUG] Error in search: {str(e)}")
             return {"status": "error", "error": str(e), "papers": []}
+
+    def _format_results(self, results) -> str:
+        """Format search results with enhanced structure"""
+        if not results.papers:
+            return "No papers found matching your criteria."
+
+        formatted_parts = [
+            f"Found {results.total} papers. Here are the top {len(results.papers)} most relevant:\n"
+        ]
+
+        for i, paper in enumerate(results.papers, 1):
+            paper_details = [
+                f"\n{i}. {paper.title}",
+                f"Authors: {', '.join(a.name for a in paper.authors)}",
+                f"Year: {paper.year or 'N/A'} | Citations: {paper.citations or 0}",
+            ]
+
+            if paper.abstract:
+                paper_details.append(
+                    f"Abstract: {paper.abstract[:300]}..."
+                    if len(paper.abstract) > 300
+                    else f"Abstract: {paper.abstract}"
+                )
+
+            paper_details.append(f"URL: {paper.url or 'Not available'}\n")
+            formatted_parts.extend(paper_details)
+
+        return "\n".join(formatted_parts)
+
+    def set_state(self, state: AgentState):
+        """Set or update the current state"""
+        self._state = state
+        print("[DEBUG] Updated SemanticScholarTool state")
 
     async def check_health(self) -> bool:
         """Check if the tool is functioning properly"""

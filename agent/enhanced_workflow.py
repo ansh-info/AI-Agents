@@ -11,10 +11,7 @@ from clients.semantic_scholar_client import (
     SearchFilters,
     SemanticScholarClient,
 )
-from state.agent_state import (
-    AgentState,
-    AgentStatus,
-)
+from state.agent_state import AgentState, AgentStatus
 from tools.ollama_tool import OllamaTool
 from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
@@ -63,50 +60,16 @@ class CommandParser:
 class ConversationAgent:
     """Handles LLM-based conversations"""
 
-    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
-        """Initialize with both old and new components for gradual transition"""
+    def __init__(self, ollama_client: OllamaClient):
+        """Initialize conversation agent"""
         try:
-            print("[DEBUG] Initializing EnhancedWorkflowManager")
-
-            # Initialize clients
-            print("[DEBUG] Initializing clients...")
-            self.ollama_client = OllamaClient(model_name=model_name)
-            self.s2_client = SemanticScholarClient()
-            print("[DEBUG] Clients initialized successfully")
-
-            # Initialize tools and agents
-            print("[DEBUG] Initializing tools and agents...")
-            # Initialize state first
-            self.current_state = AgentState()
-
-            self.semantic_scholar_tool = SemanticScholarTool(state=self.current_state)
-            self.paper_analyzer_tool = PaperAnalyzerTool(
-                model_name=model_name, state=self.current_state
-            )
-            self.ollama_tool = OllamaTool(
-                model_name=model_name, state=self.current_state
-            )
-
-            self.conversation_agent = ConversationAgent(
-                ollama_client=self.ollama_client
-            )
-            self.search_agent = SearchAgent(s2_client=self.s2_client)
-            print("[DEBUG] Tools and agents initialized successfully")
-
-            # Initialize workflow manager
-            print("[DEBUG] Initializing workflow manager...")
-            self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
-            print("[DEBUG] Workflow manager initialized successfully")
-
-            # Initialize state
-            print("[DEBUG] Initializing state...")
-            self.current_state = AgentState()
-            print("[DEBUG] State initialized successfully")
-
-            print("[DEBUG] EnhancedWorkflowManager initialization complete")
-
+            print("[DEBUG] Initializing ConversationAgent")
+            if not ollama_client:
+                raise ValueError("OllamaClient cannot be None")
+            self.client = ollama_client
+            print("[DEBUG] ConversationAgent initialized successfully")
         except Exception as e:
-            print(f"[DEBUG] Error in EnhancedWorkflowManager initialization: {str(e)}")
+            print(f"[DEBUG] Error initializing ConversationAgent: {str(e)}")
             raise
 
     async def generate_response(
@@ -262,6 +225,47 @@ class EnhancedWorkflowManager:
             self.workflow_graph = WorkflowGraph(model_name=model_name)
 
             print("[DEBUG] EnhancedWorkflowManager initialized successfully")
+
+        except Exception as e:
+            print(f"[DEBUG] Error in EnhancedWorkflowManager initialization: {str(e)}")
+            raise
+
+            # Initialize clients
+            print("[DEBUG] Initializing clients...")
+            self.ollama_client = OllamaClient(model_name=model_name)
+            self.s2_client = SemanticScholarClient()
+            print("[DEBUG] Clients initialized successfully")
+
+            # Initialize tools and agents
+            print("[DEBUG] Initializing tools and agents...")
+            # Initialize state first
+            self.current_state = AgentState()
+
+            self.semantic_scholar_tool = SemanticScholarTool(state=self.current_state)
+            self.paper_analyzer_tool = PaperAnalyzerTool(
+                model_name=model_name, state=self.current_state
+            )
+            self.ollama_tool = OllamaTool(
+                model_name=model_name, state=self.current_state
+            )
+
+            self.conversation_agent = ConversationAgent(
+                ollama_client=self.ollama_client
+            )
+            self.search_agent = SearchAgent(s2_client=self.s2_client)
+            print("[DEBUG] Tools and agents initialized successfully")
+
+            # Initialize workflow manager
+            print("[DEBUG] Initializing workflow manager...")
+            self.workflow_manager = ResearchWorkflowManager(model_name=model_name)
+            print("[DEBUG] Workflow manager initialized successfully")
+
+            # Initialize state
+            print("[DEBUG] Initializing state...")
+            self.current_state = AgentState()
+            print("[DEBUG] State initialized successfully")
+
+            print("[DEBUG] EnhancedWorkflowManager initialization complete")
 
         except Exception as e:
             print(f"[DEBUG] Error in EnhancedWorkflowManager initialization: {str(e)}")
@@ -633,13 +637,15 @@ What would you like me to help you with?"""
         """Build current context for tools and agents"""
         return {
             "current_step": self.state.current_step,
-            "conversation_history": self.state.memory.messages[-5:]
-            if self.state.memory.messages
-            else [],
-            "current_papers": self.state.search_context.results
-            if self.state.search_context
-            else [],
-            "focused_paper": self.state.memory.focused_paper.paper_id
-            if self.state.memory.focused_paper
-            else None,
+            "conversation_history": (
+                self.state.memory.messages[-5:] if self.state.memory.messages else []
+            ),
+            "current_papers": (
+                self.state.search_context.results if self.state.search_context else []
+            ),
+            "focused_paper": (
+                self.state.memory.focused_paper.paper_id
+                if self.state.memory.focused_paper
+                else None
+            ),
         }

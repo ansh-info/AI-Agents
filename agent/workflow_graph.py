@@ -1,4 +1,3 @@
-import json
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -10,8 +9,6 @@ from agent.main_agent import MainAgent
 from clients.ollama_client import OllamaClient
 from clients.semantic_scholar_client import SemanticScholarClient
 from state.agent_state import AgentState, AgentStatus, PaperContext
-from state.conversation_memory import ConversationMemory
-from state.search_context import SearchContext
 from tools.ollama_tool import OllamaTool
 from tools.paper_analyzer_tool import PaperAnalyzerTool
 from tools.semantic_scholar_tool import SemanticScholarTool
@@ -156,9 +153,11 @@ class WorkflowGraph:
             message_content = (
                 last_message.content
                 if isinstance(last_message, HumanMessage)
-                else last_message["content"]
-                if isinstance(last_message, dict)
-                else str(last_message)
+                else (
+                    last_message["content"]
+                    if isinstance(last_message, dict)
+                    else str(last_message)
+                )
             )
 
             result = await self.research_team.search_papers(message_content)
@@ -390,242 +389,131 @@ Return only one word (search/analyze/conversation)."""
             state.error_message = str(e)
             return {"state": state, "next": END}
 
-    def _analyze_input(self, state: AgentState) -> Dict:
-        """Analyze input message and extract context"""
+    async def process_request(self, request: str) -> AgentState:
         try:
-            # Get the latest message
-            if not state.memory.messages:
-                return {"state": state, "next": END}
+            print(f"[DEBUG] Processing request: {request}")
 
-            latest_message = state.memory.messages[-1]
-            message_content = latest_message["content"].lower()
+            # Update state with new request
+            self.state.add_message("user", request)
 
-            # Extract paper references if any
-            paper_reference = self._extract_paper_reference(message_content, state)
-            if paper_reference:
-                state.memory.current_context = "paper_reference"
-                if isinstance(paper_reference, dict):
-                    state.memory.focused_paper = paper_reference
-
-            # Update state with analysis
-            state.current_step = "analyzed"
-            return {"state": state, "next": "route"}
-
-        except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Error in input analysis: {str(e)}"
-            return {"state": state, "next": END}
-
-    def get_state(self) -> AgentState:
-        """Get current state"""
-        return self.current_state
-
-    def reset_state(self):
-        """Reset state to initial values"""
-        self.current_state = AgentState()
-
-    async def check_clients_health(self) -> Dict[str, bool]:
-        """Check if all clients are healthy and responding"""
-        try:
-            # Check Ollama
-            ollama_health = await self.ollama_client.check_model_availability()
-
-            # Check Semantic Scholar
-            s2_health = await self.s2_client.check_api_status()
-
-            return {
-                "ollama_status": ollama_health,
-                "semantic_scholar_status": s2_health,
-                "all_healthy": ollama_health and s2_health,
-            }
-        except Exception:
-            return {
-                "ollama_status": False,
-                "semantic_scholar_status": False,
-                "all_healthy": False,
-            }
-
-    async def reload_clients(self) -> bool:
-        """Attempt to reload clients if they're not responding"""
-        try:
-            # Reinitialize clients
-            self.ollama_client = OllamaClient()
-            self.s2_client = SemanticScholarClient()
-
-            # Check health
-            health = await self.check_clients_health()
-            return health["all_healthy"]
-        except Exception:
-            return False
-
-    def get_conversation_context(self, state: AgentState) -> Dict[str, Any]:
-        """Get current conversation context"""
-        try:
-            context = {
-                "current_step": state.current_step,
-                "has_search_results": bool(state.search_context.results),
-                "focused_paper": (
-                    state.memory.focused_paper.paper_id
-                    if state.memory.focused_paper
-                    else None
-                ),
-                "recent_messages": (
-                    state.memory.messages[-5:] if state.memory.messages else []
-                ),
-                "status": state.status.value,
-                "search_context": {
-                    "query": state.search_context.query,
-                    "total_results": state.search_context.total_results,
-                    "current_page": state.search_context.current_page,
-                },
-            }
-            return context
-        except Exception as e:
-            return {
-                "error": f"Error getting conversation context: {str(e)}",
-                "current_step": state.current_step,
-                "status": state.status.value,
-            }
-
-    def _route_message(self, state: AgentState) -> Dict:
-        """Enhanced message routing with context awareness"""
-        try:
-            message = state.memory.messages[-1]["content"].lower()
-            next_node = "process_conversation"
-
-            # Check if we're in a paper context
-            if state.memory.focused_paper:
-                next_node = "process_paper_question"
-
-            # Check for search intent
-            elif any(
-                term in message
-                for term in [
-                    "search",
-                    "find",
-                    "look for",
-                    "papers about",
-                    "papers on",
-                    "fetch",
-                ]
+            # Check if this is a paper reference query first
+            if any(
+                term in request.lower()
+                for term in ["paper", "article", "the first", "the second"]
             ):
-                next_node = "process_search"
+                print("[DEBUG] Detected paper reference query")
+                try:
+                    paper_result = await self._handle_paper_reference(self.state)
+                    if (
+                        paper_result
+                        and paper_result.get("status") == AgentStatus.SUCCESS
+                    ):
+                        self.state.add_message("system", paper_result["response"])
+                        self.state.status = AgentStatus.SUCCESS
+                        return self.state
+                except Exception as e:
+                    print(f"[DEBUG] Error handling paper reference: {str(e)}")
 
-            # Update state with required fields
-            state.current_step = "routed"
-            state.last_update = datetime.now()
-            state.next_steps = [next_node]
-            if not hasattr(state, "state_history"):
-                state.state_history = []
-            state.state_history.append(
-                {"timestamp": datetime.now(), "step": "routing", "next_node": next_node}
+            # Check for history query
+            if self._is_history_query(request):
+                print("[DEBUG] Detected history query")
+                history_result = await self._handle_history_query(request)
+                if history_result and "response" in history_result:
+                    self.state.add_message("system", history_result["response"])
+                    self.state.status = AgentStatus.SUCCESS
+                    return self.state
+
+            # Build conversation context
+            conversation_context = self._build_conversation_context(self.state)
+
+            # Determine intent with enhanced context
+            intent = await self.main_agent._determine_intent(
+                request,
+                context={
+                    "conversation_history": conversation_context,
+                    "current_search_results": bool(self.state.search_context.results),
+                    "focused_paper": (
+                        self.state.memory.focused_paper.paper_id
+                        if self.state.memory.focused_paper
+                        else None
+                    ),
+                    "last_search": (
+                        self.state.search_context.last_search_time
+                        if hasattr(self.state.search_context, "last_search_time")
+                        else None
+                    ),
+                },
             )
+            print(f"[DEBUG] Intent analysis result: {intent}")
 
-            return {"state": state, "next": next_node}
+            try:
+                # Handle different intents
+                if intent["intent"] == "search" or any(
+                    keyword in request.lower()
+                    for keyword in [
+                        "find",
+                        "search",
+                        "papers about",
+                        "papers on",
+                        "papers by",
+                    ]
+                ):
+                    await self._handle_search(request)
+                elif intent["intent"] == "paper_analysis":
+                    # Paper reference was already handled above
+                    pass
+                else:  # conversation intent
+                    conversation_result = await self._handle_conversation(request)
+                    if conversation_result and "response" in conversation_result:
+                        self.state.add_message(
+                            "system", conversation_result["response"]
+                        )
 
-        except Exception as e:
-            state.status = AgentStatus.ERROR
-            state.error_message = f"Error in message routing: {str(e)}"
-            state.current_step = "error"
-            state.last_update = datetime.now()
-            state.next_steps = ["update_memory"]
-            if not hasattr(state, "state_history"):
-                state.state_history = []
-            state.state_history.append(
-                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
-            )
-            return {"state": state, "next": "update_memory"}
+                # Update state status
+                self.state.status = AgentStatus.SUCCESS
 
-    def _process_search(self, state: AgentState) -> Dict:
-        """Process search operation with proper state updates"""
-        try:
-            # Initialize state for search
-            state.update_state(
-                status=AgentStatus.PROCESSING,
-                current_step="search_started",
-                next_steps=["update_memory"],
-                last_update=datetime.now(),
-            )
-
-            # Ensure state_history exists and is updated
-            if not hasattr(state, "state_history"):
-                state.state_history = []
-
-            state.state_history.append(
-                {
-                    "timestamp": datetime.now(),
-                    "step": "search_started",
-                    "query": state.search_context.query if state.search_context else "",
-                }
-            )
-
-            # Ensure all required fields are set
-            if not state.error_message:
-                state.error_message = None
-            if not state.memory:
-                state.memory = ConversationMemory()
-            if not state.search_context:
-                state.search_context = SearchContext()
-
-            return {"state": state, "next": "update_memory"}
-        except Exception as e:
-            print(f"[DEBUG] Error in search processing: {str(e)}")
-            state.update_state(
-                status=AgentStatus.ERROR,
-                error_message=str(e),
-                current_step="error",
-                next_steps=["update_memory"],
-                last_update=datetime.now(),
-            )
-            if not hasattr(state, "state_history"):
-                state.state_history = []
-            state.state_history.append(
-                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
-            )
-            return {"state": state, "next": "update_memory"}
-
-    async def _generate_summary(self, query: str, papers: List[Dict]) -> str:
-        """Generate summary of search results"""
-        try:
-            # Create a safe context for the LLM
-            papers_info = []
-            for paper in papers[:10]:  # Limit to first 10 papers
-                papers_info.append(
+                # Track state change
+                self.state._track_state_change(
+                    "request_processed",
                     {
-                        "title": paper.get("title", ""),
-                        "year": paper.get("year", "N/A"),
-                        "citations": paper.get("citations", 0),
-                        "abstract_preview": (
-                            paper.get("abstract", "")[:200]
-                            if paper.get("abstract")
-                            else "No abstract available"
-                        ),
-                    }
+                        "intent": intent["intent"],
+                        "confidence": intent.get("confidence", "low"),
+                        "timestamp": datetime.now(),
+                    },
                 )
 
-            summary_prompt = f"""Based on these papers about "{query}", please provide a brief summary of:
-    1. Main research themes found
-    2. Key methodologies mentioned
-    3. Notable findings or contributions
-    4. Any visible trends across the papers
+                return self.state
 
-    Papers: {json.dumps(papers_info, indent=2)}"""
-
-            # Generate summary
-            response = await self.conversation_agent.generate_response(
-                prompt=summary_prompt,
-                system_prompt="You are a helpful academic research assistant. Focus on summarizing the specific papers provided.",
-                max_tokens=300,
-            )
-
-            if response["status"] == "success":
-                return response["response"]
-            else:
-                return "Unable to generate summary - error in response generation"
+            except Exception as e:
+                print(f"[DEBUG] Error in request handling: {str(e)}")
+                self.state.status = AgentStatus.ERROR
+                self.state.error_message = f"Error handling request: {str(e)}"
+                self.state.add_message(
+                    "system",
+                    f"I apologize, but I encountered an error while processing your request: {str(e)}",
+                )
+                return self.state
 
         except Exception as e:
-            print(f"[DEBUG] Summary generation error: {str(e)}")
-            return "Unable to generate summary at this time."
+            print(f"[DEBUG] Error processing request: {str(e)}")
+            self.state.status = AgentStatus.ERROR
+            self.state.error_message = str(e)
+            self.state.add_message(
+                "system", f"I apologize, but I encountered an error: {str(e)}"
+            )
+
+            # Track error in state history
+            if hasattr(self.state, "_track_state_change"):
+                self.state._track_state_change(
+                    "error",
+                    {
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "timestamp": datetime.now(),
+                    },
+                )
+
+            return self.state
 
     async def _handle_search(self, request: str) -> AgentState:
         """Handle search requests with proper state management"""
@@ -661,9 +549,11 @@ Return only one word (search/analyze/conversation)."""
                             paperId=paper.get("id") or paper.get("paperId"),
                             title=paper.get("title", "Untitled"),
                             authors=[
-                                {"name": a}
-                                if isinstance(a, str)
-                                else {"name": a.get("name", "Unknown")}
+                                (
+                                    {"name": a}
+                                    if isinstance(a, str)
+                                    else {"name": a.get("name", "Unknown")}
+                                )
                                 for a in paper.get("authors", [])
                             ],
                             year=paper.get("year"),
@@ -770,6 +660,357 @@ Return only one word (search/analyze/conversation)."""
                 continue
 
         return "\n".join(formatted_parts)
+
+    def _is_history_query(self, request: str) -> bool:
+        """Check if the request is asking about conversation history"""
+        history_keywords = [
+            "previous",
+            "last",
+            "before",
+            "earlier",
+            "recent",
+            "what did you say",
+            "what did we discuss",
+            "what papers",
+            "what was the",
+        ]
+        request_lower = request.lower()
+        return any(keyword in request_lower for keyword in history_keywords)
+
+    async def check_health(self) -> Dict[str, bool]:
+        """Check health of all components"""
+        try:
+            semantic_scholar_health = await self.semantic_scholar_tool.check_health()
+            paper_analyzer_health = await self.paper_analyzer_tool.check_health()
+            ollama_health = await self.ollama_tool.check_health()
+
+            return {
+                "semantic_scholar": semantic_scholar_health,
+                "paper_analyzer": paper_analyzer_health,
+                "ollama": ollama_health,
+                "graph": True,
+                "all_healthy": all(
+                    [semantic_scholar_health, paper_analyzer_health, ollama_health]
+                ),
+            }
+        except Exception as e:
+            return {
+                "semantic_scholar": False,
+                "paper_analyzer": False,
+                "ollama": False,
+                "graph": False,
+                "all_healthy": False,
+                "error": str(e),
+            }
+
+    def _analyze_input(self, state: AgentState) -> Dict:
+        """Analyze input message and extract context"""
+        try:
+            # Get the latest message
+            if not state.memory.messages:
+                return {"state": state, "next": END}
+
+            latest_message = state.memory.messages[-1]
+            message_content = latest_message["content"].lower()
+
+            # Extract paper references if any
+            paper_reference = self._extract_paper_reference(message_content, state)
+            if paper_reference:
+                state.memory.current_context = "paper_reference"
+                if isinstance(paper_reference, dict):
+                    state.memory.focused_paper = paper_reference
+
+            # Update state with analysis
+            state.update_state(current_step="analyzed", next_steps=["route"])
+            return {"state": state, "next": "route"}
+
+        except Exception as e:
+            state.update_state(
+                status=AgentStatus.ERROR,
+                error_message=f"Error in input analysis: {str(e)}",
+            )
+            return {"state": state, "next": END}
+
+    async def process_state(self, state: AgentState) -> AgentState:
+        """Process state through the graph with enhanced state management"""
+        try:
+            # Initialize required fields if not present
+            if not hasattr(state, "current_step"):
+                state.current_step = "initial"
+            if not hasattr(state, "next_steps"):
+                state.next_steps = []
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+
+            # Always update last_update when processing state
+            state.last_update = datetime.now()
+
+            # Add history entry for state processing start
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": state.current_step,
+                    "status": state.status.value,
+                }
+            )
+
+            # Process through graph
+            graph_chain = self.get_graph()
+            result = await graph_chain.ainvoke({"state": state})
+
+            # Extract final state from result
+            final_state = (
+                result["state"]
+                if isinstance(result, dict) and "state" in result
+                else result
+            )
+
+            # Ensure all required fields are updated
+            final_state.last_update = datetime.now()
+            if not final_state.current_step:
+                final_state.current_step = "completed"
+            if not hasattr(final_state, "next_steps"):
+                final_state.next_steps = []
+
+            # Add final history entry
+            if not hasattr(final_state, "state_history"):
+                final_state.state_history = []
+            final_state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": final_state.current_step,
+                    "status": final_state.status.value,
+                }
+            )
+
+            return final_state
+
+        except Exception as e:
+            print(f"[DEBUG] Error processing state: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = str(e)
+            state.current_step = "error"
+            state.last_update = datetime.now()
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "error",
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
+            return state
+
+    def get_state(self) -> AgentState:
+        """Get current state"""
+        return self.current_state
+
+    def reset_state(self):
+        """Reset state to initial values"""
+        self.current_state = AgentState()
+
+    async def check_clients_health(self) -> Dict[str, bool]:
+        """Check if all clients are healthy and responding"""
+        try:
+            # Check Ollama
+            ollama_health = await self.ollama_client.check_model_availability()
+
+            # Check Semantic Scholar
+            s2_health = await self.s2_client.check_api_status()
+
+            return {
+                "ollama_status": ollama_health,
+                "semantic_scholar_status": s2_health,
+                "all_healthy": ollama_health and s2_health,
+            }
+        except Exception:
+            return {
+                "ollama_status": False,
+                "semantic_scholar_status": False,
+                "all_healthy": False,
+            }
+
+    async def reload_clients(self) -> bool:
+        """Attempt to reload clients if they're not responding"""
+        try:
+            # Reinitialize clients
+            self.ollama_client = OllamaClient()
+            self.s2_client = SemanticScholarClient()
+
+            # Check health
+            health = await self.check_clients_health()
+            return health["all_healthy"]
+        except Exception:
+            return False
+
+    def get_conversation_context(self, state: AgentState) -> Dict[str, Any]:
+        """Get current conversation context"""
+        try:
+            context = {
+                "current_step": state.current_step,
+                "has_search_results": bool(state.search_context.results),
+                "focused_paper": (
+                    state.memory.focused_paper.paper_id
+                    if state.memory.focused_paper
+                    else None
+                ),
+                "recent_messages": (
+                    state.memory.messages[-5:] if state.memory.messages else []
+                ),
+                "status": state.status.value,
+                "search_context": {
+                    "query": state.search_context.query,
+                    "total_results": state.search_context.total_results,
+                    "current_page": state.search_context.current_page,
+                },
+            }
+            return context
+        except Exception as e:
+            return {
+                "error": f"Error getting conversation context: {str(e)}",
+                "current_step": state.current_step,
+                "status": state.status.value,
+            }
+
+    async def _process_search(self, state: AgentState) -> Dict:
+        """Process search request with direct S2 integration"""
+        try:
+            # Extract and clean search query
+            latest_message = state.memory.messages[-1]["content"]
+            query = self._clean_search_query(latest_message)
+            print(f"[DEBUG] Processing search for cleaned query: '{query}'")
+
+            # Perform search
+            results = await self.s2_client.search_papers(query=query, limit=10)
+            print(
+                f"[DEBUG] Retrieved {len(results.papers)} papers from total {results.total}"
+            )
+
+            if not results or not results.papers:
+                state.add_message("system", "No results found for your search.")
+                return {"state": state, "next": "update_memory"}
+
+            # Update state
+            state.search_context.query = query
+            state.search_context.total_results = results.total
+            state.search_context.results = []
+
+            # Format the response with markdown
+            response_parts = [
+                f"Found {results.total:,} papers related to '{query}'. Here are the most relevant papers:\n"
+            ]
+
+            # Build detailed paper information and add to state
+            for i, paper in enumerate(results.papers, 1):
+                try:
+                    # Add to state
+                    paper_data = {
+                        "paperId": paper.paperId,
+                        "title": paper.title,
+                        "abstract": paper.abstract,
+                        "year": paper.year,
+                        "authors": [
+                            {"name": a.name, "authorId": a.authorId}
+                            for a in paper.authors
+                        ],
+                        "citations": paper.citations,
+                        "url": paper.url,
+                    }
+                    state.search_context.add_paper(paper_data)
+
+                    # Format paper details with clear sections
+                    paper_info = [
+                        f"### {i}. {paper.title}",
+                        "",
+                        "**Authors:**",
+                        f"{', '.join(a.name for a in paper.authors)}",
+                        "",
+                        "**Publication Details:**",
+                        f"- Year: {paper.year or 'N/A'}",
+                        f"- Citations: {paper.citations or 0}",
+                        "",
+                    ]
+
+                    if paper.abstract:
+                        paper_info.extend(["**Abstract:**", f"{paper.abstract}", ""])
+
+                    paper_info.extend(
+                        ["**Link:**", f"[View Paper]({paper.url})", "", "---", ""]
+                    )
+
+                    response_parts.extend(paper_info)
+                    print(f"[DEBUG] Processed paper {i}: {paper.title}")
+
+                except Exception as e:
+                    print(f"[DEBUG] Error processing paper {i}: {str(e)}")
+                    continue
+
+            # Generate summary using the actual papers
+            summary_text = await self._generate_summary(query, results.papers)
+
+            # Add summary section
+            response_parts.extend(["### Summary", "", summary_text])
+
+            # Update state with complete response
+            state.add_message("system", "\n".join(response_parts))
+            state.current_step = "search_processed"
+            state.status = AgentStatus.SUCCESS
+
+        except Exception as e:
+            print(f"[DEBUG] Search processing error: {str(e)}")
+            state.status = AgentStatus.ERROR
+            state.error_message = f"Search processing error: {str(e)}"
+            state.add_message(
+                "system",
+                "I apologize, but I encountered an error while searching. Please try again.",
+            )
+
+        return {"state": state, "next": "update_memory"}
+
+    async def _generate_summary(self, query: str, papers: List[Dict]) -> str:
+        """Generate summary of search results"""
+        try:
+            # Create a safe context for the LLM
+            papers_info = []
+            for paper in papers[:10]:  # Limit to first 10 papers
+                papers_info.append(
+                    {
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year", "N/A"),
+                        "citations": paper.get("citations", 0),
+                        "abstract_preview": (
+                            paper.get("abstract", "")[:200]
+                            if paper.get("abstract")
+                            else "No abstract available"
+                        ),
+                    }
+                )
+
+            summary_prompt = f"""Based on these papers about "{query}", please provide a brief summary of:
+    1. Main research themes found
+    2. Key methodologies mentioned
+    3. Notable findings or contributions
+    4. Any visible trends across the papers
+
+    Papers: {json.dumps(papers_info, indent=2)}"""
+
+            # Generate summary
+            response = await self.conversation_agent.generate_response(
+                prompt=summary_prompt,
+                system_prompt="You are a helpful academic research assistant. Focus on summarizing the specific papers provided.",
+                max_tokens=300,
+            )
+
+            if response["status"] == "success":
+                return response["response"]
+            else:
+                return "Unable to generate summary - error in response generation"
+
+        except Exception as e:
+            print(f"[DEBUG] Summary generation error: {str(e)}")
+            return "Unable to generate summary at this time."
 
     async def _process_paper_question(self, state: AgentState) -> Dict:
         """Process paper-related questions with LLM integration"""
@@ -953,7 +1194,6 @@ Please provide a clear response that addresses the question while considering:
                 else:
                     response = "I don't see any previous searches in our conversation."
 
-            # Rest of your existing code remains the same
             elif "we discuss" in query_lower or "we talk" in query_lower:
                 if recent_messages:
                     topics = []
@@ -1210,276 +1450,126 @@ Please provide a structured response that:
 
             return {"state": state, "next": END}
 
+    def _process_search(self, state: AgentState) -> Dict:
+        """Process search operation with proper state updates"""
+        try:
+            # Initialize state for search
+            state.update_state(
+                status=AgentStatus.PROCESSING,
+                current_step="search_started",
+                next_steps=["update_memory"],
+                last_update=datetime.now(),
+            )
+
+            # Ensure state_history exists and is updated
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+
+            state.state_history.append(
+                {
+                    "timestamp": datetime.now(),
+                    "step": "search_started",
+                    "query": state.search_context.query if state.search_context else "",
+                }
+            )
+
+            # Ensure all required fields are set
+            if not state.error_message:
+                state.error_message = None
+            if not state.memory:
+                state.memory = ConversationMemory()
+            if not state.search_context:
+                state.search_context = SearchContext()
+
+            return {"state": state, "next": "update_memory"}
+        except Exception as e:
+            print(f"[DEBUG] Error in search processing: {str(e)}")
+            state.update_state(
+                status=AgentStatus.ERROR,
+                error_message=str(e),
+                current_step="error",
+                next_steps=["update_memory"],
+                last_update=datetime.now(),
+            )
+            if not hasattr(state, "state_history"):
+                state.state_history = []
+            state.state_history.append(
+                {"timestamp": datetime.now(), "step": "error", "error": str(e)}
+            )
+            return {"state": state, "next": "update_memory"}
+
+    def _process_conversation(self, state: AgentState) -> Dict:
+        """Process conversation"""
+        # Update state with required fields
+        state.current_step = "conversation_processing"
+        state.next_steps = ["update_memory"]
+        state.last_update = datetime.now()
+
+        if not hasattr(state, "state_history"):
+            state.state_history = []
+
+        # Update state history
+        state.state_history.append(
+            {
+                "timestamp": datetime.now(),
+                "step": "conversation_started",
+                "message_count": (
+                    len(state.memory.messages) if state.memory.messages else 0
+                ),
+            }
+        )
+
+        return {"state": state, "next": "update_memory"}
+
     def get_graph(self):
         """Get the compiled graph"""
         return self.graph.compile()
 
     async def debug_state(self, state: AgentState) -> Dict[str, Any]:
         """Debug current state of the workflow"""
-        debug_info = {
-            "current_step": state.current_step,
-            "status": state.status.value,
-            "error_message": state.error_message,
-            "search_context": {
-                "query": state.search_context.query,
-                "total_results": state.search_context.total_results,
-                "current_page": state.search_context.current_page,
-                "num_results": (
-                    len(state.search_context.results)
-                    if state.search_context.results
-                    else 0
-                ),
-            },
-            "memory": {
-                "num_messages": (
-                    len(state.memory.messages) if state.memory.messages else 0
-                ),
-                "current_context": state.memory.current_context,
-                "focused_paper": (
-                    state.memory.focused_paper.paper_id
-                    if state.memory.focused_paper
-                    else None
-                ),
-                "conversation_topics": (
-                    list(state.memory.conversation_topics)
-                    if state.memory.conversation_topics
-                    else []
-                ),
-            },
-            "next_steps": state.next_steps,
-        }
-
-        print("[DEBUG] Current State Info:")
-        print(json.dumps(debug_info, indent=2))
-        return debug_info
-
-    async def process_state(self, state: AgentState) -> AgentState:
-        """Process state through the graph with enhanced state management"""
         try:
-            if not hasattr(state, "current_step"):
-                state.current_step = "initial"
-            if not hasattr(state, "next_steps"):
-                state.next_steps = []
-            if not hasattr(state, "state_history"):
-                state.state_history = []
-
-            # Always update last_update when processing state
-            state.last_update = datetime.now()
-
-            # Add history entry for state processing start
-            state.state_history.append(
-                {
-                    "timestamp": datetime.now(),
-                    "step": state.current_step,
-                    "status": state.status.value,
-                }
-            )
-
-            # Process through graph
-            graph_chain = self.get_graph()
-            result = await graph_chain.ainvoke({"state": state})
-
-            # Extract final state from result
-            final_state = result.get("state") if isinstance(result, dict) else result
-
-            # Ensure all required fields are updated
-            final_state.last_update = datetime.now()
-            final_state.current_step = final_state.current_step or "completed"
-            final_state.next_steps = getattr(final_state, "next_steps", [])
-            final_state.state_history = getattr(final_state, "state_history", [])
-
-            # Add final history entry
-            final_state.state_history.append(
-                {
-                    "timestamp": datetime.now(),
-                    "step": final_state.current_step,
-                    "status": final_state.status.value,
-                }
-            )
-
-            return final_state
-
-        except Exception as e:
-            print(f"[DEBUG] Error processing state: {str(e)}")
-            state.status = AgentStatus.ERROR
-            state.error_message = str(e)
-            state.current_step = "error"
-            state.last_update = datetime.now()
-            state.state_history = getattr(state, "state_history", [])
-            state.state_history.append(
-                {
-                    "timestamp": datetime.now(),
-                    "step": "error",
-                    "status": "error",
-                    "error": str(e),
-                }
-            )
-            return state
-
-    async def process_request(self, request: str) -> AgentState:
-        try:
-            print(f"[DEBUG] Processing request: {request}")
-
-            # Update state with new request
-            self.state.add_message("user", request)
-
-            # Check if this is a paper reference query first
-            if any(
-                term in request.lower()
-                for term in ["paper", "article", "the first", "the second"]
-            ):
-                print("[DEBUG] Detected paper reference query")
-                try:
-                    paper_result = await self._handle_paper_reference(self.state)
-                    if (
-                        paper_result
-                        and paper_result.get("status") == AgentStatus.SUCCESS
-                    ):
-                        self.state.add_message("system", paper_result["response"])
-                        self.state.status = AgentStatus.SUCCESS
-                        return self.state
-                except Exception as e:
-                    print(f"[DEBUG] Error handling paper reference: {str(e)}")
-
-            # Check for history query
-            if self._is_history_query(request):
-                print("[DEBUG] Detected history query")
-                history_result = await self._handle_history_query(request)
-                if history_result and "response" in history_result:
-                    self.state.add_message("system", history_result["response"])
-                    self.state.status = AgentStatus.SUCCESS
-                    return self.state
-
-            # Build conversation context
-            conversation_context = self._build_conversation_context(self.state)
-
-            # Determine intent with enhanced context
-            intent = await self.main_agent._determine_intent(
-                request,
-                context={
-                    "conversation_history": conversation_context,
-                    "current_search_results": bool(self.state.search_context.results),
-                    "focused_paper": (
-                        self.state.memory.focused_paper.paper_id
-                        if self.state.memory.focused_paper
-                        else None
-                    ),
-                    "last_search": (
-                        self.state.search_context.last_search_time
-                        if hasattr(self.state.search_context, "last_search_time")
-                        else None
+            debug_info = {
+                "current_step": state.current_step,
+                "status": state.status.value,
+                "error_message": state.error_message,
+                "search_context": {
+                    "query": state.search_context.query,
+                    "total_results": state.search_context.total_results,
+                    "current_page": state.search_context.current_page,
+                    "num_results": (
+                        len(state.search_context.results)
+                        if state.search_context.results
+                        else 0
                     ),
                 },
-            )
-            print(f"[DEBUG] Intent analysis result: {intent}")
-
-            try:
-                # Handle different intents
-                if intent["intent"] == "search" or any(
-                    keyword in request.lower()
-                    for keyword in [
-                        "find",
-                        "search",
-                        "papers about",
-                        "papers on",
-                        "papers by",
-                    ]
-                ):
-                    await self._handle_search(request)
-                elif intent["intent"] == "paper_analysis":
-                    # Paper reference was already handled above
-                    pass
-                else:  # conversation intent
-                    conversation_result = await self._handle_conversation(request)
-                    if conversation_result and "response" in conversation_result:
-                        self.state.add_message(
-                            "system", conversation_result["response"]
-                        )
-
-                # Update state status
-                self.state.status = AgentStatus.SUCCESS
-
-                # Track state change
-                self.state._track_state_change(
-                    "request_processed",
-                    {
-                        "intent": intent["intent"],
-                        "confidence": intent.get("confidence", "low"),
-                        "timestamp": datetime.now(),
-                    },
-                )
-
-                return self.state
-
-            except Exception as e:
-                print(f"[DEBUG] Error in request handling: {str(e)}")
-                self.state.status = AgentStatus.ERROR
-                self.state.error_message = f"Error handling request: {str(e)}"
-                self.state.add_message(
-                    "system",
-                    f"I apologize, but I encountered an error while processing your request: {str(e)}",
-                )
-                return self.state
-
-        except Exception as e:
-            print(f"[DEBUG] Error processing request: {str(e)}")
-            self.state.status = AgentStatus.ERROR
-            self.state.error_message = str(e)
-            self.state.add_message(
-                "system", f"I apologize, but I encountered an error: {str(e)}"
-            )
-
-            # Track error in state history
-            if hasattr(self.state, "_track_state_change"):
-                self.state._track_state_change(
-                    "error",
-                    {
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "timestamp": datetime.now(),
-                    },
-                )
-
-            return self.state
-
-        def _is_history_query(self, request: str) -> bool:
-            """Check if the request is asking about conversation history"""
-            history_keywords = [
-                "previous",
-                "last",
-                "before",
-                "earlier",
-                "recent",
-                "what did you say",
-                "what did we discuss",
-                "what papers",
-                "what was the",
-            ]
-            request_lower = request.lower()
-            return any(keyword in request_lower for keyword in history_keywords)
-
-    async def check_health(self) -> Dict[str, bool]:
-        """Check health of all components"""
-        try:
-            semantic_scholar_health = await self.semantic_scholar_tool.check_health()
-            paper_analyzer_health = await self.paper_analyzer_tool.check_health()
-            ollama_health = await self.ollama_tool.check_health()
-
-            return {
-                "semantic_scholar": semantic_scholar_health,
-                "paper_analyzer": paper_analyzer_health,
-                "ollama": ollama_health,
-                "graph": True,
-                "all_healthy": all(
-                    [semantic_scholar_health, paper_analyzer_health, ollama_health]
-                ),
+                "memory": {
+                    "num_messages": (
+                        len(state.memory.messages) if state.memory.messages else 0
+                    ),
+                    "current_context": state.memory.current_context,
+                    "focused_paper": (
+                        state.memory.focused_paper.paper_id
+                        if state.memory.focused_paper
+                        else None
+                    ),
+                    "conversation_topics": (
+                        list(state.memory.conversation_topics)
+                        if state.memory.conversation_topics
+                        else []
+                    ),
+                },
+                "next_steps": state.next_steps,
             }
+
+            print("[DEBUG] Current State Info:")
+            print(json.dumps(debug_info, indent=2))
+            return debug_info
         except Exception as e:
+            print(f"[DEBUG] Error in debug_state: {str(e)}")
             return {
-                "semantic_scholar": False,
-                "paper_analyzer": False,
-                "ollama": False,
-                "graph": False,
-                "all_healthy": False,
-                "error": str(e),
+                "error": f"Error getting state info: {str(e)}",
+                "current_step": (
+                    state.current_step if hasattr(state, "current_step") else "unknown"
+                ),
+                "status": state.status.value if hasattr(state, "status") else "unknown",
             }

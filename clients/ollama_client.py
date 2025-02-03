@@ -1,7 +1,6 @@
 import asyncio
-import json
 import os
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import aiohttp
 
@@ -9,7 +8,8 @@ import aiohttp
 class OllamaClient:
     """Client for interacting with Ollama API"""
 
-    def __init__(self, model_name: str = "llama3.2:1b"):
+    def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
+        """Initialize Ollama client"""
         self.base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.model_name = model_name
         print(
@@ -101,7 +101,7 @@ class OllamaClient:
 # Helper function for synchronous calls
 def sync_generate(
     prompt: str,
-    model_name: str = "llama3.2:1b",
+    model_name: str = "llama3.2:1b-instruct-q3_K_M",
     system_prompt: Optional[str] = None,
     max_tokens: Optional[int] = None,
 ) -> str:

@@ -1,24 +1,20 @@
 import asyncio
-import json
 import os
+import re
 import sys
 from datetime import datetime
 from typing import List
 
 import streamlit as st
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 from agent.enhanced_workflow import EnhancedWorkflowManager
-from state.agent_state import AgentState, AgentStatus, PaperContext
-
-# Set page config at the very start of the script
-st.set_page_config(
-    page_title="Academic Paper Search",
-    page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+from state.agent_state import AgentState, PaperContext
 
 
 class DashboardApp:
@@ -46,12 +42,39 @@ class DashboardApp:
                 padding: 1rem;
                 margin-bottom: 1rem;
                 border-radius: 0.5rem;
+                background-color: #f8f9fa;
             }
             .chat-message.user {
                 background-color: #e9ecef;
             }
-            .chat-message.assistant {
-                background-color: #f8f9fa;
+            .paper-list {
+                list-style-type: decimal;
+                padding-left: 1.5rem;
+            }
+            .paper-item {
+                margin-bottom: 1rem;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                background-color: white;
+                border: 1px solid #dee2e6;
+            }
+            .paper-title {
+                font-weight: bold;
+                margin-bottom: 0.5rem;
+            }
+            .stChatInputContainer {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: white;
+                padding: 1rem 2rem;
+                border-top: 1px solid #dee2e6;
+                z-index: 100;
+            }
+            .main-content {
+                margin-bottom: 80px;  /* Space for fixed chat input */
+                padding: 20px;
             }
             </style>
             """,
@@ -62,24 +85,6 @@ class DashboardApp:
         """Add a debug message to the UI"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st.session_state.debug_messages.append(f"[{timestamp}] {message}")
-
-    def render_debug_panel(self):
-        """Render debug panel"""
-        with st.sidebar:
-            st.markdown("### 🔍 Debug Panel")
-
-            if st.button("Check System Health"):
-                with st.spinner("Checking system health..."):
-                    health_status = asyncio.run(
-                        st.session_state.workflow_manager.check_workflow_health()
-                    )
-                    st.json(health_status)
-
-            # Debug messages
-            if st.session_state.debug_messages:
-                st.markdown("### Debug Messages")
-                for msg in st.session_state.debug_messages:
-                    st.text(msg)
 
     async def initialize_system(self):
         """Initialize system and check health"""
@@ -228,60 +233,319 @@ class DashboardApp:
         try:
             print(f"[DEBUG] Dashboard processing input: {prompt}")
 
-            # Process through workflow
+            # Store the current paper being discussed if it's a paper request
+            if "paper" in prompt.lower():
+                try:
+                    numbers = re.findall(r"\d+", prompt)
+                    if numbers:
+                        st.session_state.current_paper_number = int(numbers[0]) - 1
+                except ValueError:
+                    pass
+
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
-
-            # Update session state
             st.session_state.agent_state = state
 
-            # Add messages to chat history
-            if not isinstance(prompt, dict):
-                st.session_state.messages.append({"role": "user", "content": prompt})
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": prompt})
 
+            # Add system response if available
             if state and state.memory and state.memory.messages:
-                # Get the last system message
-                last_system_message = next(
-                    (
-                        msg
-                        for msg in reversed(state.memory.messages)
-                        if msg["role"] == "system"
-                    ),
-                    None,
-                )
+                last_msg = state.memory.messages[-1]
+                if last_msg["role"] == "system":
+                    # Handle search queries
+                    if (
+                        state.search_context
+                        and state.search_context.results
+                        and any(
+                            keyword in prompt.lower()
+                            for keyword in [
+                                "find",
+                                "search",
+                                "papers on",
+                                "papers about",
+                            ]
+                        )
+                    ):
+                        formatted_content = self.format_paper_results(
+                            state.search_context.results
+                        )
+                        st.session_state.messages.append(
+                            {
+                                "role": "assistant",
+                                "content": formatted_content,
+                                "type": "search_results",
+                            }
+                        )
+                        st.session_state.last_search_results = (
+                            state.search_context.results
+                        )
 
-                if last_system_message:
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": last_system_message["content"]}
-                    )
-                    print(
-                        f"[DEBUG] Added response: {last_system_message['content'][:200]}..."
-                    )
+                    # Handle paper-specific queries
+                    elif hasattr(st.session_state, "current_paper_number") and (
+                        "paper" in prompt.lower()
+                        or any(
+                            keyword in prompt.lower()
+                            for keyword in [
+                                "summarize",
+                                "summarise",
+                                "tell me more",
+                                "explain",
+                            ]
+                        )
+                    ):
+                        paper_number = st.session_state.current_paper_number
+                        if hasattr(
+                            st.session_state, "last_search_results"
+                        ) and 0 <= paper_number < len(
+                            st.session_state.last_search_results
+                        ):
+                            paper = st.session_state.last_search_results[paper_number]
+
+                            if (
+                                "summarise" in prompt.lower()
+                                or "summarize" in prompt.lower()
+                            ):
+                                # Create analysis prompt for the LLM
+                                analysis_prompt = "Based on this academic paper:\n\n"
+                                analysis_prompt += f"Title: {paper.title}\n"
+                                analysis_prompt += f"Abstract: {paper.abstract if paper.abstract else 'No abstract available'}\n\n"
+                                analysis_prompt += (
+                                    "Please provide a detailed analysis covering:\n"
+                                )
+                                analysis_prompt += "1. Main theme and key objectives\n"
+                                analysis_prompt += "2. Key research contributions\n"
+                                analysis_prompt += "3. Methodology or approach\n"
+                                analysis_prompt += "4. Significant findings\n"
+                                analysis_prompt += (
+                                    "5. Potential impact and applications\n"
+                                )
+                                analysis_prompt += "\nPresent the analysis in a clear, bulleted format."
+
+                                # Get analysis from LLM
+                                analysis_state = await st.session_state.workflow_manager.process_command_async(
+                                    analysis_prompt
+                                )
+                                analysis = "Unable to generate detailed analysis."
+                                if (
+                                    analysis_state
+                                    and analysis_state.memory
+                                    and analysis_state.memory.messages
+                                ):
+                                    analysis = analysis_state.memory.messages[-1][
+                                        "content"
+                                    ]
+
+                                # Format enhanced summary response
+                                response = (
+                                    "### Summary of Paper "
+                                    + str(paper_number + 1)
+                                    + "\n\n"
+                                )
+                                response += f"**Title:** {paper.title}\n"
+                                response += f"**Authors:** {', '.join(author.get('name', '') for author in paper.authors)}\n\n"
+                                response += "**Publication Details:**\n"
+                                response += f"- Year: {paper.year or 'N/A'}\n"
+                                response += f"- Citations: {paper.citations or 0}\n\n"
+                                response += "**Analysis:**\n"
+                                response += f"{analysis}\n\n"
+                                response += f"**Source:** {paper.url if paper.url else 'URL not available'}\n\n"
+                                response += "Would you like to explore any specific aspect of this paper in more detail?"
+
+                            else:
+                                # Format detailed response
+                                response = (
+                                    "Here are the details for paper "
+                                    + str(paper_number + 1)
+                                    + ":\n\n"
+                                )
+                                response += f"Title: {paper.title}\n"
+                                response += f"Authors: {', '.join(author.get('name', '') for author in paper.authors)}\n"
+                                response += f"Year: {paper.year or 'N/A'}\n"
+                                response += f"Citations: {paper.citations or 0}\n\n"
+                                response += f"Abstract: {paper.abstract if paper.abstract else 'No abstract available'}\n\n"
+                                response += f"URL: {paper.url if paper.url else 'No URL available'}"
+
+                            st.session_state.messages.append(
+                                {
+                                    "role": "assistant",
+                                    "content": response,
+                                    "type": "paper_details",
+                                }
+                            )
+                        else:
+                            st.session_state.messages.append(
+                                {
+                                    "role": "assistant",
+                                    "content": "I'm sorry, but I couldn't find the paper you're referring to. Could you please specify which paper you'd like to know about?",
+                                    "type": "error",
+                                }
+                            )
+                    else:
+                        # Regular response
+                        st.session_state.messages.append(
+                            {
+                                "role": "assistant",
+                                "content": last_msg["content"],
+                                "type": "regular",
+                            }
+                        )
 
             return state
 
         except Exception as e:
-            error_msg = f"Error processing input: {str(e)}"
-            print(f"[DEBUG] {error_msg}")
+            print(f"[DEBUG] Error in dashboard: {str(e)}")
             st.session_state.messages.append(
                 {
                     "role": "assistant",
                     "content": f"I apologize, but I encountered an error: {str(e)}",
+                    "type": "error",
                 }
             )
             return None
 
-    def render_chat_interface(self):
-        """Render chat interface"""
-        st.title("Talk2Papers - Academic Research Assistant")
+    def format_paper_results(self, papers: List[PaperContext]) -> str:
+        """Format paper results with both styled list and table view"""
+        # First part: Styled list view (as before)
+        css = """
+        <style>
+        .paper-title {
+            font-size: 1.4em;
+            font-weight: bold;
+            margin-bottom: 1em;
+            color: #1a1a1a;
+        }
+        .paper-metadata {
+            font-size: 1em;
+            margin-bottom: 0.8em;
+        }
+        .paper-metadata-label {
+            font-weight: bold;
+        }
+        .paper-abstract {
+            font-size: 1.1em;
+            margin: 1em 0;
+        }
+        .paper-abstract-label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 0.5em;
+        }
+        .paper-link {
+            font-size: 0.9em;
+            color: #4169E1;
+            text-decoration: none;
+            margin-top: 1em;
+            display: inline-block;
+        }
+        .paper-divider {
+            margin: 2em 0;
+            border-bottom: 1px solid #eee;
+        }
+        .table-view {
+            margin-top: 2em;
+        }
+        </style>
+        """
 
-        # Display chat history
+        # List view
+        formatted_results = [css]
+
+        for i, paper in enumerate(papers, 1):
+            paper_text = [
+                f'<div class="paper-title">{i}. {paper.title}</div>',
+                '<div class="paper-metadata">',
+                f'<span class="paper-metadata-label">Authors:</span> {", ".join(author.get("name", "") for author in paper.authors)}<br>',
+                f'<span class="paper-metadata-label">Year:</span> {paper.year or "N/A"} | <span class="paper-metadata-label">Citations:</span> {paper.citations or 0}',
+                "</div>",
+                '<div class="paper-abstract">',
+                '<span class="paper-abstract-label">Abstract:</span>',
+                f"{paper.abstract if paper.abstract else 'No abstract available'}",
+                "</div>",
+                (
+                    f'<a href="{paper.url}" class="paper-link">View Paper</a>'
+                    if paper.url
+                    else ""
+                ),
+                '<div class="paper-divider"></div>',
+            ]
+            formatted_results.append("\n".join(paper_text))
+
+        # Create DataFrame for table view
+        paper_data = [
+            {
+                "Title": paper.title,
+                "Authors": ", ".join(
+                    author.get("name", "") for author in paper.authors
+                ),
+                "Year": paper.year or "N/A",
+                "Citations": paper.citations or 0,
+                "URL": f'<a href="{paper.url}">View Paper</a>' if paper.url else "",
+            }
+            for paper in papers
+        ]
+
+        # Convert to DataFrame
+        import pandas as pd
+
+        df = pd.DataFrame(paper_data)
+
+        # Add DataFrame to session state for access in render method
+        if "paper_table" not in st.session_state:
+            st.session_state.paper_table = df
+        else:
+            st.session_state.paper_table = df
+
+        return "\n".join(formatted_results)
+
+    def render_chat_interface(self):
+        """Render chat interface with both list and table views"""
+        st.title("Talk2Comp - Litrature Research Assistant")
+
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                st.write(message["content"])
+                if message["role"] == "assistant":
+                    msg_type = message.get("type", "regular")
 
-        # Chat input
+                    if msg_type == "search_results":
+                        # Render the formatted list view
+                        st.markdown(message["content"], unsafe_allow_html=True)
+
+                        # Add table view if available
+                        if (
+                            hasattr(st.session_state, "paper_table")
+                            and not st.session_state.paper_table.empty
+                        ):
+                            st.markdown("### Table View of Results")
+                            st.dataframe(
+                                st.session_state.paper_table,
+                                column_config={
+                                    "Title": st.column_config.TextColumn(
+                                        "Title", width="large"
+                                    ),
+                                    "Authors": st.column_config.TextColumn(
+                                        "Authors", width="medium"
+                                    ),
+                                    "Year": st.column_config.NumberColumn(
+                                        "Year", width="small"
+                                    ),
+                                    "Citations": st.column_config.NumberColumn(
+                                        "Citations", width="small"
+                                    ),
+                                    "URL": st.column_config.LinkColumn(
+                                        "Link", width="small"
+                                    ),
+                                },
+                                hide_index=True,
+                                use_container_width=True,
+                            )
+                    else:
+                        # Regular response - just show the message content
+                        st.markdown(message["content"], unsafe_allow_html=True)
+                else:
+                    st.write(message["content"])
+
         if prompt := st.chat_input("Ask me anything about research papers..."):
             with st.chat_message("user"):
                 st.write(prompt)
@@ -289,76 +553,7 @@ class DashboardApp:
             with st.spinner("Processing..."):
                 asyncio.run(self.process_input(prompt))
 
-    async def process_search(
-        self, query: str, year: str = None, citations: str = None, sort_by: str = None
-    ):
-        """Process search query with state monitoring"""
-        print(f"[DEBUG] Starting search for: {query}")
-        try:
-            cleaned_query = self.clean_search_query(query)
-            search_command = f"search {cleaned_query}"
-
-            # Add filters if provided
-            if year:
-                search_command += f" year:{year}"
-            if citations:
-                search_command += f" citations>{citations}"
-            if sort_by and sort_by != "Relevance":
-                search_command += f" sort:{sort_by.lower()}"
-
-            print(f"[DEBUG] Executing command: {search_command}")
-
-            state = await self.manager.process_command_async(search_command)
-
-            # Get and log debug info
-            debug_info = await self.manager.workflow_graph.debug_state(state)
-            print("[DEBUG] Search completed. State info:")
-            print(json.dumps(debug_info, indent=2))
-
-            if state.status == AgentStatus.SUCCESS:
-                st.session_state.current_results = state
-                if query not in st.session_state.search_history:
-                    st.session_state.search_history.append(query)
-                st.session_state.current_page = 1
-
-                # Store papers in context
-                if state.search_context and state.search_context.results:
-                    for paper in state.search_context.results:
-                        st.session_state.paper_context[paper.paperId] = paper
-
-            return state
-
-        except Exception as e:
-            print(f"[DEBUG] Search error: {str(e)}")
-            self.add_debug_message(f"Search error: {str(e)}")
-            return None
-
-    def render_chat_history(self):
-        """Render chat message history with enhanced formatting"""
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                if (
-                    message["role"] == "system"
-                    and "# Search Results" in message["content"]
-                ):
-                    # Split content into sections
-                    sections = message["content"].split("\n## ")
-
-                    # Display header
-                    st.markdown(sections[0])  # Main header
-
-                    # Process remaining sections
-                    for section in sections[1:]:
-                        if section.startswith("Summary"):
-                            # Display summary
-                            st.markdown(f"## {section}")
-                        elif section.strip():
-                            # Display paper entries
-                            paper_section = f"## {section}"
-                            st.markdown(paper_section)
-                else:
-                    # Regular message display
-                    st.write(message["content"])
+            st.rerun()
 
     def _render_paper_section(self, paper_text):
         """Render a single paper section with proper formatting"""
@@ -422,11 +617,8 @@ class DashboardApp:
 
     def run(self):
         """Run the dashboard application"""
-        self.setup_page()
+        # Render chat interface
         self.render_chat_interface()
-
-        if st.sidebar.checkbox("Show Debug Panel"):
-            self.render_debug_panel()
 
 
 def main():

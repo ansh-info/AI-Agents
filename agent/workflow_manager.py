@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict
 
-from langgraph.graph import START, MessagesState, StateGraph
+from langgraph.graph import START, MessagesState, StateGraph  # Imported START here
 
 from agent.main_agent import MainAgent
 from state.agent_state import AgentState, AgentStatus
@@ -11,11 +11,6 @@ from tools.semantic_scholar_tool import SemanticScholarTool
 
 
 class ResearchWorkflowManager:
-    """
-    Manages the research workflow and agent interactions.
-    Currently focused on semantic scholar paper search functionality.
-    """
-
     def __init__(self, model_name: str = "llama3.2:1b-instruct-q3_K_M"):
         """Initialize the workflow manager with main agent and tools"""
         print("[DEBUG] Initializing ResearchWorkflowManager")
@@ -58,42 +53,6 @@ class ResearchWorkflowManager:
         workflow.add_edge(
             "supervisor", "__end__"
         )  # Direct path for basic conversations
-
-        return workflow.compile()
-
-        # Create conversation handler node
-        def conversation_handler(state: MessagesState) -> Dict:
-            """Handle basic conversations"""
-            return {
-                "messages": state["messages"]
-                + [
-                    {
-                        "role": "assistant",
-                        "content": state["messages"][-1].get("assistant_response", ""),
-                    }
-                ],
-                "next": "__end__",
-            }
-
-        workflow.add_node("conversation_handler", conversation_handler)
-
-        # Add nodes for main components
-        workflow.add_node("supervisor", self.main_agent._create_supervisor_node())
-
-        # Add tool nodes and edges
-        for tool in self.tools:
-            workflow.add_node(tool.name, self.main_agent._create_tool_node(tool))
-            workflow.add_edge("supervisor", tool.name)
-
-        # Add edges
-        workflow.add_edge(START, "supervisor")
-        workflow.add_edge("supervisor", "conversation_handler")
-        workflow.add_edge("conversation_handler", "__end__")
-        for tool in self.tools:
-            workflow.add_edge(tool.name, "__end__")
-
-        # Set entry point
-        workflow.set_entry_point("supervisor")
 
         return workflow.compile()
 

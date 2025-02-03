@@ -1,6 +1,9 @@
 import asyncio
 import json
+import os
+import sys
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 from agent.enhanced_workflow import EnhancedWorkflowManager
 from state.agent_state import AgentState, AgentStatus
 
@@ -124,6 +127,62 @@ async def test_state_persistence():
             print(f"❌ Error in interaction {i}: {str(e)}")
 
 
+async def test_llm_routing():
+    """Test the LLM-based intent routing and search"""
+    print("\nTesting LLM-based routing and search...")
+    workflow = EnhancedWorkflowManager()
+
+    # Test cases focusing on intent analysis and routing
+    test_cases = [
+        {
+            "name": "Specific Search Query",
+            "input": "Find papers about transformers in deep learning from 2020 with at least 100 citations",
+            "expected_components": ["intent_analysis", "semantic_scholar"],
+        },
+        {
+            "name": "Ambiguous Query",
+            "input": "What do you know about deep learning?",
+            "expected_components": ["intent_analysis"],
+        },
+        {
+            "name": "Complex Search Query",
+            "input": "Find recent papers by Geoffrey Hinton about neural networks",
+            "expected_components": ["intent_analysis", "semantic_scholar"],
+        },
+    ]
+
+    for test in test_cases:
+        print(f"\nExecuting test: {test['name']}")
+        try:
+            # Process request
+            response = await workflow.process_command_async(test["input"])
+
+            # Print debug information
+            print(f"Test: {test['name']}")
+            print(f"Input: {test['input']}")
+            print("Response Messages:")
+            for msg in response.memory.messages[
+                -2:
+            ]:  # Last user message and system response
+                print(f"{msg['role']}: {msg['content'][:200]}...")
+
+            # Verify components were called
+            state_history = (
+                response.state_history if hasattr(response, "state_history") else []
+            )
+            for component in test["expected_components"]:
+                component_called = any(
+                    component in str(state) for state in state_history
+                )
+                print(f"Component '{component}' called: {component_called}")
+
+            print(f"✅ {test['name']} completed")
+
+        except Exception as e:
+            print(f"❌ Error in {test['name']}: {str(e)}")
+
+
+# Add this to the main() function in test_agent.py
 async def main():
     """Run all tests"""
     print("Starting Tests...")
@@ -137,7 +196,10 @@ async def main():
     print("\n3. Testing State Persistence")
     await test_state_persistence()
 
-    print("\n4. Testing System Health")
+    print("\n4. Testing LLM Routing")
+    await test_llm_routing()
+
+    print("\n5. Testing System Health")
     workflow = EnhancedWorkflowManager()
     health_status = await workflow.check_workflow_health()
     print("System Health Status:")
