@@ -228,42 +228,35 @@ class DashboardApp:
         try:
             print(f"[DEBUG] Dashboard processing input: {prompt}")
 
-            # Process through workflow
             state = await st.session_state.workflow_manager.process_command_async(
                 prompt
             )
-
-            # Update session state
             st.session_state.agent_state = state
 
-            # Add messages to chat history
-            if not isinstance(prompt, dict):
-                st.session_state.messages.append({"role": "user", "content": prompt})
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": prompt})
 
+            # Add system response if available
             if state and state.memory and state.memory.messages:
-                # Get the last system message
-                last_system_message = next(
-                    (
-                        msg
-                        for msg in reversed(state.memory.messages)
-                        if msg["role"] == "system"
-                    ),
-                    None,
-                )
-
-                if last_system_message:
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": last_system_message["content"]}
-                    )
-                    print(
-                        f"[DEBUG] Added response: {last_system_message['content'][:200]}..."
-                    )
+                last_msg = state.memory.messages[-1]
+                if last_msg["role"] == "system":
+                    # Format the paper results if present
+                    if state.search_context and state.search_context.results:
+                        formatted_content = self.format_paper_results(
+                            state.search_context.results
+                        )
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": formatted_content}
+                        )
+                    else:
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": last_msg["content"]}
+                        )
 
             return state
 
         except Exception as e:
-            error_msg = f"Error processing input: {str(e)}"
-            print(f"[DEBUG] {error_msg}")
+            print(f"[DEBUG] Error in dashboard: {str(e)}")
             st.session_state.messages.append(
                 {
                     "role": "assistant",
@@ -272,6 +265,29 @@ class DashboardApp:
             )
             return None
 
+    def format_paper_results(self, papers: List[PaperContext]) -> str:
+        """Format paper results with proper markdown"""
+        formatted_results = []
+
+        for i, paper in enumerate(papers, 1):
+            # Format each paper with markdown
+            paper_text = f"""
+### {i}. {paper.title}
+
+    **Authors:** {", ".join(author.get("name", "") for author in paper.authors)}  
+    **Year:** {paper.year or "N/A"} | **Citations:** {paper.citations or 0}
+
+    **Abstract:**  
+    {paper.abstract if paper.abstract else "No abstract available."}
+
+    **URL:** [{paper.url}]({paper.url})
+
+    ---
+    """
+            formatted_results.append(paper_text)
+
+        return "\n".join(formatted_results)
+
     def render_chat_interface(self):
         """Render chat interface"""
         st.title("Talk2Papers - Academic Research Assistant")
@@ -279,7 +295,11 @@ class DashboardApp:
         # Display chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                st.write(message["content"])
+                # Use markdown for assistant messages to preserve formatting
+                if message["role"] == "assistant":
+                    st.markdown(message["content"])
+                else:
+                    st.write(message["content"])
 
         # Chat input
         if prompt := st.chat_input("Ask me anything about research papers..."):
@@ -288,6 +308,9 @@ class DashboardApp:
 
             with st.spinner("Processing..."):
                 asyncio.run(self.process_input(prompt))
+
+            # Use rerun to update the UI
+            st.rerun()
 
     async def process_search(
         self, query: str, year: str = None, citations: str = None, sort_by: str = None
