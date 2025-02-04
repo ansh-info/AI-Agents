@@ -14,6 +14,9 @@ class Config:
         CURRENT_AGENT = "current_agent"
         RESPONSE = "response"
         ERROR = "error"
+        CHAT_HISTORY = "chat_history"
+        USER_INFO = "user_info"
+        MEMORY = "memory"
 
     # Agent Names
     class AgentNames:
