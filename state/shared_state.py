@@ -12,6 +12,9 @@ class SharedState:
             config.StateKeys.CURRENT_AGENT: None,
             config.StateKeys.RESPONSE: None,
             config.StateKeys.ERROR: None,
+            config.StateKeys.CHAT_HISTORY: [],
+            config.StateKeys.USER_INFO: {},
+            config.StateKeys.MEMORY: {},
         }
 
     def get(self, key: str) -> Any:
