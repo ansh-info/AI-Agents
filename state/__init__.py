@@ -1,1 +1,4 @@
-from .agent_state import AgentState, AgentStatus, PaperContext
+"""
+This is a package for shared state
+"""
+
