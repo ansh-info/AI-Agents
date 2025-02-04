@@ -1,3 +1,12 @@
+## ⚠️ Project Notice
+
+This project is being developed **exclusively** for **[AIAgents4Pharma](https://virtualpatientengine.github.io/AIAgents4Pharma/)**. Please refer to their **official repository** for the latest updates, as this repository will no longer be actively maintained.
+
+🔹 **Official Repository**: [AIAgents4Pharma](https://github.com/VirtualPatientEngine/AIAgents4Pharma)  
+🔹 **Purpose of This Repository**: This serves as a **personal backup** for tracking changes, testing new features, and maintaining a structured commit history before integrating updates into the main project.
+
+For the most up-to-date code and developments, please always visit the official [**AIAgents4Pharma**](https://github.com/VirtualPatientEngine/AIAgents4Pharma) repository.
+
 # Talk2Agents
 
 **Talk2Agents** is a hierarchical multi-agent system designed to perform complex tasks through the collaboration of multiple AI agents. It integrates state management, tool invocation, and seamless orchestration to enable AI-driven research, document analysis, and intelligent interaction.
@@ -27,14 +36,17 @@ The system employs a top-down structure with a main agent supervising multiple s
 ```mermaid
 graph TD
     User --> MainAgent["Main Supervisor Agent"]
-    MainAgent --> ToolRouter["Tool & Intent Router"]
-    ToolRouter --> SearchTool["Search Tool"]
-    ToolRouter --> AnalysisTool["Analysis Tool"]
-    ToolRouter --> ConversationTool["Conversation Tool"]
-    SearchTool --> |Results| StateManager
-    AnalysisTool --> |Results| StateManager
-    ConversationTool --> |Results| StateManager
-    StateManager --> MainAgent
+    MainAgent --> Agent_S2["Semantic Scholar Agent"]
+
+    Agent_S2 --> SearchTool["Search Tool"]
+    Agent_S2 --> SinglePaperRecommendationTool["Single Paper Recommendation Tool"]
+    Agent_S2 --> MultiPaperRecommendationTool["Multi Paper Recommendation Tool"]
+
+    SearchTool --> |Results| SharedState["Shared State"]
+    SinglePaperRecommendationTool --> |Results| SharedState
+    MultiPaperRecommendationTool --> |Results| SharedState
+
+    SharedState --> |Results| MainAgent
 ```
 
 ### 2. Agent Communication Workflow
@@ -98,7 +110,7 @@ graph TD
    ```
 4. Run the Streamlit UI:
    ```bash
-   streamlit run app.py
+   streamlit run talk2agents.py
    ```
 5. Access the application in your browser at `http://localhost:8501`.
 
