@@ -1,6 +1,6 @@
 class Config:
     # LLM Configuration
-    LLM_MODEL = "llama2:7b-chat"
+    LLM_MODEL = "llama3.2:1b-instruct-q3_K_M"
     TEMPERATURE = 0.7
 
     # API Endpoints
