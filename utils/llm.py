@@ -1,14 +1,15 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from langchain.schema import HumanMessage, SystemMessage
-from langchain_community.llms import Ollama
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama import ChatOllama
 
 from config.config import config
+from state.shared_state import shared_state
 
 
-def create_llm() -> Ollama:
+def create_llm() -> ChatOllama:
     """Create and configure Ollama LLM instance"""
-    return Ollama(model=config.LLM_MODEL, temperature=config.TEMPERATURE)
+    return ChatOllama(model=config.LLM_MODEL, temperature=config.TEMPERATURE)
 
 
 class LLMManager:
@@ -20,6 +21,7 @@ class LLMManager:
         system_prompt: str,
         user_input: str,
         additional_context: Dict[str, Any] = None,
+        include_history: bool = True,
     ) -> str:
         """
         Get response from LLM with system prompt and user input
@@ -28,30 +30,47 @@ class LLMManager:
             system_prompt: The system prompt to guide the LLM
             user_input: The user's input/query
             additional_context: Optional additional context to append to user input
+            include_history: Whether to include chat history in context
 
         Returns:
             str: The LLM's response
         """
         # Prepare context string if provided
-        context_str = ""
+        context_parts = []
+
         if additional_context:
-            context_str = "\nContext:\n" + "\n".join(
-                f"{k}: {v}" for k, v in additional_context.items()
+            context_parts.append(
+                "Context:\n"
+                + "\n".join(f"{k}: {v}" for k, v in additional_context.items())
             )
+
+        if include_history:
+            recent_history = shared_state.get_chat_history(limit=5)
+            if recent_history:
+                history_str = "\nRecent Conversation:\n" + "\n".join(
+                    f"{msg['role']}: {msg['content']}" for msg in recent_history
+                )
+                context_parts.append(history_str)
+
+        context_str = "\n\n".join(context_parts) if context_parts else ""
 
         # Combine user input with context
         full_input = user_input + context_str
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=full_input),
-        ]
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", system_prompt), ("human", full_input)]
+        )
 
         try:
-            response = self.llm.invoke(messages)
+            chain = prompt | self.llm
+            response = chain.invoke({})
             return response.content
         except Exception as e:
             return f"Error getting LLM response: {str(e)}"
+
+    def bind_tools(self, tools: List[Any]) -> None:
+        """Bind tools to the LLM"""
+        self.llm = self.llm.bind_tools(tools)
 
 
 # Create a global instance
