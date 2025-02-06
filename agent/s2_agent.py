@@ -1,6 +1,8 @@
 from typing import Any, Dict
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
 
@@ -15,6 +17,66 @@ class SemanticScholarAgent:
         self.llm = llm_manager.llm.bind_tools(s2_tools)
         self.tool_executor = ToolExecutor(s2_tools)
 
+        # Setup few-shot examples
+        self.examples = [
+            HumanMessage(
+                "Search for papers about machine learning", name="example_user"
+            ),
+            AIMessage(
+                "",
+                name="example_assistant",
+                tool_calls=[
+                    {
+                        "name": "search_papers",
+                        "args": {
+                            "query": "machine learning recent advances",
+                            "limit": 5,
+                        },
+                        "id": "1",
+                    }
+                ],
+            ),
+            ToolMessage(
+                content='{"status": "success", "papers": [...], "total": 5}',
+                tool_call_id="1",
+            ),
+            AIMessage(
+                "I found several papers about machine learning. Here are the most relevant ones: [list of papers]",
+                name="example_assistant",
+            ),
+            HumanMessage(
+                "Find papers similar to the first one about deep learning",
+                name="example_user",
+            ),
+            AIMessage(
+                "",
+                name="example_assistant",
+                tool_calls=[
+                    {
+                        "name": "get_single_paper_recommendations",
+                        "args": {"paper_id": "example_paper_id", "limit": 5},
+                        "id": "2",
+                    }
+                ],
+            ),
+            ToolMessage(
+                content='{"status": "success", "recommendations": [...]}',
+                tool_call_id="2",
+            ),
+            AIMessage(
+                "Here are some papers similar to the one about deep learning: [list of recommendations]",
+                name="example_assistant",
+            ),
+        ]
+
+        # Create few-shot prompt template
+        self.prompt = ChatPromptTemplate.from_messages(
+            [("system", config.S2_AGENT_PROMPT), *self.examples, ("human", "{query}")]
+        )
+
+        # Create the chain
+        self.chain = {"query": RunnablePassthrough()} | self.prompt | self.llm
+
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
         try:
@@ -22,20 +84,24 @@ class SemanticScholarAgent:
             message = state.get("message", "")
             context = shared_state.get_current_context()
 
-            # Create messages list
-            messages = [HumanMessage(content=message)]
+            # Add context to message if needed
+            if context:
+                message += f"\n\nContext:\n{context}"
 
-            # Get LLM response with potential tool calls
-            ai_msg = self.llm.invoke(messages)
-            messages.append(ai_msg)
+            # Get initial response with potential tool calls
+            response = self.chain.invoke(message)
+
+            # Initialize messages list with the response
+            messages = [HumanMessage(content=message), response]
 
             # Handle any tool calls
-            if ai_msg.tool_calls:
-                for tool_call in ai_msg.tool_calls:
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
                     # Execute the tool
                     tool_output = self.tool_executor.invoke(
                         tool_call.name, tool_call.args
                     )
+
                     # Add tool result to messages
                     messages.append(
                         ToolMessage(content=str(tool_output), tool_call_id=tool_call.id)
@@ -45,7 +111,7 @@ class SemanticScholarAgent:
                 final_response = self.llm.invoke(messages)
                 response_content = final_response.content
             else:
-                response_content = ai_msg.content
+                response_content = response.content
 
             # Update state and shared state
             state["response"] = response_content
