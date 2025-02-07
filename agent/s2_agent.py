@@ -1,8 +1,20 @@
-from typing import List, Dict, Any, Type
+from typing import List, Dict, Any, Type, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool
 from langchain_core.runnables import RunnablePassthrough
+from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolExecutor
+
+
+class S2AgentState(TypedDict):
+    """Type definition for S2 agent state"""
+
+    message: str
+    response: str | None
+    error: str | None
+
+
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -130,7 +142,7 @@ class SemanticScholarAgent:
 
     def create_graph(self) -> StateGraph:
         """Create the agent's workflow graph"""
-        workflow = StateGraph()
+        workflow = StateGraph(S2AgentState)
 
         # Add nodes
         workflow.add_node("process_message", self.handle_message)
@@ -141,7 +153,7 @@ class SemanticScholarAgent:
         # Set entry point
         workflow.set_entry_point("process_message")
 
-        return workflow
+        return workflow.compile()
 
 
 # Create a global instance
