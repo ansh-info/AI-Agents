@@ -1,12 +1,24 @@
-from typing import Any, Dict
-
-from agents.s2_agent import s2_agent
-from langchain_core.messages import HumanMessage
+from typing import Any, Dict, List, TypedDict
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
 
+
+class AgentState(TypedDict):
+    """Type definition for agent state"""
+
+    message: str
+    response: str | None
+    error: str | None
+
+
+from langgraph.graph import END, StateGraph
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+
 from config.config import config
 from state.shared_state import shared_state
+from agents.s2_agent import s2_agent
 from utils.llm import llm_manager
 
 
@@ -78,11 +90,36 @@ Remember to:
             additional_context=context,
         )
 
-        # Extract agent name from response
-        # This is a simple implementation - we might want to make this more robust
-        for agent_name in self.agents.keys():
-            if agent_name.lower() in response.lower():
-                return {"next_agent": agent_name, "query": query, "response": response}
+        # Map of keywords to agent names
+        agent_keywords = {
+            config.AgentNames.S2: [
+                "paper",
+                "search",
+                "find",
+                "semantic scholar",
+                "papers",
+                "research",
+                "publication",
+            ],
+            config.AgentNames.ZOTERO: ["zotero", "save", "library", "reference"],
+            config.AgentNames.PDF: ["pdf", "read", "analyze", "content"],
+            config.AgentNames.ARXIV: ["arxiv", "download", "get pdf"],
+        }
+
+        # Check response and query against keywords
+        response_lower = response.lower()
+        query_lower = query.lower()
+
+        for agent_name, keywords in agent_keywords.items():
+            # Check if any keyword is in either response or query
+            if any(keyword in response_lower for keyword in keywords) or any(
+                keyword in query_lower for keyword in keywords
+            ):
+                return {
+                    "next_agent": agent_name,
+                    "query": query,
+                    "response": f"Routing to {agent_name} to handle this query.",
+                }
 
         return {
             "next_agent": None,
@@ -132,7 +169,7 @@ Remember to:
 
     def create_graph(self) -> StateGraph:
         """Create the main workflow graph"""
-        workflow = StateGraph()
+        workflow = StateGraph(AgentState)
 
         # Add nodes
         workflow.add_node("route_to_agent", self.route_to_agent)
@@ -143,7 +180,7 @@ Remember to:
         # Set entry point
         workflow.set_entry_point("route_to_agent")
 
-        return workflow
+        return workflow.compile()
 
 
 # Create a global instance

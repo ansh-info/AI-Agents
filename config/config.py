@@ -1,3 +1,6 @@
+from typing import Any, Dict
+
+
 class Config:
     # LLM Configuration
     LLM_MODEL = "llama3.2:1b-instruct-q3_K_M"
@@ -53,44 +56,52 @@ Available agents and their capabilities:
    - Search for academic papers
    - Get paper recommendations (single or multiple papers)
    - Primary tasks: literature search, finding related papers
+   - Keywords: paper search, academic research, publications, citations
 
 2. Zotero Agent (zotero_agent):
    - Read from Zotero library
    - Save papers to Zotero
    - Primary tasks: reference management, saving papers
+   - Keywords: save papers, library management, references
 
 3. PDF Agent (pdf_agent):
    - Perform RAG operations on PDFs
    - Answer questions about PDF content
    - Primary tasks: PDF analysis, content Q&A
+   - Keywords: read pdf, analyze document, extract information
 
 4. arXiv Agent (arxiv_agent):
    - Download PDFs from arXiv
    - Primary tasks: paper downloads, full text access
+   - Keywords: download paper, get pdf, arxiv access
 
 Routing Guidelines:
 1. Paper Search/Discovery → Semantic Scholar Agent
+   Example queries:
+   - "Find papers about machine learning"
+   - "Search for recent research on neural networks"
+   - "Get recommendations similar to this paper"
+
 2. Reference Management → Zotero Agent
+   Example queries:
+   - "Save this paper to my library"
+   - "Check if I have similar papers in Zotero"
+
 3. PDF Content Analysis → PDF Agent
+   Example queries:
+   - "What does this PDF say about methodology?"
+   - "Summarize the results section"
+
 4. Paper Downloads → arXiv Agent
+   Example queries:
+   - "Download the full PDF of this paper"
+   - "Get the paper from arXiv"
 
-Multi-step Task Handling:
-- Break complex tasks into steps
-- Route each step to appropriate agent
-- Maintain context between steps
-- Track task progress
-
-Error Handling:
-- Validate agent availability
-- Handle failed operations gracefully
-- Provide clear error messages
-- Attempt reasonable fallbacks
-
-State Management:
-- Track current agent and tool
-- Maintain conversation history
-- Preserve user preferences
-- Monitor task progress"""
+Your task is to:
+1. Analyze the user's query
+2. Match it to the most appropriate agent based on capabilities and keywords
+3. Route the query to that agent
+4. Provide clear feedback about your routing decision"""
 
     S2_AGENT_PROMPT = """You are a specialized agent for interacting with Semantic Scholar.
 Your role is to help users find and manage academic papers. You have access to several tools:
@@ -128,8 +139,6 @@ Remember to:
 - Use clear, specific search queries
 - Provide context from paper abstracts when relevant
 - Handle multi-step queries appropriately"""
-
-    # Add other agent prompts as needed...
 
 
 config = Config()
