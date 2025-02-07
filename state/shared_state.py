@@ -1,5 +1,5 @@
-import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional, List
+from datetime import datetime
 
 from config.config import config
 
@@ -58,7 +58,7 @@ class SharedState:
         """Update user information"""
         self.state[config.StateKeys.USER_INFO].update(info)
 
-    def get_chat_history(self, limit: int = None) -> List[Dict[str, Any]]:
+    def get_chat_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get recent chat history"""
         history = self.state[config.StateKeys.CHAT_HISTORY]
         if limit:
