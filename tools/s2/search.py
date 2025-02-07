@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Optional
-
-import requests
+from typing import List, Dict, Any, Optional, Type
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool, BaseTool
+import requests
 
 from config.config import config
 from state.shared_state import shared_state
