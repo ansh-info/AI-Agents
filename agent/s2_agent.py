@@ -1,10 +1,14 @@
 from typing import List, Dict, Any, Type, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.tools import BaseTool
 from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
+
+from config.config import config
+from state.shared_state import shared_state
+from tools.s2.search import s2_tools
+from utils.llm import llm_manager
 
 
 class S2AgentState(TypedDict):
@@ -15,18 +19,6 @@ class S2AgentState(TypedDict):
     error: str | None
 
 
-from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolExecutor
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-
-from config.config import config
-from state.shared_state import shared_state
-from tools.s2.search import s2_tools
-from utils.llm import llm_manager
-
-
 class SemanticScholarAgent:
     def __init__(self):
         self.llm = llm_manager.llm.bind_tools(s2_tools)
@@ -34,12 +26,9 @@ class SemanticScholarAgent:
 
         # Setup few-shot examples
         self.examples = [
-            HumanMessage(
-                "Search for papers about machine learning", name="example_user"
-            ),
+            HumanMessage(content="Search for papers about machine learning"),
             AIMessage(
-                "",
-                name="example_assistant",
+                content="I'll help you search for papers about machine learning.",
                 tool_calls=[
                     {
                         "name": "search_papers",
@@ -56,16 +45,13 @@ class SemanticScholarAgent:
                 tool_call_id="1",
             ),
             AIMessage(
-                "I found several papers about machine learning. Here are the most relevant ones: [list of papers]",
-                name="example_assistant",
+                content="I found several papers about machine learning. Here are the most relevant ones: [list of papers]"
             ),
             HumanMessage(
-                "Find papers similar to the first one about deep learning",
-                name="example_user",
+                content="Find papers similar to the first one about deep learning"
             ),
             AIMessage(
-                "",
-                name="example_assistant",
+                content="I'll get recommendations based on that paper.",
                 tool_calls=[
                     {
                         "name": "get_single_paper_recommendations",
@@ -79,18 +65,17 @@ class SemanticScholarAgent:
                 tool_call_id="2",
             ),
             AIMessage(
-                "Here are some papers similar to the one about deep learning: [list of recommendations]",
-                name="example_assistant",
+                content="Here are some papers similar to the one about deep learning: [list of recommendations]"
             ),
         ]
 
-        # Create few-shot prompt template
+        # Create prompt template
         self.prompt = ChatPromptTemplate.from_messages(
-            [("system", config.S2_AGENT_PROMPT), *self.examples, ("human", "{query}")]
+            [("system", config.S2_AGENT_PROMPT), *self.examples, ("human", "{input}")]
         )
 
         # Create the chain
-        self.chain = {"query": RunnablePassthrough()} | self.prompt | self.llm
+        self.chain = RunnablePassthrough() | self.prompt | self.llm
 
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
@@ -104,7 +89,7 @@ class SemanticScholarAgent:
                 message += f"\n\nContext:\n{context}"
 
             # Get initial response with potential tool calls
-            response = self.chain.invoke(message)
+            response = self.chain.invoke({"input": message})
 
             # Initialize messages list with the response
             messages = [HumanMessage(content=message), response]
