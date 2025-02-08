@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Type, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
@@ -24,25 +24,19 @@ class SemanticScholarAgent:
         self.llm = llm_manager.llm.bind_tools(s2_tools)
         self.tool_executor = ToolExecutor(s2_tools)
 
-        # Setup few-shot examples without tool results (they're in the system prompt)
-        self.examples = [
-            HumanMessage(content="Search for papers about machine learning"),
-            AIMessage(
-                content="I'll help you search for papers about machine learning."
-            ),
-            HumanMessage(
-                content="Find papers similar to the first one about deep learning"
-            ),
-            AIMessage(content="I'll get recommendations based on that paper."),
-        ]
-
-        # Create prompt template
+        # Create prompt template without examples (they're in the system prompt)
         self.prompt = ChatPromptTemplate.from_messages(
-            [("system", config.S2_AGENT_PROMPT), *self.examples, ("human", "{input}")]
+            [
+                ("system", config.S2_AGENT_PROMPT),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "{input}"),
+            ]
         )
 
         # Create the chain
-        self.chain = RunnablePassthrough() | self.prompt | self.llm
+        self.chain = (
+            RunnablePassthrough.assign(history=lambda x: []) | self.prompt | self.llm
+        )
 
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
@@ -62,17 +56,27 @@ class SemanticScholarAgent:
             messages = [HumanMessage(content=message), response]
 
             # Handle any tool calls
-            if response.tool_calls:
+            if hasattr(response, "tool_calls") and response.tool_calls:
                 for tool_call in response.tool_calls:
-                    # Execute the tool
-                    tool_output = self.tool_executor.invoke(
-                        tool_call.name, tool_call.args
-                    )
-
-                    # Add tool result to messages
-                    messages.append(
-                        ToolMessage(content=str(tool_output), tool_call_id=tool_call.id)
-                    )
+                    try:
+                        # Execute the tool
+                        tool_output = self.tool_executor.invoke(
+                            tool_call.name, tool_call.args
+                        )
+                        # Add tool result to messages
+                        messages.append(
+                            ToolMessage(
+                                content=str(tool_output), tool_call_id=tool_call.id
+                            )
+                        )
+                    except Exception as tool_error:
+                        error_msg = f"Tool execution error: {str(tool_error)}"
+                        messages.append(
+                            ToolMessage(
+                                content=str({"error": error_msg}),
+                                tool_call_id=tool_call.id,
+                            )
+                        )
 
                 # Get final response after tool execution
                 final_response = self.llm.invoke(messages)
