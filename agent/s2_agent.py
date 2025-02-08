@@ -24,49 +24,16 @@ class SemanticScholarAgent:
         self.llm = llm_manager.llm.bind_tools(s2_tools)
         self.tool_executor = ToolExecutor(s2_tools)
 
-        # Setup few-shot examples
+        # Setup few-shot examples without tool results (they're in the system prompt)
         self.examples = [
             HumanMessage(content="Search for papers about machine learning"),
             AIMessage(
-                content="I'll help you search for papers about machine learning.",
-                tool_calls=[
-                    {
-                        "name": "search_papers",
-                        "args": {
-                            "query": "machine learning recent advances",
-                            "limit": 5,
-                        },
-                        "id": "1",
-                    }
-                ],
-            ),
-            ToolMessage(
-                content='{{"status": "success", "papers": [...], "total": 5}}',
-                tool_call_id="1",
-            ),
-            AIMessage(
-                content="I found several papers about machine learning. Here are the most relevant ones: [list of papers]"
+                content="I'll help you search for papers about machine learning."
             ),
             HumanMessage(
                 content="Find papers similar to the first one about deep learning"
             ),
-            AIMessage(
-                content="I'll get recommendations based on that paper.",
-                tool_calls=[
-                    {
-                        "name": "get_single_paper_recommendations",
-                        "args": {"paper_id": "example_paper_id", "limit": 5},
-                        "id": "2",
-                    }
-                ],
-            ),
-            ToolMessage(
-                content='{{"status": "success", "recommendations": [...]}}',
-                tool_call_id="2",
-            ),
-            AIMessage(
-                content="Here are some papers similar to the one about deep learning: [list of recommendations]"
-            ),
+            AIMessage(content="I'll get recommendations based on that paper."),
         ]
 
         # Create prompt template
