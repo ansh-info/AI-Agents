@@ -41,7 +41,7 @@ class SemanticScholarAgent:
                 ],
             ),
             ToolMessage(
-                content='{"status": "success", "papers": [...], "total": 5}',
+                content='{{"status": "success", "papers": [...], "total": 5}}',
                 tool_call_id="1",
             ),
             AIMessage(
@@ -61,7 +61,7 @@ class SemanticScholarAgent:
                 ],
             ),
             ToolMessage(
-                content='{"status": "success", "recommendations": [...]}',
+                content='{{"status": "success", "recommendations": [...]}}',
                 tool_call_id="2",
             ),
             AIMessage(
