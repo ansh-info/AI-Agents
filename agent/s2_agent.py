@@ -67,24 +67,38 @@ class SemanticScholarAgent:
 
             messages = [HumanMessage(content=message), response]
 
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                for tool_call in response.tool_calls:
+            if (
+                hasattr(response, "additional_kwargs")
+                and "tool_calls" in response.additional_kwargs
+            ):
+                tool_calls = response.additional_kwargs["tool_calls"]
+                for tool_call in tool_calls:
                     try:
-                        tool_output = self.tool_executor.invoke(
-                            tool_call.name, tool_call.args
-                        )
-                        messages.append(
-                            ToolMessage(
-                                content=str(tool_output), tool_call_id=tool_call.id
+                        # Extract tool information
+                        tool_name = tool_call.get("function", {}).get("name")
+                        tool_args = tool_call.get("function", {}).get("arguments", {})
+                        tool_id = tool_call.get("id", "default_id")
+
+                        if tool_name and tool_args:
+                            # Execute the tool
+                            tool_output = self.tool_executor.invoke(
+                                tool_name, tool_args
                             )
-                        )
+                            # Add tool result to messages
+                            messages.append(
+                                ToolMessage(
+                                    content=str(tool_output), tool_call_id=tool_id
+                                )
+                            )
                     except Exception as tool_error:
                         messages.append(
                             ToolMessage(
                                 content=str(
                                     {"error": f"Tool error: {str(tool_error)}"}
                                 ),
-                                tool_call_id=tool_call.id,
+                                tool_call_id=(
+                                    tool_id if "tool_id" in locals() else "error_id"
+                                ),
                             )
                         )
 
