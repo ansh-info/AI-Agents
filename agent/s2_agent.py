@@ -14,6 +14,7 @@ from utils.llm import llm_manager
 
 class S2AgentState(TypedDict):
     """Type definition for S2 agent state"""
+
     message: str
     response: str | None
     error: str | None
@@ -23,14 +24,17 @@ class SemanticScholarAgent:
     def __init__(self):
         try:
             print("Initializing S2 Agent...")
-            self.llm = llm_manager.llm.bind_tools([s2_tools[0]])  # Only bind search_papers tool
-            self.tool_executor = ToolExecutor([s2_tools[0]])  # Only use search_papers tool
+            self.llm = llm_manager.llm.bind_tools(
+                [s2_tools[0]]
+            )  # Only bind search_papers tool
+            self.tool_executor = ToolExecutor(
+                [s2_tools[0]]
+            )  # Only use search_papers tool
 
             # Create prompt template with simplified structure
-            self.prompt = ChatPromptTemplate.from_messages([
-                ("system", config.S2_AGENT_PROMPT),
-                ("human", "{input}")
-            ])
+            self.prompt = ChatPromptTemplate.from_messages(
+                [("system", config.S2_AGENT_PROMPT), ("human", "{input}")]
+            )
 
             # Create the chain
             self.chain = self.prompt | self.llm
@@ -38,6 +42,60 @@ class SemanticScholarAgent:
         except Exception as e:
             print(f"Initialization error: {str(e)}")
             raise
+
+    def parse_tool_call(self, content: str) -> Dict[str, Any]:
+        """Parse tool call from JSON response"""
+        try:
+            tool_call = json.loads(content)
+            if (
+                isinstance(tool_call, dict)
+                and "type" in tool_call
+                and tool_call["type"] == "function"
+            ):
+                return {
+                    "name": tool_call.get("name"),
+                    "args": tool_call.get("parameters", {}),
+                }
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON: {e}")
+        return None
+
+    def process_tool_calls(self, message: str, response: AIMessage) -> str:
+        """Process tool calls and return final response"""
+        try:
+            print(f"Processing response content: {response.content}")
+            tool_call = self.parse_tool_call(response.content)
+
+            if tool_call:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                print(f"Executing tool: {tool_name} with args: {tool_args}")
+
+                # Clean up tool arguments
+                if "fields" in tool_args and isinstance(tool_args["fields"], str):
+                    try:
+                        tool_args["fields"] = json.loads(tool_args["fields"])
+                    except json.JSONDecodeError:
+                        tool_args["fields"] = None
+
+                tool_output = self.tool_executor.invoke(tool_name, tool_args)
+                print(f"Tool output: {tool_output}")
+
+                if isinstance(tool_output, dict) and "papers" in tool_output:
+                    papers = tool_output["papers"]
+                    response_content = "Here are the papers I found:\n\n"
+                    for i, paper in enumerate(papers, 1):
+                        title = paper.get("title", "Untitled")
+                        response_content += f"{i}. {title}\n"
+                    return response_content
+                else:
+                    return f"Search completed but no papers were found. Tool output: {tool_output}"
+
+            return response.content
+
+        except Exception as e:
+            print(f"Error in process_tool_calls: {e}")
+            return f"Error processing search: {str(e)}"
 
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
@@ -51,30 +109,9 @@ class SemanticScholarAgent:
                 response = self.chain.invoke({"input": message})
                 print(f"LLM Response type: {type(response)}")
                 print(f"LLM Response content: {response.content}")
-                
-                if hasattr(response, 'tool_calls') and response.tool_calls:
-                    print(f"Tool calls found: {response.tool_calls}")
-                    for tool_call in response.tool_calls:
-                        try:
-                            tool_name = tool_call.name
-                            tool_args = tool_call.args
-                            tool_id = tool_call.id
 
-                            print(f"Executing tool: {tool_name} with args: {tool_args}")
-                            tool_output = self.tool_executor.invoke(
-                                tool_name, tool_args
-                            )
-                            print(f"Tool output: {tool_output}")
-
-                            response = self.llm.invoke([
-                                HumanMessage(content=message),
-                                AIMessage(content=response.content, tool_calls=[tool_call]),
-                                ToolMessage(content=str(tool_output), tool_call_id=tool_id)
-                            ])
-                    state["response"] = response.content
-                else:
-                    print("No tool calls found, using direct response")
-                    state["response"] = response.content
+                response_content = self.process_tool_calls(message, response)
+                state["response"] = response_content
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")
@@ -82,7 +119,7 @@ class SemanticScholarAgent:
                 return state
 
             print(f"Final response: {state.get('response')}")
-            if state.get('response'):
+            if state.get("response"):
                 shared_state.add_to_chat_history("assistant", state["response"])
             return state
 
