@@ -71,9 +71,10 @@ class SemanticScholarAgent:
                                 AIMessage(content=response.content, tool_calls=[tool_call]),
                                 ToolMessage(content=str(tool_output), tool_call_id=tool_id)
                             ])
-                            state["response"] = response.content
-                    else:
-                        state["response"] = response.content
+                    state["response"] = response.content
+                else:
+                    print("No tool calls found, using direct response")
+                    state["response"] = response.content
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")
