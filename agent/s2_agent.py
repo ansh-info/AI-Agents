@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Type, TypedDict
+import json
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
@@ -22,86 +23,118 @@ class S2AgentState(TypedDict):
 class SemanticScholarAgent:
     def __init__(self):
         try:
-            self.llm = llm_manager.llm.bind_tools(s2_tools)
-            self.tool_executor = ToolExecutor(s2_tools)
+            print("Initializing S2 Agent...")
+            # Only bind search_papers tool
+            self.llm = llm_manager.llm.bind_tools([s2_tools[0]])
+            self.tool_executor = ToolExecutor([s2_tools[0]])
 
-            # Create prompt template
+            # Create simplified prompt template
             self.prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", config.S2_AGENT_PROMPT),
-                    MessagesPlaceholder(variable_name="history"),
-                    ("human", "{input}"),
-                ]
+                [("system", config.S2_AGENT_PROMPT), ("human", "{input}")]
             )
 
-            # Create the chain
-            self.chain = (
-                RunnablePassthrough.assign(history=lambda x: [])
-                | self.prompt
-                | self.llm
-            )
+            # Create chain
+            self.chain = self.prompt | self.llm
+            print("S2 Agent initialized successfully")
         except Exception as e:
             print(f"Initialization error: {str(e)}")
             raise
 
+    def get_default_search_params(self, query: str) -> Dict[str, Any]:
+        """Generate default search parameters for empty responses"""
+        return {
+            "type": "function",
+            "name": "search_papers",
+            "parameters": {"query": f"{query} recent research", "limit": 5},
+        }
+
+    def parse_tool_call(self, content: str, original_query: str) -> Dict[str, Any]:
+        """Parse tool call from response or return default"""
+        if not content or content.isspace():
+            print("Empty response received, using default parameters")
+            return self.get_default_search_params(original_query)
+
+        try:
+            tool_call = json.loads(content)
+            if isinstance(tool_call, dict) and tool_call.get("type") == "function":
+                return {
+                    "name": tool_call.get("name"),
+                    "args": tool_call.get("parameters", {}),
+                }
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON: {e}\nUsing default parameters")
+            return self.get_default_search_params(original_query)
+        return self.get_default_search_params(original_query)
+
+    def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
+        """Format papers list into readable response"""
+        if not papers:
+            return "No papers found matching your query."
+
+        response = "Here are the relevant papers I found:\n\n"
+        for i, paper in enumerate(papers, 1):
+            title = paper.get("title", "Untitled")
+            authors = paper.get("authors", [])
+            year = paper.get("year", "N/A")
+
+            author_names = [a.get("name", "") for a in authors]
+            author_str = ", ".join(author_names[:3])
+            if len(authors) > 3:
+                author_str += " et al."
+
+            response += f"{i}. {title}\n"
+            response += f"   Authors: {author_str}\n"
+            response += f"   Year: {year}\n\n"
+
+        return response
+
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
         try:
+            print("\nHandling message...")
             message = state.get("message", "")
-            context = shared_state.get_current_context()
-
-            if context:
-                message += f"\n\nContext:\n{context}"
+            print(f"Received message: {message}")
 
             try:
-                # Get initial response with potential tool calls
+                print("Getting LLM response...")
                 response = self.chain.invoke({"input": message})
-            except ConnectionError as conn_err:
-                state["error"] = (
-                    f"Connection error: Please ensure Ollama service is running. Error: {str(conn_err)}"
+                print(f"LLM Response type: {type(response)}")
+                print(f"LLM Response content: {response.content}")
+
+                # Parse tool call or get default parameters
+                tool_call = self.parse_tool_call(response.content, message)
+                if not tool_call:
+                    raise ValueError(
+                        "Could not parse tool call or get default parameters"
+                    )
+
+                print(f"Executing search with parameters: {tool_call}")
+                tool_output = self.tool_executor.invoke(
+                    tool_call["name"], tool_call["args"]
                 )
+                print(f"Search results: {tool_output}")
+
+                if isinstance(tool_output, dict) and "papers" in tool_output:
+                    response_content = self.format_papers_response(
+                        tool_output["papers"]
+                    )
+                else:
+                    response_content = "Search completed but no papers were found."
+
+                state["response"] = response_content
+
+            except Exception as e:
+                print(f"Error in message handling: {str(e)}")
+                state["error"] = f"Error processing message: {str(e)}"
                 return state
-            except Exception as chain_err:
-                state["error"] = f"Chain error: {str(chain_err)}"
-                return state
 
-            messages = [HumanMessage(content=message), response]
-
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                for tool_call in response.tool_calls:
-                    try:
-                        tool_output = self.tool_executor.invoke(
-                            tool_call.name, tool_call.args
-                        )
-                        messages.append(
-                            ToolMessage(
-                                content=str(tool_output), tool_call_id=tool_call.id
-                            )
-                        )
-                    except Exception as tool_error:
-                        messages.append(
-                            ToolMessage(
-                                content=str(
-                                    {"error": f"Tool error: {str(tool_error)}"}
-                                ),
-                                tool_call_id=tool_call.id,
-                            )
-                        )
-
-                try:
-                    final_response = self.llm.invoke(messages)
-                    response_content = final_response.content
-                except Exception as llm_err:
-                    state["error"] = f"LLM response error: {str(llm_err)}"
-                    return state
-            else:
-                response_content = response.content
-
-            state["response"] = response_content
-            shared_state.add_to_chat_history("assistant", response_content)
+            print(f"Final response: {state.get('response')}")
+            if state.get("response"):
+                shared_state.add_to_chat_history("assistant", state["response"])
             return state
 
         except Exception as e:
+            print(f"Error in handle_message: {str(e)}")
             state["error"] = f"Error in S2 agent: {str(e)}"
             shared_state.set(config.StateKeys.ERROR, state["error"])
             return state
