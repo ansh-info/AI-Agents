@@ -52,19 +52,28 @@ class SemanticScholarAgent:
         """Parse tool call from response or return default"""
         if not content or content.isspace():
             print("Empty response received, using default parameters")
-            return self.get_default_search_params(original_query)
+            parameters = {"query": f"{original_query} recent research", "limit": 5}
+            return {
+                "type": "function",
+                "name": "search_papers",
+                "parameters": parameters,
+            }
 
         try:
+            # First try to parse as JSON
+            import json
+
             tool_call = json.loads(content)
+
             if isinstance(tool_call, dict) and tool_call.get("type") == "function":
-                return {
-                    "name": tool_call.get("name"),
-                    "args": tool_call.get("parameters", {}),
-                }
+                return tool_call  # Return the entire tool call structure
+
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON: {e}\nUsing default parameters")
-            return self.get_default_search_params(original_query)
-        return self.get_default_search_params(original_query)
+
+        # If we get here, use default parameters
+        parameters = {"query": f"{original_query} recent research", "limit": 5}
+        return {"type": "function", "name": "search_papers", "parameters": parameters}
 
     def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
         """Format papers list into readable response"""
@@ -102,16 +111,15 @@ class SemanticScholarAgent:
                 print(f"LLM Response content: {response.content}")
 
                 # Parse tool call or get default parameters
-                tool_call = self.parse_tool_call(response.content, message)
-                if not tool_call:
-                    raise ValueError(
-                        "Could not parse tool call or get default parameters"
-                    )
+                tool_params = self.parse_tool_call(response.content, message)
 
-                print(f"Executing search with parameters: {tool_call}")
+                print(f"Using search parameters: {tool_params}")
+
+                # Execute search with parameters
                 tool_output = self.tool_executor.invoke(
-                    tool_call["name"], tool_call["args"]
+                    tool_params["name"], tool_params["parameters"]
                 )
+
                 print(f"Search results: {tool_output}")
 
                 if isinstance(tool_output, dict) and "papers" in tool_output:
