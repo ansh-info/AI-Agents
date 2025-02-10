@@ -55,15 +55,24 @@ class SemanticScholarAgent:
             return self.get_default_search_params(original_query)
 
         try:
+            # First try to parse as JSON
+            import json
+
             tool_call = json.loads(content)
-            if isinstance(tool_call, dict) and tool_call.get("type") == "function":
-                return {
-                    "name": tool_call.get("name"),
-                    "args": tool_call.get("parameters", {}),
-                }
+
+            if isinstance(tool_call, dict):
+                if tool_call.get("type") == "function":
+                    # Extract the parameters from the tool call
+                    params = tool_call.get("parameters", {})
+                    return {
+                        "name": tool_call.get("name", "search_papers"),
+                        "query": params.get("query", original_query),
+                        "limit": params.get("limit", 5),
+                    }
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON: {e}\nUsing default parameters")
-            return self.get_default_search_params(original_query)
+
+        # If we get here, use default parameters
         return self.get_default_search_params(original_query)
 
     def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
@@ -102,16 +111,16 @@ class SemanticScholarAgent:
                 print(f"LLM Response content: {response.content}")
 
                 # Parse tool call or get default parameters
-                tool_call = self.parse_tool_call(response.content, message)
-                if not tool_call:
-                    raise ValueError(
-                        "Could not parse tool call or get default parameters"
-                    )
+                tool_params = self.parse_tool_call(response.content, message)
 
-                print(f"Executing search with parameters: {tool_call}")
+                print(f"Using search parameters: {tool_params}")
+
+                # Execute search with parameters
                 tool_output = self.tool_executor.invoke(
-                    tool_call["name"], tool_call["args"]
+                    "search_papers",
+                    {"query": tool_params["query"], "limit": tool_params["limit"]},
                 )
+
                 print(f"Search results: {tool_output}")
 
                 if isinstance(tool_output, dict) and "papers" in tool_output:
