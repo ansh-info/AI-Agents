@@ -52,7 +52,12 @@ class SemanticScholarAgent:
         """Parse tool call from response or return default"""
         if not content or content.isspace():
             print("Empty response received, using default parameters")
-            return self.get_default_search_params(original_query)
+            parameters = {"query": f"{original_query} recent research", "limit": 5}
+            return {
+                "type": "function",
+                "name": "search_papers",
+                "parameters": parameters,
+            }
 
         try:
             # First try to parse as JSON
@@ -60,20 +65,15 @@ class SemanticScholarAgent:
 
             tool_call = json.loads(content)
 
-            if isinstance(tool_call, dict):
-                if tool_call.get("type") == "function":
-                    # Extract the parameters from the tool call
-                    params = tool_call.get("parameters", {})
-                    return {
-                        "name": tool_call.get("name", "search_papers"),
-                        "query": params.get("query", original_query),
-                        "limit": params.get("limit", 5),
-                    }
+            if isinstance(tool_call, dict) and tool_call.get("type") == "function":
+                return tool_call  # Return the entire tool call structure
+
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON: {e}\nUsing default parameters")
 
         # If we get here, use default parameters
-        return self.get_default_search_params(original_query)
+        parameters = {"query": f"{original_query} recent research", "limit": 5}
+        return {"type": "function", "name": "search_papers", "parameters": parameters}
 
     def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
         """Format papers list into readable response"""
@@ -117,8 +117,7 @@ class SemanticScholarAgent:
 
                 # Execute search with parameters
                 tool_output = self.tool_executor.invoke(
-                    "search_papers",
-                    {"query": tool_params["query"], "limit": tool_params["limit"]},
+                    tool_params["name"], tool_params["parameters"]
                 )
 
                 print(f"Search results: {tool_output}")
