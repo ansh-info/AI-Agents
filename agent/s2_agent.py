@@ -24,18 +24,26 @@ class SemanticScholarAgent:
     def __init__(self):
         try:
             print("Initializing S2 Agent...")
-            # Only bind search_papers tool
-            self.llm = llm_manager.llm.bind_tools([s2_tools[0]])
-            self.tool_executor = ToolExecutor([s2_tools[0]])
 
-            # Create simplified prompt template
+            # Configure the search tool
+            self.search_tool = s2_tools[0]  # Get search_papers tool
+
+            # Initialize LLM with the tool
+            self.llm = llm_manager.llm.bind_tools([self.search_tool])
+
+            # Initialize tool executor with the same tool
+            self.tool_executor = ToolExecutor(tools=[self.search_tool])
+
+            # Create prompt template
             self.prompt = ChatPromptTemplate.from_messages(
                 [("system", config.S2_AGENT_PROMPT), ("human", "{input}")]
             )
 
             # Create chain
             self.chain = self.prompt | self.llm
+
             print("S2 Agent initialized successfully")
+
         except Exception as e:
             print(f"Initialization error: {str(e)}")
             raise
