@@ -163,21 +163,9 @@ def get_multi_paper_recommendations(
         return {"status": "error", "error": error_msg, "recommendations": []}
 
 
-# Configure the search_papers tool with explicit parameter configuration
-search_papers_configured = search_papers.configurable_alternatives(
-    dict(
-        query={"type": "string", "description": "Search query string"},
-        limit={
-            "type": "integer",
-            "default": 5,
-            "description": "Maximum number of results to return",
-        },
-    )
-)
-
-# Export all tools with the configured search_papers
+# Export the base tools
 s2_tools = [
-    search_papers_configured,
+    search_papers,
     get_single_paper_recommendations,
     get_multi_paper_recommendations,
 ]

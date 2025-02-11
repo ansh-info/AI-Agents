@@ -25,13 +25,13 @@ class SemanticScholarAgent:
         try:
             print("Initializing S2 Agent...")
 
-            # Configure the search tool
-            self.search_tool = s2_tools[0]  # Get search_papers tool
+            # Get the search tool
+            self.search_tool = s2_tools[0]
 
-            # Initialize LLM with the tool
+            # Configure the LLM with the tool
             self.llm = llm_manager.llm.bind_tools([self.search_tool])
 
-            # Initialize tool executor with the same tool
+            # Create tool executor
             self.tool_executor = ToolExecutor(tools=[self.search_tool])
 
             # Create prompt template
