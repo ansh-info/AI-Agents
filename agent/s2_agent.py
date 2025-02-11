@@ -111,13 +111,20 @@ class SemanticScholarAgent:
                 print(f"LLM Response content: {response.content}")
 
                 # Parse tool call or get default parameters
-                tool_params = self.parse_tool_call(response.content, message)
+                tool_call = self.parse_tool_call(response.content, message)
+                print(f"Parsed tool call: {tool_call}")
 
-                print(f"Using search parameters: {tool_params}")
+                if "parameters" not in tool_call:
+                    raise ValueError("Missing parameters in tool call")
 
-                # Execute search with parameters
+                # Extract parameters
+                params = tool_call["parameters"]
+                print(f"Executing tool with parameters: {params}")
+
+                # Execute search directly with the parameters
                 tool_output = self.tool_executor.invoke(
-                    tool_params["name"], tool_params["parameters"]
+                    "search_papers",  # Always use search_papers as the tool name
+                    params,  # Pass the parameters directly
                 )
 
                 print(f"Search results: {tool_output}")
