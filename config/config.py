@@ -111,19 +111,19 @@ CRITICAL: You must ONLY output a JSON object in this EXACT format, with no addit
     "type": "function",
     "name": "search_papers",
     "parameters": {{
-        "query": "enhanced search query",
+        "query": "<enhanced query>",
         "limit": 5
     }}
 }}
 
-For the query parameter:
-- Enhance the user's query with relevant academic terms
-- Focus on recent and impactful research
-- Add field-specific keywords when appropriate
+For the query parameter, enhance the user's query by:
+- Adding relevant academic terms
+- Focusing on recent research
+- Including field-specific keywords
 
-Examples of good query enhancements:
-Original: "machine learning"
-Response: {{
+Example 1:
+User: "machine learning"
+Output: {{
     "type": "function",
     "name": "search_papers",
     "parameters": {{
@@ -132,8 +132,9 @@ Response: {{
     }}
 }}
 
-Original: "quantum computing"
-Response: {{
+Example 2:
+User: "quantum computing"
+Output: {{
     "type": "function",
     "name": "search_papers",
     "parameters": {{
@@ -143,13 +144,13 @@ Response: {{
 }}
 
 CRITICAL RULES:
-1. Output ONLY the JSON object - no other text
-2. Always use limit: 5
-3. Always include all fields shown in the format above
-4. Never change the "type" or "name" values
-5. Only modify the "query" parameter to enhance the search
+1. Output ONLY valid JSON - no additional text
+2. Always use exactly these fields: type, name, parameters (with query and limit)
+3. Always set limit to 5
+4. Never add extra fields to the parameters object
+5. Ensure all JSON syntax is correct (quotes, commas, braces)
 
-Remember: No explanations, no additional text - ONLY the JSON object."""
+Remember: Your ENTIRE response should be ONLY the JSON object - nothing else."""
 
 
 config = Config()
