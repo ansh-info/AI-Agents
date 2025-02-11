@@ -1,9 +1,8 @@
-from typing import List, Dict, Any, Optional, Type
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field
-from pydantic import BaseModel, Field
-from langchain_core.tools import tool, BaseTool
+from typing import Any, Dict, List, Optional, Type
+
 import requests
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
 from config.config import config
 from state.shared_state import shared_state
@@ -11,7 +10,7 @@ from state.shared_state import shared_state
 
 class SearchInput(BaseModel):
     query: str = Field(description="Search query string")
-    limit: int = Field(default=10, description="Maximum number of results to return")
+    limit: int = Field(default=5, description="Maximum number of results to return")
     fields: Optional[List[str]] = Field(
         default=None, description="List of fields to include in results"
     )
@@ -19,13 +18,13 @@ class SearchInput(BaseModel):
 
 @tool(args_schema=SearchInput)
 def search_papers(
-    query: str, limit: int = 10, fields: Optional[List[str]] = None
+    query: str, limit: int = 5, fields: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Search for academic papers on Semantic Scholar.
 
     Args:
         query: Search query string
-        limit: Maximum number of results (default: 10)
+        limit: Maximum number of results (default: 5)
         fields: Optional list of fields to include in results
 
     Returns:
@@ -67,11 +66,11 @@ def search_papers(
 # Create schema for single paper recommendation
 class SinglePaperRecInput(BaseModel):
     paper_id: str = Field(description="ID of the paper to get recommendations for")
-    limit: int = Field(default=10, description="Maximum number of recommendations")
+    limit: int = Field(default=5, description="Maximum number of recommendations")
 
 
 @tool(args_schema=SinglePaperRecInput)
-def get_single_paper_recommendations(paper_id: str, limit: int = 10) -> Dict[str, Any]:
+def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper.
 
     Args:
@@ -112,12 +111,12 @@ class MultiPaperRecInput(BaseModel):
     paper_ids: List[str] = Field(
         description="List of paper IDs to get recommendations for"
     )
-    limit: int = Field(default=10, description="Maximum number of recommendations")
+    limit: int = Field(default=5, description="Maximum number of recommendations")
 
 
 @tool(args_schema=MultiPaperRecInput)
 def get_multi_paper_recommendations(
-    paper_ids: List[str], limit: int = 10
+    paper_ids: List[str], limit: int = 5
 ) -> Dict[str, Any]:
     """Get paper recommendations based on multiple papers.
 
@@ -128,9 +127,6 @@ def get_multi_paper_recommendations(
     Returns:
         Dict containing recommended papers
     """
-    # Here we'd implement logic to get recommendations based on multiple papers
-    # This could involve calling the API multiple times and aggregating results
-    # For now, we'll use a simple implementation
     all_recommendations = []
 
     try:
@@ -167,7 +163,7 @@ def get_multi_paper_recommendations(
         return {"status": "error", "error": error_msg, "recommendations": []}
 
 
-# Export all tools
+# Export the base tools
 s2_tools = [
     search_papers,
     get_single_paper_recommendations,

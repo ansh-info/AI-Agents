@@ -24,24 +24,32 @@ class SemanticScholarAgent:
     def __init__(self):
         try:
             print("Initializing S2 Agent...")
-            # Only bind search_papers tool
-            self.llm = llm_manager.llm.bind_tools([s2_tools[0]])
-            self.tool_executor = ToolExecutor([s2_tools[0]])
 
-            # Create simplified prompt template
+            # Get the search tool
+            self.search_tool = s2_tools[0]
+
+            # Configure the LLM with the tool
+            self.llm = llm_manager.llm.bind_tools([self.search_tool])
+
+            # Create tool executor
+            self.tool_executor = ToolExecutor(tools=[self.search_tool])
+
+            # Create prompt template
             self.prompt = ChatPromptTemplate.from_messages(
                 [("system", config.S2_AGENT_PROMPT), ("human", "{input}")]
             )
 
             # Create chain
             self.chain = self.prompt | self.llm
+
             print("S2 Agent initialized successfully")
+
         except Exception as e:
             print(f"Initialization error: {str(e)}")
             raise
 
     def get_default_search_params(self, query: str) -> Dict[str, Any]:
-        """Generate default search parameters for empty responses"""
+        """Generate default search parameters"""
         return {
             "type": "function",
             "name": "search_papers",
@@ -52,28 +60,31 @@ class SemanticScholarAgent:
         """Parse tool call from response or return default"""
         if not content or content.isspace():
             print("Empty response received, using default parameters")
-            parameters = {"query": f"{original_query} recent research", "limit": 5}
-            return {
-                "type": "function",
-                "name": "search_papers",
-                "parameters": parameters,
-            }
+            return self.get_default_search_params(original_query)
 
         try:
             # First try to parse as JSON
-            import json
-
             tool_call = json.loads(content)
 
             if isinstance(tool_call, dict) and tool_call.get("type") == "function":
-                return tool_call  # Return the entire tool call structure
+                # Validate the structure
+                params = tool_call.get("parameters", {})
+                if not params.get("query"):
+                    params["query"] = original_query
+                if not params.get("limit"):
+                    params["limit"] = 5
 
-        except json.JSONDecodeError as e:
+                return {
+                    "type": "function",
+                    "name": "search_papers",
+                    "parameters": params,
+                }
+
+        except (json.JSONDecodeError, KeyError) as e:
             print(f"Error parsing JSON: {e}\nUsing default parameters")
 
         # If we get here, use default parameters
-        parameters = {"query": f"{original_query} recent research", "limit": 5}
-        return {"type": "function", "name": "search_papers", "parameters": parameters}
+        return self.get_default_search_params(original_query)
 
     def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
         """Format papers list into readable response"""
@@ -111,13 +122,20 @@ class SemanticScholarAgent:
                 print(f"LLM Response content: {response.content}")
 
                 # Parse tool call or get default parameters
-                tool_params = self.parse_tool_call(response.content, message)
+                tool_call = self.parse_tool_call(response.content, message)
+                print(f"Parsed tool call: {tool_call}")
 
-                print(f"Using search parameters: {tool_params}")
+                if "parameters" not in tool_call:
+                    raise ValueError("Missing parameters in tool call")
 
-                # Execute search with parameters
+                # Extract parameters
+                params = tool_call["parameters"]
+                print(f"Executing tool with parameters: {params}")
+
+                # Execute search directly with the parameters
                 tool_output = self.tool_executor.invoke(
-                    tool_params["name"], tool_params["parameters"]
+                    "search_papers",  # Always use search_papers as the tool name
+                    params,  # Pass the parameters directly
                 )
 
                 print(f"Search results: {tool_output}")
