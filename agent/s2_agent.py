@@ -41,7 +41,7 @@ class SemanticScholarAgent:
             raise
 
     def get_default_search_params(self, query: str) -> Dict[str, Any]:
-        """Generate default search parameters for empty responses"""
+        """Generate default search parameters"""
         return {
             "type": "function",
             "name": "search_papers",
@@ -52,28 +52,31 @@ class SemanticScholarAgent:
         """Parse tool call from response or return default"""
         if not content or content.isspace():
             print("Empty response received, using default parameters")
-            parameters = {"query": f"{original_query} recent research", "limit": 5}
-            return {
-                "type": "function",
-                "name": "search_papers",
-                "parameters": parameters,
-            }
+            return self.get_default_search_params(original_query)
 
         try:
             # First try to parse as JSON
-            import json
-
             tool_call = json.loads(content)
 
             if isinstance(tool_call, dict) and tool_call.get("type") == "function":
-                return tool_call  # Return the entire tool call structure
+                # Validate the structure
+                params = tool_call.get("parameters", {})
+                if not params.get("query"):
+                    params["query"] = original_query
+                if not params.get("limit"):
+                    params["limit"] = 5
 
-        except json.JSONDecodeError as e:
+                return {
+                    "type": "function",
+                    "name": "search_papers",
+                    "parameters": params,
+                }
+
+        except (json.JSONDecodeError, KeyError) as e:
             print(f"Error parsing JSON: {e}\nUsing default parameters")
 
         # If we get here, use default parameters
-        parameters = {"query": f"{original_query} recent research", "limit": 5}
-        return {"type": "function", "name": "search_papers", "parameters": parameters}
+        return self.get_default_search_params(original_query)
 
     def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
         """Format papers list into readable response"""
