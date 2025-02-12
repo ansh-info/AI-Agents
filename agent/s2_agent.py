@@ -24,29 +24,53 @@ class SemanticScholarAgent:
     def __init__(self):
         try:
             print("Initializing S2 Agent...")
-
-            # Get the search tool
+            
+            # Store the search tool
             self.search_tool = s2_tools[0]
-
+            
             # Configure the LLM with the tool
             self.llm = llm_manager.llm.bind_tools([self.search_tool])
 
-            # Create tool executor
-            self.tool_executor = ToolExecutor(tools=[self.search_tool])
-
             # Create prompt template
-            self.prompt = ChatPromptTemplate.from_messages(
-                [("system", config.S2_AGENT_PROMPT), ("human", "{input}")]
-            )
+            self.prompt = ChatPromptTemplate.from_messages([
+                ("system", config.S2_AGENT_PROMPT),
+                ("human", "{input}")
+            ])
 
             # Create chain
             self.chain = self.prompt | self.llm
-
+            
             print("S2 Agent initialized successfully")
-
+            
         except Exception as e:
             print(f"Initialization error: {str(e)}")
-            raise
+            raisedef __init__(self):
+    try:
+        print("Initializing S2 Agent...")
+        
+        # Get the search tool
+        self.search_tool = s2_tools[0]
+        
+        # Configure the LLM with the tool
+        self.llm = llm_manager.llm.bind_tools([self.search_tool])
+        
+        # Create tool executor 
+        self.tool_executor = ToolExecutor(tools=[self.search_tool])
+
+        # Create prompt template
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", config.S2_AGENT_PROMPT),
+            ("human", "{input}")
+        ])
+
+        # Create chain
+        self.chain = self.prompt | self.llm
+        
+        print("S2 Agent initialized successfully")
+        
+    except Exception as e:
+        print(f"Initialization error: {str(e)}")
+        raise
 
     def get_default_search_params(self, query: str) -> Dict[str, Any]:
         """Generate default search parameters"""
