@@ -128,14 +128,13 @@ class SemanticScholarAgent:
                 if "parameters" not in tool_call:
                     raise ValueError("Missing parameters in tool call")
 
-                # Extract parameters
+                # Extract parameters and run the search directly
                 params = tool_call["parameters"]
                 print(f"Executing tool with parameters: {params}")
 
-                # Execute search directly with the parameters
-                tool_output = self.tool_executor.invoke(
-                    "search_papers",  # Always use search_papers as the tool name
-                    params,  # Pass the parameters directly
+                # Execute the search function directly
+                tool_output = search_papers(
+                    query=params["query"], limit=params["limit"]
                 )
 
                 print(f"Search results: {tool_output}")
