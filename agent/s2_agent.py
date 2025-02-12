@@ -1,7 +1,8 @@
-from typing import List, Dict, Any, Type, TypedDict
 import json
+from typing import Any, Dict, List, Type, TypedDict
+
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
@@ -25,14 +26,11 @@ class SemanticScholarAgent:
         try:
             print("Initializing S2 Agent...")
 
-            # Get the search tool
+            # Store the search tool
             self.search_tool = s2_tools[0]
 
             # Configure the LLM with the tool
             self.llm = llm_manager.llm.bind_tools([self.search_tool])
-
-            # Create tool executor
-            self.tool_executor = ToolExecutor(tools=[self.search_tool])
 
             # Create prompt template
             self.prompt = ChatPromptTemplate.from_messages(
@@ -132,11 +130,10 @@ class SemanticScholarAgent:
                 params = tool_call["parameters"]
                 print(f"Executing tool with parameters: {params}")
 
-                # Execute search directly with the parameters
-                tool_output = self.tool_executor.invoke(
-                    "search_papers",  # Always use search_papers as the tool name
-                    params,  # Pass the parameters directly
-                )
+                # Execute search with the proper invocation format
+                search_args = [params["query"]]
+                search_kwargs = {"limit": params["limit"]}
+                tool_output = self.search_tool.invoke(*search_args, **search_kwargs)
 
                 print(f"Search results: {tool_output}")
 
