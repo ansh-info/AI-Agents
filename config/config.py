@@ -9,6 +9,9 @@ class Config:
     # API Endpoints
     SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1"
 
+    # API Keys
+    SEMANTIC_SCHOLAR_API_KEY = "YOUR_API_KEY"  # Get this from Semantic Scholar
+
     # State Keys
     class StateKeys:
         PAPERS = "papers"
