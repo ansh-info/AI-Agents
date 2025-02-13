@@ -1,14 +1,14 @@
 import os
 import sys
-from typing import Dict, Any
+from typing import Any, Dict
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 
 from agents.main_agent import main_agent
-from state.shared_state import shared_state
 from config.config import config
+from state.shared_state import shared_state
 
 
 def reset_shared_state():
@@ -56,24 +56,17 @@ def test_paper_search():
     """Test basic paper search functionality"""
     reset_shared_state()
     return run_test_case(
-        "Find papers about machine learning and neural networks", "Basic Paper Search"
+        "Find recent papers about machine learning and neural networks in computer vision",
+        "Basic Paper Search",
     )
 
 
-def test_paper_recommendations():
-    """Test paper recommendations functionality"""
-    # First, ensure we have some papers in state
-    papers = shared_state.get(config.StateKeys.PAPERS)
-    if not papers:
-        print("\nSkipping recommendations test - no papers available")
-        return None
-
-    paper_id = papers[0].get("paperId")
-    if not paper_id:
-        print("\nSkipping recommendations test - no valid paper ID found")
-        return None
-
-    return run_test_case(f"Find papers similar to {paper_id}", "Paper Recommendations")
+def test_search_with_specific_year():
+    """Test paper search with year specification"""
+    reset_shared_state()
+    return run_test_case(
+        "Find papers about quantum computing published in 2023", "Search with Year"
+    )
 
 
 def test_invalid_query():
@@ -86,10 +79,9 @@ def main():
     print("Starting tests...")
     print(f"Project root: {project_root}")
 
-    # Run tests
+    # Run search tests
     search_result = test_paper_search()
-    if search_result and not search_result.get("error"):
-        recommendations_result = test_paper_recommendations()
+    year_search_result = test_search_with_specific_year()
 
     # Test error handling
     error_result = test_invalid_query()

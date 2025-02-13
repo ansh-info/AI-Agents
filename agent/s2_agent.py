@@ -26,8 +26,11 @@ class SemanticScholarAgent:
         try:
             print("Initializing S2 Agent...")
 
-            # Store the search tool
-            self.search_tool = s2_tools[0]
+            # Store all S2 tools
+            self.tools = s2_tools
+
+            # For now, we'll only use the search tool
+            self.search_tool = self.tools[0]
 
             # Configure the LLM with the tool
             self.llm = llm_manager.llm.bind_tools([self.search_tool])
@@ -61,12 +64,27 @@ class SemanticScholarAgent:
             return self.get_default_search_params(original_query)
 
         try:
-            # First try to parse as JSON
+            # Try to extract just the JSON part if there's additional text
+            content = content.strip()
+            first_brace = content.find("{")
+            last_brace = content.rfind("}")
+            if first_brace != -1 and last_brace != -1:
+                content = content[first_brace : last_brace + 1]
+
+            # Parse the JSON
             tool_call = json.loads(content)
 
+            # Validate the structure
             if isinstance(tool_call, dict) and tool_call.get("type") == "function":
-                # Validate the structure
+                name = tool_call.get("name", "")
                 params = tool_call.get("parameters", {})
+
+                # Currently only supporting search_papers
+                if name != "search_papers":
+                    print(f"Tool {name} not yet implemented, using search_papers")
+                    return self.get_default_search_params(original_query)
+
+                # Ensure required parameters exist
                 if not params.get("query"):
                     params["query"] = original_query
                 if not params.get("limit"):
@@ -145,6 +163,7 @@ class SemanticScholarAgent:
                     response_content = "Search completed but no papers were found."
 
                 state["response"] = response_content
+                state["error"] = None
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")

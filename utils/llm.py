@@ -9,7 +9,11 @@ from state.shared_state import shared_state
 
 def create_llm() -> ChatOllama:
     """Create and configure Ollama LLM instance"""
-    return ChatOllama(model=config.LLM_MODEL, temperature=config.TEMPERATURE)
+    return ChatOllama(
+        model=config.LLM_MODEL,
+        temperature=0.1,  # Lower temperature for more deterministic outputs
+        stop=["</function>", "```"],  # Stop tokens to prevent extra content
+    )
 
 
 class LLMManager:
