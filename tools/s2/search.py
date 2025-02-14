@@ -1,7 +1,8 @@
 import time
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
+
 import requests
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from config.config import config
@@ -40,13 +41,7 @@ def search_papers(
 
     for attempt in range(max_retries):
         try:
-            response = requests.get(
-                endpoint,
-                params=params,
-                headers={
-                    "x-api-key": config.SEMANTIC_SCHOLAR_API_KEY
-                },  # Add API key if available
-            )
+            response = requests.get(endpoint, params=params)
 
             if response.status_code == 429:  # Rate limit hit
                 if attempt < max_retries - 1:  # If not the last attempt
@@ -58,21 +53,10 @@ def search_papers(
             data = response.json()
             papers = data.get("data", [])
 
-            # Filter out papers with missing crucial information
-            filtered_papers = [
-                paper
-                for paper in papers
-                if paper.get("title") and paper.get("authors")  # Basic validation
-            ]
-
             # Update shared state with search results
-            shared_state.add_papers(filtered_papers)
+            shared_state.add_papers(papers)
 
-            return {
-                "status": "success",
-                "papers": filtered_papers,
-                "total": len(filtered_papers),
-            }
+            return {"status": "success", "papers": papers, "total": len(papers)}
 
         except requests.exceptions.RequestException as e:
             if attempt == max_retries - 1:  # If last attempt
