@@ -29,7 +29,8 @@ def reset_shared_state():
 def run_test_case(message: str, test_name: str) -> Dict[str, Any]:
     """Run a single test case and return results"""
     print(f"\nTest Case: {test_name}")
-    print("Query:", message)
+    print("=" * 50)
+    print("Input Query:", message)
 
     # Prepare initial state for main agent
     state = {
@@ -38,58 +39,58 @@ def run_test_case(message: str, test_name: str) -> Dict[str, Any]:
         "error": None,
     }
 
-    # Create and run the main agent workflow
+    # Process through main agent
     graph = main_agent.create_graph()
     result = graph.invoke(state)
 
     # Print results
-    print("\nMain Agent Decision:")
-    print("Response:", result.get("response"))
-    print("Error:", result.get("error"))
+    print("\nResults:")
+    print("-" * 50)
+    if result.get("error"):
+        print("Error:", result["error"])
+    else:
+        print(result.get("response", "No response"))
+
     print("\nFinal State:")
+    print("-" * 50)
     print("Papers found:", len(shared_state.get(config.StateKeys.PAPERS)))
-    print("Routed to agent:", shared_state.get(config.StateKeys.CURRENT_AGENT))
+    print("Processed by:", shared_state.get(config.StateKeys.CURRENT_AGENT))
+    print("=" * 50 + "\n")
 
     return result
 
 
 def test_paper_search():
-    """Test paper search through main agent"""
+    """Test paper search routing and results"""
     reset_shared_state()
     return run_test_case(
         "Find recent papers about machine learning and neural networks in computer vision",
-        "Paper Search Routing",
+        "Basic Paper Search Test",
     )
 
 
 def test_search_with_year():
-    """Test year-specific search through main agent"""
+    """Test year-specific search routing and results"""
     reset_shared_state()
     return run_test_case(
         "Find papers about quantum computing published in 2023",
-        "Year-Specific Search Routing",
+        "Year-Specific Search Test",
     )
 
 
 def test_invalid_query():
-    """Test handling of invalid queries through main agent"""
+    """Test invalid query handling"""
     reset_shared_state()
-    return run_test_case("Please do something undefined", "Invalid Query Routing")
+    return run_test_case("Please do something undefined", "Invalid Query Test")
 
 
 def main():
-    print("Starting Main Agent Tests...")
-    print(f"Project root: {project_root}")
+    print("Starting Agent Tests...")
+    print("Project root:", project_root)
 
-    # Run routing tests
-    print("\n=== Testing Search Routing ===")
-    search_result = test_paper_search()
-
-    print("\n=== Testing Year Search Routing ===")
-    year_search_result = test_search_with_year()
-
-    print("\n=== Testing Invalid Query Handling ===")
-    error_result = test_invalid_query()
+    test_paper_search()
+    test_search_with_year()
+    test_invalid_query()
 
     print("\nTest suite completed.")
 
