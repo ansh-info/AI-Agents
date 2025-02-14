@@ -1,3 +1,5 @@
+# In tools/s2/search.py
+
 import time
 from typing import Any, Dict, List, Optional
 
@@ -33,8 +35,32 @@ def search_papers(
             "openAccessPdf",
         ]
 
+    # Clean and enhance the query
+    search_terms = query.lower().split()
+    if "in" in search_terms:
+        search_terms.remove("in")
+    if "published" in search_terms:
+        search_terms.remove("published")
+
+    # Extract year if present
+    year = None
+    for i, term in enumerate(search_terms):
+        if term.isdigit() and len(term) == 4:
+            year = int(term)
+            search_terms.pop(i)
+            break
+
+    # Build enhanced query
+    enhanced_query = " ".join(search_terms)
+    if year:
+        enhanced_query = f"year:{year} {enhanced_query}"
+
     endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/search"
-    params = {"query": query, "limit": limit, "fields": ",".join(fields)}
+    params = {
+        "query": enhanced_query,
+        "limit": limit,
+        "fields": ",".join(fields),
+    }
 
     max_retries = 3
     retry_delay = 1  # Starting delay in seconds
@@ -44,7 +70,7 @@ def search_papers(
             response = requests.get(endpoint, params=params)
 
             if response.status_code == 429:  # Rate limit hit
-                if attempt < max_retries - 1:  # If not the last attempt
+                if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                     continue
@@ -53,10 +79,23 @@ def search_papers(
             data = response.json()
             papers = data.get("data", [])
 
-            # Update shared state with search results
-            shared_state.add_papers(papers)
+            # Filter invalid or incomplete papers
+            filtered_papers = [
+                paper
+                for paper in papers
+                if paper.get("title")  # Must have title
+                and paper.get("authors")  # Must have authors
+                and (not year or paper.get("year") == year)  # Match year if specified
+            ]
 
-            return {"status": "success", "papers": papers, "total": len(papers)}
+            # Update shared state with search results
+            shared_state.add_papers(filtered_papers)
+
+            return {
+                "status": "success",
+                "papers": filtered_papers,
+                "total": len(filtered_papers),
+            }
 
         except requests.exceptions.RequestException as e:
             if attempt == max_retries - 1:  # If last attempt

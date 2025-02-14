@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolExecutor
 
 from config.config import config
 from state.shared_state import shared_state
-from tools.s2.search import s2_tools
+from tools.s2 import s2_tools  # Updated import
 from utils.llm import llm_manager
 
 
@@ -26,11 +26,8 @@ class SemanticScholarAgent:
         try:
             print("Initializing S2 Agent...")
 
-            # Store all S2 tools
-            self.tools = s2_tools
-
-            # For now, we'll only use the search tool
-            self.search_tool = self.tools[0]
+            # Store the search tool
+            self.search_tool = s2_tools[0]
 
             # Configure the LLM with the tool
             self.llm = llm_manager.llm.bind_tools([self.search_tool])
