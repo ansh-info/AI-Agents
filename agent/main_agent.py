@@ -151,12 +151,14 @@ Remember to:
                 # Invoke the agent's graph
                 result = graph.invoke(agent_state)
 
-                # Update main state with result
-                state["response"] = result.get("response")
-                state["error"] = result.get("error")
+                # Simply pass through the agent's response
+                if result.get("response"):
+                    state["response"] = result["response"]
+                if result.get("error"):
+                    state["error"] = result["error"]
 
             else:
-                state["response"] = routing["response"]
+                state["response"] = "I'm not sure which agent should handle this query."
                 state["error"] = "Could not determine appropriate agent"
 
             return state
