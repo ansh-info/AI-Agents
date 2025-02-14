@@ -128,18 +128,21 @@ Remember to:
         }
 
     def route_to_agent(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Route the query to appropriate agent"""
+        """Route the query to appropriate agent and handle response"""
         try:
-            # Get current message
+            print("\nMain Agent Processing...")
             message = state.get("message", "")
+            print(f"Received query: {message}")
 
             # Determine which agent should handle it
             routing = self.determine_next_agent(message)
             agent_name = routing["next_agent"]
+            print(f"Selected agent: {agent_name}")
 
             if agent_name and agent_name in self.agents:
                 # Update state with current agent
                 shared_state.set(config.StateKeys.CURRENT_AGENT, agent_name)
+                print(f"Routing to {agent_name}")
 
                 # Create new state for sub-agent
                 agent_state = {"message": routing["query"]}
@@ -149,18 +152,25 @@ Remember to:
                 graph = agent.create_graph()
 
                 # Invoke the agent's graph
-                result = graph.invoke(agent_state)
+                sub_agent_result = graph.invoke(agent_state)
+                print("Received response from sub-agent")
 
-                # Simply pass through the agent's response
-                if result.get("response"):
-                    state["response"] = result["response"]
-                if result.get("error"):
-                    state["error"] = result["error"]
+                # Process and format the response
+                if sub_agent_result.get("response"):
+                    state["response"] = (
+                        f"Results from {agent_name}:\n\n{sub_agent_result['response']}"
+                    )
+                else:
+                    state["response"] = "No results found."
+
+                if sub_agent_result.get("error"):
+                    state["error"] = sub_agent_result["error"]
 
             else:
                 state["response"] = "I'm not sure which agent should handle this query."
                 state["error"] = "Could not determine appropriate agent"
 
+            print("Main Agent finished processing")
             return state
 
         except Exception as e:
