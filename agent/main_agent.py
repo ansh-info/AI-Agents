@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, TypedDict
+import json
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
@@ -80,52 +81,49 @@ Remember to:
         Returns:
             Dict with next agent and possibly modified query
         """
-        messages = [HumanMessage(content=query)]
-        context = shared_state.get_current_context()
+        try:
+            # Get LLM's routing decision
+            response = self.llm.get_response(
+                system_prompt=config.MAIN_AGENT_PROMPT,
+                user_input=query,
+            )
 
-        # Get LLM's routing decision
-        response = self.llm.get_response(
-            system_prompt=config.MAIN_AGENT_PROMPT,
-            user_input=query,
-            additional_context=context,
-        )
+            # Parse JSON response
+            try:
+                routing = json.loads(response)
+                agent_name = routing.get("agent")
+                confidence = routing.get("confidence", 0.0)
+                reasoning = routing.get("reasoning", "No reasoning provided")
 
-        # Map of keywords to agent names
-        agent_keywords = {
-            config.AgentNames.S2: [
-                "paper",
-                "search",
-                "find",
-                "semantic scholar",
-                "papers",
-                "research",
-                "publication",
-            ],
-            config.AgentNames.ZOTERO: ["zotero", "save", "library", "reference"],
-            config.AgentNames.PDF: ["pdf", "read", "analyze", "content"],
-            config.AgentNames.ARXIV: ["arxiv", "download", "get pdf"],
-        }
+                # Only route if confidence is high enough
+                if confidence >= 0.5 and agent_name:
+                    return {
+                        "next_agent": agent_name,
+                        "query": query,
+                        "response": f"Routing to {agent_name} ({confidence:.2f} confidence): {reasoning}",
+                    }
+                else:
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": "Could not determine appropriate agent with sufficient confidence",
+                    }
 
-        # Check response and query against keywords
-        response_lower = response.lower()
-        query_lower = query.lower()
-
-        for agent_name, keywords in agent_keywords.items():
-            # Check if any keyword is in either response or query
-            if any(keyword in response_lower for keyword in keywords) or any(
-                keyword in query_lower for keyword in keywords
-            ):
+            except json.JSONDecodeError:
+                print(f"Failed to parse LLM response as JSON: {response}")
                 return {
-                    "next_agent": agent_name,
+                    "next_agent": None,
                     "query": query,
-                    "response": f"Routing to {agent_name} to handle this query.",
+                    "response": "Error: Invalid routing response format",
                 }
 
-        return {
-            "next_agent": None,
-            "query": query,
-            "response": "I'm not sure which agent should handle this query.",
-        }
+        except Exception as e:
+            print(f"Error in determine_next_agent: {str(e)}")
+            return {
+                "next_agent": None,
+                "query": query,
+                "response": f"Error determining next agent: {str(e)}",
+            }
 
     def route_to_agent(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Route the query to appropriate agent and handle response"""

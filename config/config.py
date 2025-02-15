@@ -100,11 +100,45 @@ Routing Guidelines:
    - "Download the full PDF of this paper"
    - "Get the paper from arXiv"
 
-Your task is to:
-1. Analyze the user's query
-2. Match it to the most appropriate agent based on capabilities and keywords
-3. Route the query to that agent
-4. Provide clear feedback about your routing decision"""
+CRITICAL INSTRUCTION: You MUST respond with ONLY a JSON object in this exact format:
+{
+    "type": "route",
+    "agent": "<agent_name>",
+    "confidence": <0.0 to 1.0>,
+    "reason": "<brief reason for selection>"
+}
+
+Example responses:
+
+For "Find papers about machine learning":
+{
+    "type": "route",
+    "agent": "semantic_scholar_agent",
+    "confidence": 0.95,
+    "reason": "Query requests paper search, matching Semantic Scholar's primary function"
+}
+
+For "Save to my library":
+{
+    "type": "route",
+    "agent": "zotero_agent",
+    "confidence": 0.90,
+    "reason": "Query involves library management, Zotero's core capability"
+}
+
+For an unclear query like "help me":
+{
+    "type": "route",
+    "agent": null,
+    "confidence": 0.1,
+    "reason": "Query too vague to determine appropriate agent"
+}
+
+RULES:
+1. ALWAYS respond with ONLY the JSON object - no additional text
+2. If confidence < 0.5, set agent to null
+3. Keep reason brief and focused on agent selection
+4. Maintain exact JSON structure"""
 
     S2_AGENT_PROMPT = """You are a specialized agent for interacting with Semantic Scholar.
 Your role is to help users find academic papers using three available tools:
