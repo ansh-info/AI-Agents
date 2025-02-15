@@ -1,9 +1,7 @@
-# In utils/llm.py
-
+from typing import Any, Dict, List, Union
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
-
 from config.config import config
 from state.shared_state import shared_state
 
@@ -40,19 +38,25 @@ class LLMManager:
                 HumanMessage(content=user_input),
             ]
 
+            # Add debug logging
+            print("\nDebug - LLM Input:")
+            print(f"System prompt: {system_prompt[:200]}...")
+            print(f"User input: {user_input}")
+
             # Get response with retries
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     response = self.llm.invoke(messages)
-                    if response and hasattr(response, "content"):
-                        # Clean up the response - remove any trailing newlines
-                        cleaned_content = response.content.strip()
-                        print(
-                            f"\nDebug - Cleaned LLM Response (Attempt {attempt + 1}):"
-                        )
-                        print(f"Raw response: {cleaned_content}")
-                        return cleaned_content
+
+                    # Add debug logging
+                    print(f"\nDebug - LLM Response (Attempt {attempt + 1}):")
+                    print(f"Raw response: {response.content}")
+
+                    if response and response.content.strip():
+                        # Return the cleaned content without validation
+                        # Let the calling function handle JSON validation
+                        return response.content.strip()
 
                     if attempt < max_retries - 1:
                         print(f"Empty response on attempt {attempt + 1}, retrying...")
