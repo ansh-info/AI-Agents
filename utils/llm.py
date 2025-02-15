@@ -40,33 +40,24 @@ class LLMManager:
                 HumanMessage(content=user_input),
             ]
 
-            # Add debug logging
-            print("\nDebug - LLM Input:")
-            print(f"System prompt: {system_prompt[:200]}...")
-            print(f"User input: {user_input}")
-
             # Get response with retries
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     response = self.llm.invoke(messages)
-
-                    # Add debug logging
-                    print(f"\nDebug - LLM Response (Attempt {attempt + 1}):")
-                    print(f"Raw response: {response.content}")
-
-                    if response and response.content.strip():
-                        # Validate JSON structure if needed
-                        if (
-                            "type" in response.content
-                            and "parameters" in response.content
-                        ):
-                            return response.content
-                        print("Response missing required JSON structure")
+                    if response and hasattr(response, "content"):
+                        # Clean up the response - remove any trailing newlines
+                        cleaned_content = response.content.strip()
+                        print(
+                            f"\nDebug - Cleaned LLM Response (Attempt {attempt + 1}):"
+                        )
+                        print(f"Raw response: {cleaned_content}")
+                        return cleaned_content
 
                     if attempt < max_retries - 1:
-                        print(f"Invalid response on attempt {attempt + 1}, retrying...")
+                        print(f"Empty response on attempt {attempt + 1}, retrying...")
                         continue
+
                 except Exception as e:
                     if attempt < max_retries - 1:
                         print(f"Error on attempt {attempt + 1}: {str(e)}, retrying...")
