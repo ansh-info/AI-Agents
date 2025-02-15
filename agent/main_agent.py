@@ -96,50 +96,61 @@ Remember to:
                     "response": "No response from routing agent",
                 }
 
-            # Debug print the raw response
-            print(f"Raw response: {response}")
+            # Clean up the response
+            response = response.strip()
+            print(f"Processing response: {response}")
 
             try:
-                # Try parsing the response directly first
-                routing = json.loads(response)
+                # Find JSON boundaries if needed
+                first_brace = response.find("{")
+                last_brace = response.rfind("}")
+                if first_brace != -1 and last_brace != -1:
+                    json_str = response[first_brace : last_brace + 1]
+                else:
+                    json_str = response
 
-                # If that didn't work, try to find and extract JSON
-                if not routing:
-                    response = response.strip()
-                    first_brace = response.find("{")
-                    last_brace = response.rfind("}")
-                    if first_brace != -1 and last_brace != -1:
-                        json_str = response[first_brace : last_brace + 1]
-                        routing = json.loads(json_str)
+                print(f"Attempting to parse JSON: {json_str}")
+                routing = json.loads(json_str)
 
-                # Validate JSON structure
+                # Validate the routing object
+                if not isinstance(routing, dict):
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": "Invalid routing format - not a dictionary",
+                    }
+
+                # Validate required fields
                 required_fields = ["type", "agent", "confidence", "reason"]
                 if not all(field in routing for field in required_fields):
-                    print(f"Missing required fields. Found: {routing.keys()}")
                     return {
                         "next_agent": None,
                         "query": query,
-                        "response": "Invalid routing format - missing required fields",
+                        "response": f"Invalid routing format - missing fields. Found: {list(routing.keys())}",
                     }
 
-                # Validate type field
-                if routing["type"] != "route":
-                    print(f"Invalid type field: {routing['type']}")
-                    return {
-                        "next_agent": None,
-                        "query": query,
-                        "response": "Invalid routing type",
-                    }
-
+                # Extract and validate fields
+                routing_type = routing["type"]
                 agent_name = routing["agent"]
-                confidence = float(routing["confidence"])
+                try:
+                    confidence = float(routing["confidence"])
+                except ValueError:
+                    confidence = 0.0
                 reason = routing["reason"]
 
                 print(
-                    f"Parsed routing: agent={agent_name}, confidence={confidence}, reason={reason}"
+                    f"Parsed routing: type={routing_type}, agent={agent_name}, confidence={confidence}, reason={reason}"
                 )
 
-                # Only route if confidence is high enough and agent is valid
+                # Validate routing type
+                if routing_type != "route":
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": f"Invalid routing type: {routing_type}",
+                    }
+
+                # Check confidence and agent validity
                 if confidence >= 0.5 and agent_name in self.agents:
                     return {
                         "next_agent": agent_name,
@@ -150,7 +161,10 @@ Remember to:
                     return {
                         "next_agent": None,
                         "query": query,
-                        "response": f"{'Low confidence' if confidence < 0.5 else 'Invalid agent'}: {reason}",
+                        "response": (
+                            "Low confidence" if confidence < 0.5 else "Invalid agent"
+                        )
+                        + f": {reason}",
                     }
 
             except json.JSONDecodeError as e:
@@ -159,7 +173,7 @@ Remember to:
                 return {
                     "next_agent": None,
                     "query": query,
-                    "response": "Invalid JSON format in routing response",
+                    "response": f"Invalid JSON format in routing response: {str(e)}",
                 }
 
         except Exception as e:
