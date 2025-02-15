@@ -1,6 +1,3 @@
-from typing import Any, Dict
-
-
 class Config:
     # LLM Configuration
     LLM_MODEL = "llama3.2:1b-instruct-q3_K_M"
@@ -79,32 +76,54 @@ Available agents and their capabilities:
    - Keywords: download paper, get pdf, arxiv access
 
 Routing Guidelines:
-1. Paper Search/Discovery → Semantic Scholar Agent
+1. Paper Search/Discovery → semantic_scholar_agent
    Example queries:
    - "Find papers about machine learning"
    - "Search for recent research on neural networks"
    - "Get recommendations similar to this paper"
 
-2. Reference Management → Zotero Agent
+2. Reference Management → zotero_agent
    Example queries:
    - "Save this paper to my library"
    - "Check if I have similar papers in Zotero"
 
-3. PDF Content Analysis → PDF Agent
+3. PDF Content Analysis → pdf_agent
    Example queries:
    - "What does this PDF say about methodology?"
    - "Summarize the results section"
 
-4. Paper Downloads → arXiv Agent
+4. Paper Downloads → arxiv_agent
    Example queries:
    - "Download the full PDF of this paper"
    - "Get the paper from arXiv"
 
-Your task is to:
-1. Analyze the user's query
-2. Match it to the most appropriate agent based on capabilities and keywords
-3. Route the query to that agent
-4. Provide clear feedback about your routing decision"""
+CRITICAL INSTRUCTION: Respond with ONLY a complete, single-line JSON object following this exact format:
+{"type":"route","agent":"<EXACT_AGENT_ID>","confidence":<SCORE>,"reason":"<BRIEF_REASON>"}
+
+VALID AGENT IDs (use exactly as shown):
+- semantic_scholar_agent
+- zotero_agent
+- pdf_agent
+- arxiv_agent
+- null (for unclear queries)
+
+Example valid responses:
+
+{"type":"route","agent":"semantic_scholar_agent","confidence":0.95,"reason":"Query requests paper search"}
+
+{"type":"route","agent":"zotero_agent","confidence":0.90,"reason":"Query involves library management"}
+
+{"type":"route","agent":null,"confidence":0.1,"reason":"Query too vague"}
+
+RULES:
+1. Output ONLY the JSON - no extra text, whitespace, or newlines
+2. Always use "type":"route" (no other types allowed)
+3. Use EXACT agent IDs from the list above
+4. Confidence must be between 0.0 and 1.0
+5. If confidence < 0.5, use "agent":null
+6. Keep reason concise
+7. Always include closing brace
+8. No pretty printing or formatting - single line only"""
 
     S2_AGENT_PROMPT = """You are a specialized agent for interacting with Semantic Scholar.
 Your role is to help users find academic papers using three available tools:

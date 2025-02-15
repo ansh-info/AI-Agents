@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, TypedDict
+import json
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
@@ -80,52 +81,108 @@ Remember to:
         Returns:
             Dict with next agent and possibly modified query
         """
-        messages = [HumanMessage(content=query)]
-        context = shared_state.get_current_context()
+        try:
+            # Get LLM's routing decision
+            response = self.llm.get_response(
+                system_prompt=config.MAIN_AGENT_PROMPT,
+                user_input=query,
+            )
 
-        # Get LLM's routing decision
-        response = self.llm.get_response(
-            system_prompt=config.MAIN_AGENT_PROMPT,
-            user_input=query,
-            additional_context=context,
-        )
-
-        # Map of keywords to agent names
-        agent_keywords = {
-            config.AgentNames.S2: [
-                "paper",
-                "search",
-                "find",
-                "semantic scholar",
-                "papers",
-                "research",
-                "publication",
-            ],
-            config.AgentNames.ZOTERO: ["zotero", "save", "library", "reference"],
-            config.AgentNames.PDF: ["pdf", "read", "analyze", "content"],
-            config.AgentNames.ARXIV: ["arxiv", "download", "get pdf"],
-        }
-
-        # Check response and query against keywords
-        response_lower = response.lower()
-        query_lower = query.lower()
-
-        for agent_name, keywords in agent_keywords.items():
-            # Check if any keyword is in either response or query
-            if any(keyword in response_lower for keyword in keywords) or any(
-                keyword in query_lower for keyword in keywords
-            ):
+            if not response:
+                print("Empty response from LLM")
                 return {
-                    "next_agent": agent_name,
+                    "next_agent": None,
                     "query": query,
-                    "response": f"Routing to {agent_name} to handle this query.",
+                    "response": "No response from routing agent",
                 }
 
-        return {
-            "next_agent": None,
-            "query": query,
-            "response": "I'm not sure which agent should handle this query.",
-        }
+            # Clean up the response
+            response = response.strip()
+            print(f"Processing response: {response}")
+
+            try:
+                # Find JSON boundaries if needed
+                first_brace = response.find("{")
+                last_brace = response.rfind("}")
+                if first_brace != -1 and last_brace != -1:
+                    json_str = response[first_brace : last_brace + 1]
+                else:
+                    json_str = response
+
+                print(f"Attempting to parse JSON: {json_str}")
+                routing = json.loads(json_str)
+
+                # Validate the routing object
+                if not isinstance(routing, dict):
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": "Invalid routing format - not a dictionary",
+                    }
+
+                # Validate required fields
+                required_fields = ["type", "agent", "confidence", "reason"]
+                if not all(field in routing for field in required_fields):
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": f"Invalid routing format - missing fields. Found: {list(routing.keys())}",
+                    }
+
+                # Extract and validate fields
+                routing_type = routing["type"]
+                agent_name = routing["agent"]
+                try:
+                    confidence = float(routing["confidence"])
+                except ValueError:
+                    confidence = 0.0
+                reason = routing["reason"]
+
+                print(
+                    f"Parsed routing: type={routing_type}, agent={agent_name}, confidence={confidence}, reason={reason}"
+                )
+
+                # Validate routing type
+                if routing_type != "route":
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": f"Invalid routing type: {routing_type}",
+                    }
+
+                # Check confidence and agent validity
+                if confidence >= 0.5 and agent_name in self.agents:
+                    return {
+                        "next_agent": agent_name,
+                        "query": query,
+                        "response": f"Routing to {agent_name} ({confidence:.2f} confidence): {reason}",
+                    }
+                else:
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": (
+                            "Low confidence" if confidence < 0.5 else "Invalid agent"
+                        )
+                        + f": {reason}",
+                    }
+
+            except json.JSONDecodeError as e:
+                print(f"JSON parsing error: {str(e)}")
+                print(f"Failed to parse: {response}")
+                return {
+                    "next_agent": None,
+                    "query": query,
+                    "response": f"Invalid JSON format in routing response: {str(e)}",
+                }
+
+        except Exception as e:
+            print(f"Error in determine_next_agent: {str(e)}")
+            return {
+                "next_agent": None,
+                "query": query,
+                "response": f"Error determining next agent: {str(e)}",
+            }
 
     def route_to_agent(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Route the query to appropriate agent and handle response"""

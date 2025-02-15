@@ -1,9 +1,7 @@
-# In utils/llm.py
-
+from typing import Any, Dict, List, Union
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
-
 from config.config import config
 from state.shared_state import shared_state
 
@@ -12,11 +10,12 @@ def create_llm() -> ChatOllama:
     """Create and configure Ollama LLM instance"""
     return ChatOllama(
         model=config.LLM_MODEL,
-        temperature=0,  # Set to 0 for most deterministic output
-        stop=["\n\n", "</function>", "```"],  # Better stop tokens
-        frequency_penalty=0,  # Reduce repetition
-        presence_penalty=0,  # Reduce tangential content
-        top_p=0.1,  # More focused sampling
+        temperature=0.1,  # Slight randomness for better JSON generation
+        stop=["},\n", "}\n\n"],  # Only stop on JSON boundaries
+        frequency_penalty=0,
+        presence_penalty=0,
+        top_p=0.95,  # Allow more sampling for complete JSON structures
+        repeat_penalty=1.1,  # Reduce repetition in structured output
     )
 
 
@@ -39,16 +38,30 @@ class LLMManager:
                 HumanMessage(content=user_input),
             ]
 
+            # Add debug logging
+            print("\nDebug - LLM Input:")
+            print(f"System prompt: {system_prompt[:200]}...")
+            print(f"User input: {user_input}")
+
             # Get response with retries
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     response = self.llm.invoke(messages)
+
+                    # Add debug logging
+                    print(f"\nDebug - LLM Response (Attempt {attempt + 1}):")
+                    print(f"Raw response: {response.content}")
+
                     if response and response.content.strip():
-                        return response.content
+                        # Return the cleaned content without validation
+                        # Let the calling function handle JSON validation
+                        return response.content.strip()
+
                     if attempt < max_retries - 1:
                         print(f"Empty response on attempt {attempt + 1}, retrying...")
                         continue
+
                 except Exception as e:
                     if attempt < max_retries - 1:
                         print(f"Error on attempt {attempt + 1}: {str(e)}, retrying...")
