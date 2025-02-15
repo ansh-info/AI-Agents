@@ -88,33 +88,65 @@ Remember to:
                 user_input=query,
             )
 
-            # Parse JSON response
+            if not response:
+                return {
+                    "next_agent": None,
+                    "query": query,
+                    "response": "No response from routing agent",
+                }
+
+            # Clean the response string
+            response = response.strip()
+
+            # Find JSON boundaries
+            first_brace = response.find("{")
+            last_brace = response.rfind("}")
+
+            if first_brace == -1 or last_brace == -1:
+                return {
+                    "next_agent": None,
+                    "query": query,
+                    "response": "Invalid JSON response format",
+                }
+
             try:
-                routing = json.loads(response)
+                # Extract and parse JSON
+                json_str = response[first_brace : last_brace + 1]
+                routing = json.loads(json_str)
+
+                # Validate JSON structure
+                if not isinstance(routing, dict):
+                    return {
+                        "next_agent": None,
+                        "query": query,
+                        "response": "Invalid routing format",
+                    }
+
                 agent_name = routing.get("agent")
-                confidence = routing.get("confidence", 0.0)
-                reasoning = routing.get("reasoning", "No reasoning provided")
+                confidence = float(routing.get("confidence", 0.0))
+                reason = routing.get("reason", "No reason provided")
 
                 # Only route if confidence is high enough
                 if confidence >= 0.5 and agent_name:
                     return {
                         "next_agent": agent_name,
                         "query": query,
-                        "response": f"Routing to {agent_name} ({confidence:.2f} confidence): {reasoning}",
+                        "response": f"Routing to {agent_name} ({confidence:.2f} confidence): {reason}",
                     }
                 else:
                     return {
                         "next_agent": None,
                         "query": query,
-                        "response": "Could not determine appropriate agent with sufficient confidence",
+                        "response": f"Insufficient confidence ({confidence:.2f}): {reason}",
                     }
 
-            except json.JSONDecodeError:
-                print(f"Failed to parse LLM response as JSON: {response}")
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"JSON parsing error: {e}")
+                print(f"Attempted to parse: {json_str}")
                 return {
                     "next_agent": None,
                     "query": query,
-                    "response": "Error: Invalid routing response format",
+                    "response": f"Error parsing routing response: {str(e)}",
                 }
 
         except Exception as e:
