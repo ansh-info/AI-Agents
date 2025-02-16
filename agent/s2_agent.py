@@ -1,6 +1,6 @@
 import json
 from typing import Any, Dict, List, Type, TypedDict
-
+import re
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
@@ -47,11 +47,40 @@ class SemanticScholarAgent:
             raise
 
     def get_default_search_params(self, query: str) -> Dict[str, Any]:
-        """Generate default search parameters"""
+        """Generate intelligent default search parameters"""
+        # Extract year if present
+        year_match = re.search(r"\b(19|20)\d{2}\b", query)
+        year = year_match.group() if year_match else None
+
+        # Clean query
+        clean_query = re.sub(r"\b(19|20)\d{2}\b", "", query)
+        clean_query = re.sub(
+            r"\b(published|in|from|year)\b", "", clean_query, flags=re.IGNORECASE
+        )
+        clean_query = clean_query.strip()
+
+        # Enhance query
+        enhanced_query = clean_query
+        if year:
+            enhanced_query = f"year:{year} {enhanced_query}"
+
         return {
             "type": "function",
             "name": "search_papers",
-            "parameters": {"query": f"{query} recent research", "limit": 5},
+            "parameters": {
+                "query": enhanced_query,
+                "limit": 5,
+                "fields": [
+                    "paperId",
+                    "title",
+                    "abstract",
+                    "year",
+                    "authors",
+                    "citationCount",
+                    "openAccessPdf",
+                    "venue",
+                ],
+            },
         }
 
     def parse_tool_call(self, content: str, original_query: str) -> Dict[str, Any]:
@@ -130,34 +159,58 @@ class SemanticScholarAgent:
 
             try:
                 print("Getting LLM response...")
-                response = self.chain.invoke({"input": message})
-                print(f"LLM Response type: {type(response)}")
-                print(f"LLM Response content: {response.content}")
+                # Try up to 3 times to get a valid response
+                for attempt in range(3):
+                    response = self.chain.invoke({"input": message})
+                    print(f"LLM Response (attempt {attempt + 1}): {response.content}")
 
-                # Parse tool call or get default parameters
-                tool_call = self.parse_tool_call(response.content, message)
-                print(f"Parsed tool call: {tool_call}")
+                    if response.content and not response.content.isspace():
+                        tool_call = self.parse_tool_call(response.content, message)
+                        if tool_call.get("parameters"):
+                            break
+                else:
+                    print("Using enhanced default parameters after retries")
+                    tool_call = self.get_default_search_params(message)
 
+                print(f"Final tool call: {tool_call}")
                 if "parameters" not in tool_call:
                     raise ValueError("Missing parameters in tool call")
 
-                # Extract parameters
+                # Execute search with enhanced parameters
                 params = tool_call["parameters"]
                 print(f"Executing tool with parameters: {params}")
 
-                # Execute search with the proper invocation format
                 search_args = [params["query"]]
-                search_kwargs = {"limit": params["limit"]}
-                tool_output = self.search_tool.invoke(*search_args, **search_kwargs)
+                search_kwargs = {
+                    "limit": params["limit"],
+                    "fields": params.get("fields", None),
+                }
 
+                tool_output = self.search_tool.invoke(*search_args, **search_kwargs)
                 print(f"Search results: {tool_output}")
 
                 if isinstance(tool_output, dict) and "papers" in tool_output:
-                    response_content = self.format_papers_response(
-                        tool_output["papers"]
-                    )
+                    # Filter results more strictly
+                    filtered_papers = []
+                    year_match = re.search(r"\b(19|20)\d{2}\b", message)
+                    target_year = int(year_match.group()) if year_match else None
+
+                    for paper in tool_output["papers"]:
+                        # Skip papers without title or authors
+                        if not paper.get("title") or not paper.get("authors"):
+                            continue
+
+                        # Apply year filter if specified
+                        if target_year and paper.get("year") != target_year:
+                            continue
+
+                        filtered_papers.append(paper)
+
+                    response_content = self.format_papers_response(filtered_papers)
                 else:
-                    response_content = "Search completed but no papers were found."
+                    response_content = (
+                        "Search completed but no matching papers were found."
+                    )
 
                 state["response"] = response_content
                 state["error"] = None
