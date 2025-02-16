@@ -203,26 +203,49 @@ IMPORTANT:
         return self.get_default_search_params(original_query)
 
     def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
-        """Format papers list into readable response"""
+        """Format papers list into readable response with more details"""
         if not papers:
             return "No papers found matching your query."
 
-        response = "Here are the relevant papers I found:\n\n"
+        response = []
         for i, paper in enumerate(papers, 1):
             title = paper.get("title", "Untitled")
             authors = paper.get("authors", [])
             year = paper.get("year", "N/A")
+            cite_count = paper.get("citationCount", 0)
+            venue = paper.get("venue", "")
+            abstract = paper.get("abstract", "")
+            pdf_link = paper.get("openAccessPdf", {}).get("url", "")
 
+            # Format authors
             author_names = [a.get("name", "") for a in authors]
             author_str = ", ".join(author_names[:3])
             if len(authors) > 3:
                 author_str += " et al."
 
-            response += f"{i}. {title}\n"
-            response += f"   Authors: {author_str}\n"
-            response += f"   Year: {year}\n\n"
+            # Create paper entry
+            entry = [f"{i}. {title}", f"   Authors: {author_str}", f"   Year: {year}"]
 
-        return response
+            if cite_count:
+                entry.append(f"   Citations: {cite_count}")
+
+            if venue:
+                entry.append(f"   Venue: {venue}")
+
+            if abstract:
+                # Add truncated abstract if available
+                short_abstract = (
+                    abstract[:200] + "..." if len(abstract) > 200 else abstract
+                )
+                entry.append(f"   Abstract: {short_abstract}")
+
+            if pdf_link:
+                entry.append(f"   Open Access PDF: {pdf_link}")
+
+            response.extend(entry)
+            response.append("")  # Add blank line between papers
+
+        return "\n".join(response)
 
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
