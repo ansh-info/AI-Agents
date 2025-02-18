@@ -25,15 +25,35 @@ class SemanticScholarAgent:
     def __init__(self):
         try:
             print("Initializing S2 Agent...")
-            self.search_tool = s2_tools[0]
-            self.llm = llm_manager.llm.bind_tools([self.search_tool])
 
-            # Use the prompt from config
-            self.prompt = ChatPromptTemplate.from_messages(
-                [("system", config.S2_AGENT_PROMPT), ("human", "{input}")]
+            # Store the tools
+            self.search_tool = s2_tools[0]
+            self.single_rec_tool = s2_tools[1]
+            self.multi_rec_tool = s2_tools[2]
+
+            # Configure LLM with lower temperature for more consistent responses
+            self.llm = llm_manager.llm.bind(
+                temperature=0.1,
+                stop=["}\n", "}\n\n"],  # Ensure complete JSON
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
             )
 
+            # Bind tools to LLM
+            self.llm = self.llm.bind_tools(s2_tools)
+
+            # Create prompt template
+            self.prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", config.S2_AGENT_PROMPT),
+                    MessagesPlaceholder("chat_history"),  # Add chat history support
+                    ("human", "{input}"),
+                ]
+            )
+
+            # Create chain with response validation
             self.chain = self.prompt | self.llm
+
             print("S2 Agent initialized successfully")
 
         except Exception as e:
@@ -47,85 +67,54 @@ class SemanticScholarAgent:
             message = state.get("message", "")
             print(f"Received message: {message}")
 
-            # First check if this is a recommendation request
-            paper_ids = self.extract_paper_ids(message)
-            if paper_ids:
-                if len(paper_ids) == 1:
-                    print(f"Processing single paper recommendation for {paper_ids[0]}")
-                    tool_call = {
-                        "type": "function",
-                        "name": "get_single_paper_recommendations",
-                        "parameters": {"paper_id": paper_ids[0], "limit": 5},
-                    }
+            try:
+                print("Getting LLM response...")
+                # Add chat history for context
+                messages = shared_state.get_chat_history(limit=3)
+
+                # Log the exact prompt being sent
+                print("Sending prompt to LLM:")
+                print(f"Message: {message}")
+                print(f"Chat history: {messages}")
+
+                # Get LLM response with debug info
+                response = self.chain.invoke(
+                    {"input": message, "chat_history": messages}
+                )
+
+                print(f"Raw LLM Response: {response}")
+                print(f"Response type: {type(response)}")
+                print(
+                    f"Response content: {response.content if hasattr(response, 'content') else 'No content attribute'}"
+                )
+
+                if not response or not hasattr(response, "content"):
+                    raise ValueError("Empty or invalid response from LLM")
+
+                # Parse tool call
+                tool_call = self.parse_tool_call(response.content, message)
+                print(f"Parsed tool call: {tool_call}")
+
+                if not tool_call or "parameters" not in tool_call:
+                    raise ValueError("Invalid tool call format")
+
+                # Execute tool with proper error handling
+                result = self.execute_tool(tool_call)
+                if not result:
+                    raise ValueError("Tool execution failed")
+
+                # Format and return results
+                if isinstance(result.get("papers"), list):
+                    papers = result["papers"]
+                    state["response"] = self.format_papers_response(papers)
+                    shared_state.add_papers(papers)
                 else:
-                    print(f"Processing multi-paper recommendation for {paper_ids}")
-                    tool_call = {
-                        "type": "function",
-                        "name": "get_multi_paper_recommendations",
-                        "parameters": {
-                            "paper_ids": paper_ids[:2],  # Take first two IDs
-                            "limit": 5,
-                        },
-                    }
-            else:
-                # Regular search query
-                print("Processing search query...")
-                enhanced_query = self.enhance_query(message)
-                tool_call = {
-                    "type": "function",
-                    "name": "search_papers",
-                    "parameters": {
-                        "query": enhanced_query,
-                        "limit": 5,
-                        "fields": [
-                            "paperId",
-                            "title",
-                            "abstract",
-                            "year",
-                            "authors",
-                            "citationCount",
-                            "openAccessPdf",
-                            "venue",
-                        ],
-                    },
-                }
+                    state["response"] = "No papers found matching your criteria."
 
-            print(f"Final tool call: {tool_call}")
-
-            # Execute the appropriate tool
-            if tool_call["name"] == "search_papers":
-                result = self.search_tool.invoke(
-                    tool_call["parameters"]["query"],
-                    limit=tool_call["parameters"]["limit"],
-                    fields=tool_call["parameters"].get("fields"),
-                )
-            elif tool_call["name"] == "get_single_paper_recommendations":
-                result = self.get_paper_recommendations(
-                    tool_call["parameters"]["paper_id"],
-                    limit=tool_call["parameters"]["limit"],
-                )
-            elif tool_call["name"] == "get_multi_paper_recommendations":
-                result = self.get_multi_paper_recommendations(
-                    tool_call["parameters"]["paper_ids"],
-                    limit=tool_call["parameters"]["limit"],
-                )
-
-            print(f"Tool result: {result}")
-
-            # Process the results
-            if isinstance(result, dict):
-                if result.get("status") == "success":
-                    papers = result.get("papers", [])
-                    if papers:
-                        response_content = self.format_papers_response(papers)
-                        state["response"] = response_content
-                        shared_state.add_papers(papers)
-                    else:
-                        state["response"] = "No papers found matching your query."
-                else:
-                    state["error"] = result.get("error", "Unknown error occurred")
-            else:
-                state["error"] = "Invalid response format from tool"
+            except Exception as e:
+                print(f"Error in message handling: {str(e)}")
+                state["error"] = f"Error processing message: {str(e)}"
+                return state
 
             return state
 
@@ -134,6 +123,31 @@ class SemanticScholarAgent:
             state["error"] = f"Error in S2 agent: {str(e)}"
             shared_state.set(config.StateKeys.ERROR, state["error"])
             return state
+
+    def execute_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the selected tool with proper error handling"""
+        try:
+            tool_name = tool_call["name"]
+            params = tool_call["parameters"]
+
+            if tool_name == "search_papers":
+                return self.search_tool.invoke(
+                    params["query"], limit=params.get("limit", 5)
+                )
+            elif tool_name == "get_single_paper_recommendations":
+                return self.single_rec_tool.invoke(
+                    params["paper_id"], limit=params.get("limit", 5)
+                )
+            elif tool_name == "get_multi_paper_recommendations":
+                return self.multi_rec_tool.invoke(
+                    params["paper_ids"], limit=params.get("limit", 5)
+                )
+            else:
+                raise ValueError(f"Unknown tool: {tool_name}")
+
+        except Exception as e:
+            print(f"Tool execution error: {str(e)}")
+            return {"status": "error", "error": str(e), "papers": []}
 
     def extract_paper_ids(self, message: str) -> List[str]:
         """Extract paper IDs from the message"""
