@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,7 +32,10 @@ def run_test_case(message: str, test_name: str) -> Dict[str, Any]:
     print("=" * 50)
     print("Input Query:", message)
 
-    # Prepare initial state for main agent
+    # Reset state for clean test
+    reset_shared_state()
+
+    # Prepare initial state
     state = {
         "message": message,
         "response": None,
@@ -55,42 +58,100 @@ def run_test_case(message: str, test_name: str) -> Dict[str, Any]:
     print("-" * 50)
     print("Papers found:", len(shared_state.get(config.StateKeys.PAPERS)))
     print("Processed by:", shared_state.get(config.StateKeys.CURRENT_AGENT))
+    print("Tool used:", shared_state.get(config.StateKeys.CURRENT_TOOL))
     print("=" * 50 + "\n")
 
     return result
 
 
-def test_paper_search():
-    """Test paper search routing and results"""
-    reset_shared_state()
+def test_basic_paper_search():
+    """Test basic paper search functionality"""
     return run_test_case(
         "Find recent papers about machine learning and neural networks in computer vision",
         "Basic Paper Search Test",
     )
 
 
-def test_search_with_year():
-    """Test year-specific search routing and results"""
-    reset_shared_state()
+def test_year_specific_search():
+    """Test year-specific search functionality"""
     return run_test_case(
         "Find papers about quantum computing published in 2023",
         "Year-Specific Search Test",
     )
 
 
+def test_single_paper_recommendation():
+    """Test single paper recommendation functionality"""
+    # First get a paper ID through search
+    search_result = run_test_case(
+        "Find a recent paper about transformers in NLP", "Get Paper ID Test"
+    )
+
+    # Extract paper ID from search results (assuming first paper)
+    papers = shared_state.get(config.StateKeys.PAPERS)
+    if papers:
+        paper_id = papers[0].get("paperId")
+        return run_test_case(
+            f"Find papers similar to {paper_id}", "Single Paper Recommendation Test"
+        )
+    return {"error": "No papers found to test recommendations"}
+
+
+def test_multi_paper_recommendation():
+    """Test multiple paper recommendation functionality"""
+    # First get paper IDs through search
+    search_result = run_test_case(
+        "Find recent papers about deep learning", "Get Paper IDs Test"
+    )
+
+    # Extract two paper IDs from search results
+    papers = shared_state.get(config.StateKeys.PAPERS)
+    if len(papers) >= 2:
+        paper_id1 = papers[0].get("paperId")
+        paper_id2 = papers[1].get("paperId")
+        return run_test_case(
+            f"Find papers similar to {paper_id1} and {paper_id2}",
+            "Multi-Paper Recommendation Test",
+        )
+    return {"error": "Not enough papers found to test multi-recommendations"}
+
+
+def test_domain_specific_search():
+    """Test domain-specific search with enhanced terms"""
+    return run_test_case(
+        "Find latest papers about attention mechanisms in transformers",
+        "Domain-Specific Search Test",
+    )
+
+
 def test_invalid_query():
     """Test invalid query handling"""
-    reset_shared_state()
     return run_test_case("Please do something undefined", "Invalid Query Test")
+
+
+def test_invalid_paper_id():
+    """Test handling of invalid paper ID for recommendations"""
+    return run_test_case(
+        "Find papers similar to invalid_paper_id_123", "Invalid Paper ID Test"
+    )
 
 
 def main():
     print("Starting Agent Tests...")
     print("Project root:", project_root)
 
-    test_paper_search()
-    test_search_with_year()
+    # Basic search tests
+    test_basic_paper_search()
+    test_year_specific_search()
+    test_domain_specific_search()
+
+    # Recommendation tests
+    test_single_paper_recommendation()
+    test_multi_paper_recommendation()
+
+    # Error handling tests
     test_invalid_query()
+    test_invalid_paper_id()
 
     print("\nTest suite completed.")
 
