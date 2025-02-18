@@ -69,47 +69,84 @@ class SemanticScholarAgent:
 
             try:
                 print("Getting LLM response...")
-                # Add chat history for context
                 messages = shared_state.get_chat_history(limit=3)
 
-                # Log the exact prompt being sent
                 print("Sending prompt to LLM:")
                 print(f"Message: {message}")
                 print(f"Chat history: {messages}")
 
-                # Get LLM response with debug info
+                # Get LLM response
                 response = self.chain.invoke(
                     {"input": message, "chat_history": messages}
                 )
 
                 print(f"Raw LLM Response: {response}")
                 print(f"Response type: {type(response)}")
-                print(
-                    f"Response content: {response.content if hasattr(response, 'content') else 'No content attribute'}"
-                )
 
-                if not response or not hasattr(response, "content"):
-                    raise ValueError("Empty or invalid response from LLM")
+                # Handle both tool call formats
+                tool_call = None
+                if hasattr(response, "tool_calls") and response.tool_calls:
+                    # Handle Langchain tool call format
+                    tool_call = {
+                        "type": "function",
+                        "name": response.tool_calls[0].name,
+                        "parameters": {
+                            "query": response.tool_calls[0].args.get("query", ""),
+                            "limit": response.tool_calls[0].args.get("limit", 5),
+                            "fields": [
+                                "paperId",
+                                "title",
+                                "abstract",
+                                "year",
+                                "authors",
+                                "citationCount",
+                                "openAccessPdf",
+                                "venue",
+                            ],
+                        },
+                    }
+                elif hasattr(response, "content") and response.content:
+                    # Handle JSON format
+                    tool_call = self.parse_tool_call(response.content, message)
 
-                # Parse tool call
-                tool_call = self.parse_tool_call(response.content, message)
-                print(f"Parsed tool call: {tool_call}")
+                if not tool_call:
+                    # Fallback to enhanced query
+                    tool_call = {
+                        "type": "function",
+                        "name": "search_papers",
+                        "parameters": {
+                            "query": self.enhance_query(message),
+                            "limit": 5,
+                            "fields": [
+                                "paperId",
+                                "title",
+                                "abstract",
+                                "year",
+                                "authors",
+                                "citationCount",
+                                "openAccessPdf",
+                                "venue",
+                            ],
+                        },
+                    }
 
-                if not tool_call or "parameters" not in tool_call:
-                    raise ValueError("Invalid tool call format")
+                print(f"Final tool call: {tool_call}")
+                shared_state.set(config.StateKeys.CURRENT_TOOL, tool_call["name"])
 
-                # Execute tool with proper error handling
+                # Execute tool
                 result = self.execute_tool(tool_call)
-                if not result:
-                    raise ValueError("Tool execution failed")
 
-                # Format and return results
-                if isinstance(result.get("papers"), list):
-                    papers = result["papers"]
-                    state["response"] = self.format_papers_response(papers)
-                    shared_state.add_papers(papers)
+                # Process results
+                if result and isinstance(result, dict):
+                    if result.get("status") == "success" and result.get("papers"):
+                        papers = result["papers"]
+                        response_content = self.format_papers_response(papers)
+                        state["response"] = response_content
+                        shared_state.add_papers(papers)
+                    else:
+                        state["response"] = "No papers found matching your criteria."
                 else:
-                    state["response"] = "No papers found matching your criteria."
+                    raise ValueError("Invalid tool execution result")
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")
@@ -125,14 +162,16 @@ class SemanticScholarAgent:
             return state
 
     def execute_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the selected tool with proper error handling"""
+        """Execute the selected tool"""
         try:
             tool_name = tool_call["name"]
             params = tool_call["parameters"]
 
             if tool_name == "search_papers":
                 return self.search_tool.invoke(
-                    params["query"], limit=params.get("limit", 5)
+                    params["query"],
+                    limit=params.get("limit", 5),
+                    fields=params.get("fields"),
                 )
             elif tool_name == "get_single_paper_recommendations":
                 return self.single_rec_tool.invoke(
