@@ -83,16 +83,36 @@ class SemanticScholarAgent:
                 print(f"Raw LLM Response: {response}")
                 print(f"Response type: {type(response)}")
 
-                # Handle both tool call formats
+                # Handle tool call formats
                 tool_call = None
-                if hasattr(response, "tool_calls") and response.tool_calls:
-                    # Handle Langchain tool call format
+
+                # Check for Langchain tool calls format
+                if (
+                    hasattr(response, "tool_calls")
+                    and isinstance(response.tool_calls, list)
+                    and response.tool_calls
+                ):
+                    # Get the first tool call
+                    first_tool = response.tool_calls[0]
+                    print(f"Processing tool call: {first_tool}")
+
+                    if isinstance(first_tool, dict):
+                        # Handle dictionary format
+                        tool_name = first_tool.get("name")
+                        tool_args = first_tool.get("args", {})
+                    else:
+                        # Handle object format
+                        tool_name = first_tool.name
+                        tool_args = (
+                            first_tool.args if hasattr(first_tool, "args") else {}
+                        )
+
                     tool_call = {
                         "type": "function",
-                        "name": response.tool_calls[0].name,
+                        "name": tool_name,
                         "parameters": {
-                            "query": response.tool_calls[0].args.get("query", ""),
-                            "limit": response.tool_calls[0].args.get("limit", 5),
+                            "query": tool_args.get("query", ""),
+                            "limit": tool_args.get("limit", 5),
                             "fields": [
                                 "paperId",
                                 "title",
@@ -105,12 +125,13 @@ class SemanticScholarAgent:
                             ],
                         },
                     }
+                # Check for JSON format in content
                 elif hasattr(response, "content") and response.content:
-                    # Handle JSON format
                     tool_call = self.parse_tool_call(response.content, message)
 
+                # Fallback to enhanced query if no valid tool call
                 if not tool_call:
-                    # Fallback to enhanced query
+                    print("Using enhanced default parameters")
                     tool_call = {
                         "type": "function",
                         "name": "search_papers",
@@ -135,6 +156,7 @@ class SemanticScholarAgent:
 
                 # Execute tool
                 result = self.execute_tool(tool_call)
+                print(f"Tool execution result: {result}")
 
                 # Process results
                 if result and isinstance(result, dict):
@@ -150,6 +172,7 @@ class SemanticScholarAgent:
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")
+                traceback.print_exc()  # Print full stack trace
                 state["error"] = f"Error processing message: {str(e)}"
                 return state
 
