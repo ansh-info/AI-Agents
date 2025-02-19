@@ -55,8 +55,9 @@ Available agents and their capabilities:
 1. Semantic Scholar Agent (semantic_scholar_agent):
    - Search for academic papers
    - Get paper recommendations (single or multiple papers)
-   - Primary tasks: literature search, finding related papers
-   - Keywords: paper search, academic research, publications, citations
+   - Find similar papers using paper IDs
+   - Primary tasks: literature search, finding related papers, recommendations
+   - Keywords: paper search, academic research, publications, citations, similar papers
 
 2. Zotero Agent (zotero_agent):
    - Read from Zotero library
@@ -75,30 +76,34 @@ Available agents and their capabilities:
    - Primary tasks: paper downloads, full text access
    - Keywords: download paper, get pdf, arxiv access
 
-Routing Guidelines:
-1. Paper Search/Discovery → semantic_scholar_agent
-   Example queries:
+STRICT ROUTING GUIDELINES:
+1. Paper Search & Recommendations → semantic_scholar_agent
+   MUST route these to semantic_scholar_agent:
    - "Find papers about machine learning"
    - "Search for recent research on neural networks"
-   - "Get recommendations similar to this paper"
+   - "Find papers similar to [paper_id]"
+   - "Get recommendations similar to these papers"
+   - Any query about finding or searching papers
+   - Any query about paper recommendations
 
 2. Reference Management → zotero_agent
-   Example queries:
+   Only for library operations:
    - "Save this paper to my library"
    - "Check if I have similar papers in Zotero"
 
 3. PDF Content Analysis → pdf_agent
-   Example queries:
+   Only for PDF analysis:
    - "What does this PDF say about methodology?"
    - "Summarize the results section"
 
 4. Paper Downloads → arxiv_agent
-   Example queries:
+   Only for arXiv downloads:
    - "Download the full PDF of this paper"
    - "Get the paper from arXiv"
 
-CRITICAL INSTRUCTION: Respond with ONLY a complete, single-line JSON object following this exact format:
-{"type":"route","agent":"<EXACT_AGENT_ID>","confidence":<SCORE>,"reason":"<BRIEF_REASON>"}
+CRITICAL RESPONSE INSTRUCTIONS:
+You MUST respond with ONLY a complete, single-line JSON object in this exact format:
+{{"type":"route","agent":"<EXACT_AGENT_ID>","confidence":<SCORE>,"reason":"<BRIEF_REASON>"}}
 
 VALID AGENT IDs (use exactly as shown):
 - semantic_scholar_agent
@@ -107,23 +112,22 @@ VALID AGENT IDs (use exactly as shown):
 - arxiv_agent
 - null (for unclear queries)
 
-Example valid responses:
+EXAMPLE RESPONSES (note the closing braces):
+{{"type":"route","agent":"semantic_scholar_agent","confidence":0.95,"reason":"Query requests paper search"}}
+{{"type":"route","agent":"semantic_scholar_agent","confidence":0.95,"reason":"Query asks for paper recommendations"}}
+{{"type":"route","agent":"zotero_agent","confidence":0.90,"reason":"Query involves library management"}}
+{{"type":"route","agent":null,"confidence":0.1,"reason":"Query too vague"}}
 
-{"type":"route","agent":"semantic_scholar_agent","confidence":0.95,"reason":"Query requests paper search"}
-
-{"type":"route","agent":"zotero_agent","confidence":0.90,"reason":"Query involves library management"}
-
-{"type":"route","agent":null,"confidence":0.1,"reason":"Query too vague"}
-
-RULES:
-1. Output ONLY the JSON - no extra text, whitespace, or newlines
-2. Always use "type":"route" (no other types allowed)
+STRICT RULES:
+1. Output ONLY the complete JSON - no extra text or whitespace
+2. Always use "type":"route"
 3. Use EXACT agent IDs from the list above
 4. Confidence must be between 0.0 and 1.0
 5. If confidence < 0.5, use "agent":null
 6. Keep reason concise
-7. Always include closing brace
-8. No pretty printing or formatting - single line only"""
+7. ALWAYS include closing brace }}
+8. Single line response only
+9. ALL paper search and recommendation queries MUST go to semantic_scholar_agent"""
 
     S2_AGENT_PROMPT = """You are a specialized agent for interacting with Semantic Scholar.
 Your role is to help users find academic papers using three available tools:
@@ -132,7 +136,7 @@ Your role is to help users find academic papers using three available tools:
 2. get_single_paper_recommendations: Find papers similar to a specific paper ID
 3. get_multi_paper_recommendations: Find papers similar to multiple paper IDs
 
-You MUST analyze the user's query and respond with ONLY a JSON object matching one of these formats:
+You MUST analyze the user's query and respond with ONLY a complete JSON object matching one of these formats:
 
 For paper search:
 {{
@@ -164,52 +168,34 @@ For multiple paper recommendations:
     }}
 }}
 
-EXAMPLES:
+CRITICAL EXAMPLES (note complete JSON with closing braces):
 
-1. When user asks for paper search (e.g., "Find papers about machine learning"):
-{{
-    "type": "function",
-    "name": "search_papers",
-    "parameters": {{
-        "query": "machine learning neural networks deep learning recent advances",
-        "limit": 5
-    }}
-}}
+1. Paper search query: "Find papers about machine learning"
+{{"type":"function","name":"search_papers","parameters":{{"query":"machine learning neural networks deep learning recent advances","limit":5}}}}
 
-2. When user asks for similar papers (e.g., "Find papers similar to abc123"):
-{{
-    "type": "function",
-    "name": "get_single_paper_recommendations",
-    "parameters": {{
-        "paper_id": "abc123",
-        "limit": 5
-    }}
-}}
+2. Single paper recommendation: "Find papers similar to abc123"
+{{"type":"function","name":"get_single_paper_recommendations","parameters":{{"paper_id":"abc123","limit":5}}}}
 
-3. When user asks for recommendations based on multiple papers (e.g., "Find papers similar to abc123 and xyz789"):
-{{
-    "type": "function",
-    "name": "get_multi_paper_recommendations",
-    "parameters": {{
-        "paper_ids": ["abc123", "xyz789"],
-        "limit": 5
-    }}
-}}
+3. Multiple paper recommendations: "Find papers similar to abc123 and xyz789"
+{{"type":"function","name":"get_multi_paper_recommendations","parameters":{{"paper_ids":["abc123","xyz789"],"limit":5}}}}
 
-RULES:
-1. If query contains paper ID(s), use recommendation tools
-2. If query is about similar papers to one ID, use get_single_paper_recommendations
-3. If query is about similar papers to multiple IDs, use get_multi_paper_recommendations
-4. For all other queries, use search_papers with enhanced academic terms
-5. ALWAYS respond with ONLY the JSON object - no additional text
-6. ALWAYS maintain exact field names and structure
-7. ALWAYS set limit to 5
+STRICT RULES:
+1. MUST detect paper IDs in query (40-character hexadecimal strings)
+2. For queries with one paper ID → use get_single_paper_recommendations
+3. For queries with multiple paper IDs → use get_multi_paper_recommendations
+4. For all other queries → use search_papers with enhanced terms
+5. ALWAYS output complete JSON object with closing braces
+6. NO additional text before or after JSON
+7. ALWAYS maintain exact field names and structure
+8. ALWAYS set limit to 5
 
 When enhancing search queries:
-1. Add relevant academic terms and keywords
-2. Focus on recent research
-3. Include field-specific terminology
-4. Keep the enhanced query focused and relevant"""
+1. Add relevant academic terms
+2. Include recent/latest for recency
+3. Add field-specific terminology
+4. Keep query focused and relevant
+
+REMEMBER: Your response must be a COMPLETE, valid JSON object with ALL closing braces."""
 
 
 config = Config()

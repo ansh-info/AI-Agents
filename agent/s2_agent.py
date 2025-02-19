@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor
+import traceback
 
 from config.config import config
 from state.shared_state import shared_state
@@ -60,6 +61,58 @@ class SemanticScholarAgent:
             print(f"Initialization error: {str(e)}")
             raise
 
+    def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
+        """Format papers list into readable response"""
+        if not papers:
+            return "No papers found matching your query."
+
+        response_parts = ["Here are the relevant papers I found:\n"]
+
+        for i, paper in enumerate(papers, 1):
+            # Safely get values with defaults
+            title = paper.get("title", "Untitled")
+            authors = paper.get("authors", [])
+            year = paper.get("year", "N/A")
+            cite_count = paper.get("citationCount", 0)
+            venue = paper.get("venue", "")
+            abstract = paper.get("abstract", "")
+            pdf_link = paper.get("openAccessPdf", {})
+            if pdf_link:  # Check if not None before getting url
+                pdf_url = pdf_link.get("url", "")
+            else:
+                pdf_url = ""
+
+            # Format authors
+            author_names = [a.get("name", "") for a in authors if a]
+            author_str = ", ".join(author_names[:3])
+            if len(author_names) > 3:
+                author_str += " et al."
+
+            # Build paper entry
+            entry = [f"\n{i}. {title}"]
+            entry.append(f"   Authors: {author_str}")
+            entry.append(f"   Year: {year}")
+
+            if cite_count:
+                entry.append(f"   Citations: {cite_count}")
+
+            if venue:
+                entry.append(f"   Venue: {venue}")
+
+            if abstract:
+                # Truncate abstract if too long
+                short_abstract = (
+                    abstract[:200] + "..." if len(abstract) > 200 else abstract
+                )
+                entry.append(f"   Abstract: {short_abstract}")
+
+            if pdf_url:
+                entry.append(f"   PDF: {pdf_url}")
+
+            response_parts.append("\n".join(entry))
+
+        return "\n".join(response_parts)
+
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
         try:
@@ -86,70 +139,61 @@ class SemanticScholarAgent:
                 # Handle tool call formats
                 tool_call = None
 
-                # Check for Langchain tool calls format
+                # Check for tool calls in LLM response
                 if (
                     hasattr(response, "tool_calls")
                     and isinstance(response.tool_calls, list)
                     and response.tool_calls
                 ):
-                    # Get the first tool call
                     first_tool = response.tool_calls[0]
                     print(f"Processing tool call: {first_tool}")
 
                     if isinstance(first_tool, dict):
-                        # Handle dictionary format
                         tool_name = first_tool.get("name")
                         tool_args = first_tool.get("args", {})
                     else:
-                        # Handle object format
                         tool_name = first_tool.name
                         tool_args = (
                             first_tool.args if hasattr(first_tool, "args") else {}
                         )
 
+                    # Convert to standard format
                     tool_call = {
                         "type": "function",
                         "name": tool_name,
-                        "parameters": {
-                            "query": tool_args.get("query", ""),
-                            "limit": tool_args.get("limit", 5),
-                            "fields": [
-                                "paperId",
-                                "title",
-                                "abstract",
-                                "year",
-                                "authors",
-                                "citationCount",
-                                "openAccessPdf",
-                                "venue",
-                            ],
-                        },
+                        "parameters": tool_args,
                     }
-                # Check for JSON format in content
-                elif hasattr(response, "content") and response.content:
-                    tool_call = self.parse_tool_call(response.content, message)
 
-                # Fallback to enhanced query if no valid tool call
+                    # Ensure required fields
+                    if "query" not in tool_args:
+                        tool_call["parameters"]["query"] = message
+                    if "limit" not in tool_args:
+                        tool_call["parameters"]["limit"] = 5
+                    if "fields" not in tool_args:
+                        tool_call["parameters"]["fields"] = [
+                            "paperId",
+                            "title",
+                            "abstract",
+                            "year",
+                            "authors",
+                            "citationCount",
+                            "openAccessPdf",
+                            "venue",
+                        ]
+
+                elif hasattr(response, "content") and response.content:
+                    # Try to parse JSON from content
+                    try:
+                        first_brace = response.content.find("{")
+                        last_brace = response.content.find("}", first_brace)
+                        if first_brace != -1 and last_brace != -1:
+                            json_str = response.content[first_brace : last_brace + 1]
+                            tool_call = json.loads(json_str)
+                    except:
+                        print("Failed to parse JSON from content")
+
                 if not tool_call:
-                    print("Using enhanced default parameters")
-                    tool_call = {
-                        "type": "function",
-                        "name": "search_papers",
-                        "parameters": {
-                            "query": self.enhance_query(message),
-                            "limit": 5,
-                            "fields": [
-                                "paperId",
-                                "title",
-                                "abstract",
-                                "year",
-                                "authors",
-                                "citationCount",
-                                "openAccessPdf",
-                                "venue",
-                            ],
-                        },
-                    }
+                    raise ValueError("No valid tool call found in LLM response")
 
                 print(f"Final tool call: {tool_call}")
                 shared_state.set(config.StateKeys.CURRENT_TOOL, tool_call["name"])
@@ -160,8 +204,8 @@ class SemanticScholarAgent:
 
                 # Process results
                 if result and isinstance(result, dict):
-                    if result.get("status") == "success" and result.get("papers"):
-                        papers = result["papers"]
+                    papers = result.get("papers", [])
+                    if papers:
                         response_content = self.format_papers_response(papers)
                         state["response"] = response_content
                         shared_state.add_papers(papers)
@@ -172,7 +216,7 @@ class SemanticScholarAgent:
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")
-                traceback.print_exc()  # Print full stack trace
+                traceback.print_exc()
                 state["error"] = f"Error processing message: {str(e)}"
                 return state
 
@@ -180,6 +224,7 @@ class SemanticScholarAgent:
 
         except Exception as e:
             print(f"Error in handle_message: {str(e)}")
+            traceback.print_exc()
             state["error"] = f"Error in S2 agent: {str(e)}"
             shared_state.set(config.StateKeys.ERROR, state["error"])
             return state

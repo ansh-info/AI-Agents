@@ -89,7 +89,6 @@ Remember to:
             )
 
             if not response:
-                print("Empty response from LLM")
                 return {
                     "next_agent": None,
                     "query": query,
@@ -103,75 +102,41 @@ Remember to:
             try:
                 # Find JSON boundaries
                 first_brace = response.find("{")
-                last_brace = response.rfind("}")
+                last_brace = response.find("}", first_brace)  # Find first closing brace
 
-                if first_brace != -1:
-                    # If no closing brace found, add one
-                    if last_brace == -1:
-                        response += "}"
-                    # Extract just the JSON part
-                    json_str = response[first_brace:]
-
-                    # Ensure the JSON has all required fields
-                    if '"type"' not in json_str:
-                        json_str = json_str.replace("{", '{"type":"route",', 1)
-                    if '"confidence"' not in json_str:
-                        json_str = json_str.replace("}", ',"confidence":0.5}')
-
+                if first_brace != -1 and last_brace != -1:
+                    # Extract just the first complete JSON object
+                    json_str = response[first_brace : last_brace + 1]
                     print(f"Attempting to parse JSON: {json_str}")
+
                     routing = json.loads(json_str)
 
-                    # Validate the routing object
-                    if not isinstance(routing, dict):
-                        return {
-                            "next_agent": None,
-                            "query": query,
-                            "response": "Invalid routing format - not a dictionary",
-                        }
+                    if isinstance(routing, dict):
+                        routing_type = routing.get("type", "")
+                        agent_name = routing.get("agent")
+                        confidence = float(routing.get("confidence", 0))
+                        reason = routing.get("reason", "No reason provided")
 
-                    # Extract and validate fields with defaults
-                    routing_type = routing.get("type", "route")
-                    agent_name = routing.get("agent")
-                    confidence = float(routing.get("confidence", 0.5))
-                    reason = routing.get("reason", "No reason provided")
+                        print(
+                            f"Parsed routing: type={routing_type}, agent={agent_name}, confidence={confidence}, reason={reason}"
+                        )
 
-                    print(
-                        f"Parsed routing: type={routing_type}, agent={agent_name}, confidence={confidence}, reason={reason}"
-                    )
+                        if (
+                            routing_type == "route"
+                            and confidence >= 0.5
+                            and agent_name in self.agents
+                        ):
+                            return {
+                                "next_agent": agent_name,
+                                "query": query,
+                                "response": f"Routing to {agent_name} ({confidence:.2f} confidence): {reason}",
+                            }
 
-                    # Validate routing type
-                    if routing_type != "route":
-                        return {
-                            "next_agent": None,
-                            "query": query,
-                            "response": f"Invalid routing type: {routing_type}",
-                        }
-
-                    # Check confidence and agent validity
-                    if confidence >= 0.5 and agent_name in self.agents:
-                        return {
-                            "next_agent": agent_name,
-                            "query": query,
-                            "response": f"Routing to {agent_name} ({confidence:.2f} confidence): {reason}",
-                        }
-                    else:
-                        return {
-                            "next_agent": None,
-                            "query": query,
-                            "response": (
-                                "Low confidence"
-                                if confidence < 0.5
-                                else "Invalid agent"
-                            )
-                            + f": {reason}",
-                        }
-
-                else:
-                    return {
-                        "next_agent": None,
-                        "query": query,
-                        "response": "No valid JSON found in response",
-                    }
+                return {
+                    "next_agent": None,
+                    "query": query,
+                    "response": "Could not determine appropriate agent",
+                }
 
             except json.JSONDecodeError as e:
                 print(f"JSON parsing error: {str(e)}")
