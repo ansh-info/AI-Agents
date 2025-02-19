@@ -139,13 +139,12 @@ class SemanticScholarAgent:
                 # Handle tool call formats
                 tool_call = None
 
-                # Check for Langchain tool calls format
+                # Check for tool calls in LLM response
                 if (
                     hasattr(response, "tool_calls")
                     and isinstance(response.tool_calls, list)
                     and response.tool_calls
                 ):
-                    # Get the first tool call
                     first_tool = response.tool_calls[0]
                     print(f"Processing tool call: {first_tool}")
 
@@ -158,49 +157,43 @@ class SemanticScholarAgent:
                             first_tool.args if hasattr(first_tool, "args") else {}
                         )
 
+                    # Convert to standard format
                     tool_call = {
                         "type": "function",
                         "name": tool_name,
-                        "parameters": {
-                            "query": tool_args.get("query", ""),
-                            "limit": tool_args.get("limit", 5),
-                            "fields": [
-                                "paperId",
-                                "title",
-                                "abstract",
-                                "year",
-                                "authors",
-                                "citationCount",
-                                "openAccessPdf",
-                                "venue",
-                            ],
-                        },
+                        "parameters": tool_args,
                     }
-                # Check for JSON format in content
-                elif hasattr(response, "content") and response.content:
-                    tool_call = self.parse_tool_call(response.content, message)
 
-                # Fallback to enhanced query if no valid tool call
+                    # Ensure required fields
+                    if "query" not in tool_args:
+                        tool_call["parameters"]["query"] = message
+                    if "limit" not in tool_args:
+                        tool_call["parameters"]["limit"] = 5
+                    if "fields" not in tool_args:
+                        tool_call["parameters"]["fields"] = [
+                            "paperId",
+                            "title",
+                            "abstract",
+                            "year",
+                            "authors",
+                            "citationCount",
+                            "openAccessPdf",
+                            "venue",
+                        ]
+
+                elif hasattr(response, "content") and response.content:
+                    # Try to parse JSON from content
+                    try:
+                        first_brace = response.content.find("{")
+                        last_brace = response.content.find("}", first_brace)
+                        if first_brace != -1 and last_brace != -1:
+                            json_str = response.content[first_brace : last_brace + 1]
+                            tool_call = json.loads(json_str)
+                    except:
+                        print("Failed to parse JSON from content")
+
                 if not tool_call:
-                    print("Using enhanced default parameters")
-                    tool_call = {
-                        "type": "function",
-                        "name": "search_papers",
-                        "parameters": {
-                            "query": self.enhance_query(message),
-                            "limit": 5,
-                            "fields": [
-                                "paperId",
-                                "title",
-                                "abstract",
-                                "year",
-                                "authors",
-                                "citationCount",
-                                "openAccessPdf",
-                                "venue",
-                            ],
-                        },
-                    }
+                    raise ValueError("No valid tool call found in LLM response")
 
                 print(f"Final tool call: {tool_call}")
                 shared_state.set(config.StateKeys.CURRENT_TOOL, tool_call["name"])
