@@ -185,14 +185,14 @@ Remember to:
 
                 # Process and format the response
                 if sub_agent_result.get("response"):
+                    state["response"] = sub_agent_result["response"]
+                elif sub_agent_result.get("error"):
+                    state["error"] = sub_agent_result["error"]
                     state["response"] = (
-                        f"Results from {agent_name}:\n\n{sub_agent_result['response']}"
+                        f"Error from {agent_name}: {sub_agent_result['error']}"
                     )
                 else:
                     state["response"] = "No results found."
-
-                if sub_agent_result.get("error"):
-                    state["error"] = sub_agent_result["error"]
 
             else:
                 state["response"] = "I'm not sure which agent should handle this query."
