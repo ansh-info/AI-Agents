@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from langchain_core.tools import tool, ToolException
+from pydantic import BaseModel, Field, field_validator
 
 from config.config import config
 from state.shared_state import shared_state
@@ -9,48 +9,107 @@ from tools.s2.single_paper_rec import get_single_paper_recommendations
 
 
 class MultiPaperRecInput(BaseModel):
+    """Input schema for multiple paper recommendations tool."""
+
     paper_ids: List[str] = Field(
-        description="List of paper IDs to get recommendations for"
+        description="List of Semantic Scholar Paper IDs to get recommendations for"
     )
-    limit: int = Field(default=5, description="Maximum number of recommendations")
+    limit: int = Field(
+        default=5,
+        description="Maximum total number of recommendations to return",
+        ge=1,
+        le=100,
+    )
+
+    @field_validator("paper_ids")
+    def validate_paper_ids(cls, v: List[str]) -> List[str]:
+        """Validate paper IDs list."""
+        if not v:
+            raise ValueError("At least one paper ID must be provided")
+        if len(v) > 10:  # Arbitrary limit to prevent abuse
+            raise ValueError("Maximum of 10 paper IDs allowed")
+        return v
 
 
-@tool(args_schema=MultiPaperRecInput)
+def _handle_multi_recommendation_error(error: ToolException) -> Dict[str, Any]:
+    """Handle tool execution errors in a structured way."""
+    return {
+        "status": "error",
+        "error": str(error),
+        "recommendations": [],
+        "message": f"Failed to get multi-paper recommendations: {str(error)}",
+    }
+
+
+@tool(
+    args_schema=MultiPaperRecInput,
+    handle_tool_error=_handle_multi_recommendation_error,
+    return_direct=True,
+)
 def get_multi_paper_recommendations(
     paper_ids: List[str], limit: int = 5
 ) -> Dict[str, Any]:
-    """Get paper recommendations based on multiple papers."""
-    all_recommendations = []
+    """Get paper recommendations based on multiple papers.
 
-    try:
-        for paper_id in paper_ids:
+    Args:
+        paper_ids: List of Semantic Scholar Paper IDs to get recommendations for
+        limit: Maximum total number of recommendations to return
+
+    Returns:
+        Dict containing aggregated recommendations or error information
+
+    Raises:
+        ToolException: If there's an error getting recommendations
+    """
+    if not paper_ids:
+        raise ToolException("At least one paper ID must be provided")
+
+    all_recommendations = []
+    errors = []
+
+    # Calculate recommendations per paper
+    recs_per_paper = max(1, limit // len(paper_ids))
+
+    for paper_id in paper_ids:
+        try:
             result = get_single_paper_recommendations(
-                paper_id, limit=limit // len(paper_ids)
+                paper_id=paper_id, limit=recs_per_paper
             )
             if result["status"] == "success":
                 all_recommendations.extend(result["recommendations"])
+            else:
+                errors.append(f"Error for paper {paper_id}: {result.get('error')}")
+        except Exception as e:
+            errors.append(
+                f"Failed to get recommendations for paper {paper_id}: {str(e)}"
+            )
 
-        # Deduplicate recommendations
-        seen = set()
-        unique_recommendations = []
-        for rec in all_recommendations:
-            if rec["paperId"] not in seen:
-                seen.add(rec["paperId"])
-                unique_recommendations.append(rec)
+    if not all_recommendations and errors:
+        error_msg = "; ".join(errors)
+        raise ToolException(f"Failed to get any recommendations: {error_msg}")
 
-        # Take top limit recommendations
-        final_recommendations = unique_recommendations[:limit]
+    # Deduplicate recommendations
+    seen = set()
+    unique_recommendations = []
+    for rec in all_recommendations:
+        if rec["paperId"] not in seen:
+            seen.add(rec["paperId"])
+            unique_recommendations.append(rec)
 
-        # Update shared state
-        shared_state.add_papers(final_recommendations)
+    # Take top limit recommendations
+    final_recommendations = unique_recommendations[:limit]
 
-        return {
-            "status": "success",
-            "recommendations": final_recommendations,
-            "total": len(final_recommendations),
-        }
+    # Update shared state
+    shared_state.add_papers(final_recommendations)
 
-    except Exception as e:
-        error_msg = f"Error getting multi-paper recommendations: {str(e)}"
-        shared_state.set(config.StateKeys.ERROR, error_msg)
-        return {"status": "error", "error": error_msg, "recommendations": []}
+    return {
+        "status": "success",
+        "recommendations": final_recommendations,
+        "total": len(final_recommendations),
+        "errors": errors if errors else None,
+        "message": (
+            f"Found {len(final_recommendations)} unique recommendations "
+            f"across {len(paper_ids)} papers."
+            + (f" Some errors occurred: {'; '.join(errors)}" if errors else "")
+        ),
+    }

@@ -1,21 +1,26 @@
 from typing import Any, Dict, List, Union
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+
 from config.config import config
 from state.shared_state import shared_state
 
 
 def create_llm() -> ChatOllama:
-    """Create and configure Ollama LLM instance"""
+    """Create and configure Ollama LLM instance with tool calling support"""
     return ChatOllama(
         model=config.LLM_MODEL,
-        temperature=0.1,  # Slight randomness for better JSON generation
-        stop=["},\n", "}\n\n"],  # Only stop on JSON boundaries
+        temperature=0.1,  # Lower temperature for more deterministic tool calling
+        stop=["},\n", "}\n\n"],  # Stop on JSON boundaries
         frequency_penalty=0,
         presence_penalty=0,
-        top_p=0.95,  # Allow more sampling for complete JSON structures
-        repeat_penalty=1.1,  # Reduce repetition in structured output
+        top_p=0.95,
+        repeat_penalty=1.1,
+        # Tool calling specific parameters
+        format="json",  # Enable JSON mode for tool calls
+        num_predict=1024,  # Increased context for complex tool calls
     )
 
 
@@ -75,8 +80,12 @@ class LLMManager:
             return ""
 
     def bind_tools(self, tools: List[Any]) -> None:
-        """Bind tools to the LLM"""
-        self.llm = self.llm.bind_tools(tools)
+        """Bind tools to the LLM with proper configuration"""
+        # Convert tools to the format expected by Ollama
+        self.llm = self.llm.bind_tools(
+            tools,
+            tool_choice="auto",  # Let the model decide which tool to use
+        )
 
 
 # Create a global instance

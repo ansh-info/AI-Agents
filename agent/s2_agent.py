@@ -128,97 +128,70 @@ class SemanticScholarAgent:
                 print(f"Message: {message}")
                 print(f"Chat history: {messages}")
 
-                # Get LLM response
+                # Get LLM response with tool calling
                 response = self.chain.invoke(
                     {"input": message, "chat_history": messages}
                 )
 
                 print(f"Raw LLM Response: {response}")
-                print(f"Response type: {type(response)}")
 
                 # Handle tool call formats
                 tool_call = None
-
-                # Check for tool calls in LLM response
-                if (
-                    hasattr(response, "tool_calls")
-                    and isinstance(response.tool_calls, list)
-                    and response.tool_calls
-                ):
-                    first_tool = response.tool_calls[0]
-                    print(f"Processing tool call: {first_tool}")
-
-                    if isinstance(first_tool, dict):
-                        tool_name = first_tool.get("name")
-                        tool_args = first_tool.get("args", {})
-                    else:
-                        tool_name = first_tool.name
-                        tool_args = (
-                            first_tool.args if hasattr(first_tool, "args") else {}
-                        )
-
-                    # Convert to standard format
-                    tool_call = {
-                        "type": "function",
-                        "name": tool_name,
-                        "parameters": tool_args,
-                    }
-
-                    # Ensure required fields
-                    if "query" not in tool_args:
-                        tool_call["parameters"]["query"] = message
-                    if "limit" not in tool_args:
-                        tool_call["parameters"]["limit"] = 5
-                    if "fields" not in tool_args:
-                        tool_call["parameters"]["fields"] = [
-                            "paperId",
-                            "title",
-                            "abstract",
-                            "year",
-                            "authors",
-                            "citationCount",
-                            "openAccessPdf",
-                            "venue",
-                        ]
-
+                if hasattr(response, "tool_calls") and response.tool_calls:
+                    tool_call = response.tool_calls[0]
+                    tool_name = tool_call.name
+                    tool_args = tool_call.args
                 elif hasattr(response, "content") and response.content:
-                    # Try to parse JSON from content
                     try:
-                        first_brace = response.content.find("{")
-                        last_brace = response.content.find("}", first_brace)
-                        if first_brace != -1 and last_brace != -1:
-                            json_str = response.content[first_brace : last_brace + 1]
-                            tool_call = json.loads(json_str)
-                    except:
-                        print("Failed to parse JSON from content")
+                        # Parse tool call from content if in JSON format
+                        tool_data = json.loads(response.content)
+                        tool_call = {
+                            "name": tool_data.get("name", "search_papers"),
+                            "args": tool_data.get("args", {"query": message}),
+                        }
+                        tool_name = tool_call["name"]
+                        tool_args = tool_call["args"]
+                    except json.JSONDecodeError:
+                        # Default to search if JSON parsing fails
+                        tool_name = "search_papers"
+                        tool_args = {"query": message}
 
-                if not tool_call:
+                if not tool_name:
                     raise ValueError("No valid tool call found in LLM response")
 
-                print(f"Final tool call: {tool_call}")
-                shared_state.set(config.StateKeys.CURRENT_TOOL, tool_call["name"])
+                print(f"Final tool call: {tool_name} with args: {tool_args}")
+                shared_state.set(config.StateKeys.CURRENT_TOOL, tool_name)
 
-                # Execute tool
-                result = self.execute_tool(tool_call)
-                print(f"Tool execution result: {result}")
+                # Execute tool and handle any tool exceptions
+                try:
+                    result = self.execute_tool({"name": tool_name, "args": tool_args})
+                    print(f"Tool execution result: {result}")
 
-                # Process results
-                if result and isinstance(result, dict):
-                    papers = result.get("papers", [])
-                    if papers:
-                        response_content = self.format_papers_response(papers)
-                        state["response"] = response_content
-                        shared_state.add_papers(papers)
+                    # Process results
+                    if result and isinstance(result, dict):
+                        if result.get("status") == "error":
+                            state["error"] = result.get(
+                                "message", "Tool execution failed"
+                            )
+                        else:
+                            papers = result.get("papers", [])
+                            if papers:
+                                state["response"] = self.format_papers_response(papers)
+                                shared_state.add_papers(papers)
+                            else:
+                                state["response"] = result.get(
+                                    "message", "No papers found matching your criteria."
+                                )
                     else:
-                        state["response"] = "No papers found matching your criteria."
-                else:
-                    raise ValueError("Invalid tool execution result")
+                        raise ValueError("Invalid tool execution result")
+
+                except Exception as tool_error:
+                    state["error"] = f"Tool execution error: {str(tool_error)}"
 
             except Exception as e:
                 print(f"Error in message handling: {str(e)}")
                 traceback.print_exc()
                 state["error"] = f"Error processing message: {str(e)}"
-                return state
 
             return state
 
