@@ -102,16 +102,30 @@ Remember to:
                 start_idx = response.find("{")
                 end_idx = response.rfind("}")
 
-                if start_idx != -1 and end_idx != -1:
-                    # Extract the JSON part and ensure it's properly formatted
-                    json_str = response[start_idx : end_idx + 1]
-                    json_str = json_str.replace("\n", "").strip()
-                    # Ensure proper JSON structure
+                if start_idx != -1:
+                    # Extract the JSON part
+                    json_str = response[start_idx:]
+                    # Clean up the JSON
+                    json_str = json_str.strip()
+                    # Ensure proper JSON closure
                     if not json_str.endswith("}"):
                         json_str += "}"
+                    # Remove any trailing content after the last }
+                    json_str = json_str[: json_str.rfind("}") + 1]
+                    # Clean up whitespace and newlines
+                    json_str = json_str.replace("\n", " ").strip()
+
                     print(f"Attempting to parse JSON: {json_str}")
 
-                    routing = json.loads(json_str)
+                    try:
+                        routing = json.loads(json_str)
+                    except:
+                        # Try more aggressive cleaning if initial parse fails
+                        json_str = re.sub(
+                            r",\s*}", "}", json_str
+                        )  # Remove trailing commas
+                        json_str = re.sub(r"\s+", " ", json_str)  # Normalize whitespace
+                        routing = json.loads(json_str)
 
                     if isinstance(routing, dict):
                         routing_type = routing.get("type", "")
