@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 
-from langchain_core.tools import tool, ToolException
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 
 from config.config import config
@@ -31,21 +31,7 @@ class MultiPaperRecInput(BaseModel):
         return v
 
 
-def _handle_multi_recommendation_error(error: ToolException) -> Dict[str, Any]:
-    """Handle tool execution errors in a structured way."""
-    return {
-        "status": "error",
-        "error": str(error),
-        "recommendations": [],
-        "message": f"Failed to get multi-paper recommendations: {str(error)}",
-    }
-
-
-@tool(
-    args_schema=MultiPaperRecInput,
-    handle_tool_error=_handle_multi_recommendation_error,
-    return_direct=True,
-)
+@tool(args_schema=MultiPaperRecInput, return_direct=True)
 def get_multi_paper_recommendations(
     paper_ids: List[str], limit: int = 5
 ) -> Dict[str, Any]:
@@ -57,21 +43,23 @@ def get_multi_paper_recommendations(
 
     Returns:
         Dict containing aggregated recommendations or error information
-
-    Raises:
-        ToolException: If there's an error getting recommendations
     """
-    if not paper_ids:
-        raise ToolException("At least one paper ID must be provided")
+    try:
+        if not paper_ids:
+            return {
+                "status": "error",
+                "error": "At least one paper ID must be provided",
+                "recommendations": [],
+                "message": "At least one paper ID must be provided",
+            }
 
-    all_recommendations = []
-    errors = []
+        all_recommendations = []
+        errors = []
 
-    # Calculate recommendations per paper
-    recs_per_paper = max(1, limit // len(paper_ids))
+        # Calculate recommendations per paper
+        recs_per_paper = max(1, limit // len(paper_ids))
 
-    for paper_id in paper_ids:
-        try:
+        for paper_id in paper_ids:
             result = get_single_paper_recommendations(
                 paper_id=paper_id, limit=recs_per_paper
             )
@@ -79,37 +67,46 @@ def get_multi_paper_recommendations(
                 all_recommendations.extend(result["recommendations"])
             else:
                 errors.append(f"Error for paper {paper_id}: {result.get('error')}")
-        except Exception as e:
-            errors.append(
-                f"Failed to get recommendations for paper {paper_id}: {str(e)}"
-            )
 
-    if not all_recommendations and errors:
-        error_msg = "; ".join(errors)
-        raise ToolException(f"Failed to get any recommendations: {error_msg}")
+        if not all_recommendations and errors:
+            error_msg = "; ".join(errors)
+            return {
+                "status": "error",
+                "error": f"Failed to get any recommendations: {error_msg}",
+                "recommendations": [],
+                "message": f"Failed to get any recommendations: {error_msg}",
+            }
 
-    # Deduplicate recommendations
-    seen = set()
-    unique_recommendations = []
-    for rec in all_recommendations:
-        if rec["paperId"] not in seen:
-            seen.add(rec["paperId"])
-            unique_recommendations.append(rec)
+        # Deduplicate recommendations
+        seen = set()
+        unique_recommendations = []
+        for rec in all_recommendations:
+            if rec["paperId"] not in seen:
+                seen.add(rec["paperId"])
+                unique_recommendations.append(rec)
 
-    # Take top limit recommendations
-    final_recommendations = unique_recommendations[:limit]
+        # Take top limit recommendations
+        final_recommendations = unique_recommendations[:limit]
 
-    # Update shared state
-    shared_state.add_papers(final_recommendations)
+        # Update shared state
+        shared_state.add_papers(final_recommendations)
 
-    return {
-        "status": "success",
-        "recommendations": final_recommendations,
-        "total": len(final_recommendations),
-        "errors": errors if errors else None,
-        "message": (
-            f"Found {len(final_recommendations)} unique recommendations "
-            f"across {len(paper_ids)} papers."
-            + (f" Some errors occurred: {'; '.join(errors)}" if errors else "")
-        ),
-    }
+        return {
+            "status": "success",
+            "recommendations": final_recommendations,
+            "total": len(final_recommendations),
+            "errors": errors if errors else None,
+            "message": (
+                f"Found {len(final_recommendations)} unique recommendations "
+                f"across {len(paper_ids)} papers."
+                + (f" Some errors occurred: {'; '.join(errors)}" if errors else "")
+            ),
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "recommendations": [],
+            "message": f"Error during multi-paper recommendation process: {str(e)}",
+        }
