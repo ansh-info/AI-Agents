@@ -23,21 +23,7 @@ class SinglePaperRecInput(BaseModel):
     )
 
 
-def _handle_recommendation_error(error: ToolException) -> Dict[str, Any]:
-    """Handle tool execution errors in a structured way."""
-    return {
-        "status": "error",
-        "error": str(error),
-        "recommendations": [],
-        "message": f"Failed to get paper recommendations: {str(error)}",
-    }
-
-
-@tool(
-    args_schema=SinglePaperRecInput,
-    handle_tool_error=_handle_recommendation_error,
-    return_direct=True,
-)
+@tool(args_schema=SinglePaperRecInput, return_direct=True)
 def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper.
 
@@ -47,71 +33,99 @@ def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str,
 
     Returns:
         Dict containing recommended papers or error information
-
-    Raises:
-        ToolException: If there's an error getting recommendations
     """
-    endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-    params = {"limit": limit}
+    try:
+        endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
+        params = {"limit": limit}
 
-    max_retries = 3
-    retry_delay = 1
-    last_error = None
+        max_retries = 3
+        retry_delay = 1
+        last_error = None
 
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(
-                endpoint,
-                params=params,
-                headers={"x-api-key": config.SEMANTIC_SCHOLAR_API_KEY},
-            )
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    endpoint,
+                    params=params,
+                    headers={"x-api-key": config.SEMANTIC_SCHOLAR_API_KEY},
+                )
 
-            if response.status_code == 429:  # Rate limit hit
+                if response.status_code == 429:  # Rate limit hit
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    return {
+                        "status": "error",
+                        "error": "Rate limit exceeded. Please try again later.",
+                        "recommendations": [],
+                        "message": "Rate limit exceeded. Please try again later.",
+                    }
+
+                # Handle various error cases
+                if response.status_code == 404:
+                    return {
+                        "status": "error",
+                        "error": f"Paper with ID {paper_id} not found.",
+                        "recommendations": [],
+                        "message": f"Paper with ID {paper_id} not found.",
+                    }
+                elif response.status_code == 400:
+                    return {
+                        "status": "error",
+                        "error": f"Invalid paper ID format: {paper_id}",
+                        "recommendations": [],
+                        "message": f"Invalid paper ID format: {paper_id}",
+                    }
+
+                response.raise_for_status()
+                data = response.json()
+                recommendations = data.get("recommendations", [])
+
+                # Validate recommendations
+                if not recommendations:
+                    return {
+                        "status": "success",
+                        "recommendations": [],
+                        "total": 0,
+                        "message": f"No recommendations found for paper {paper_id}.",
+                    }
+
+                # Update shared state
+                shared_state.add_papers(recommendations)
+
+                return {
+                    "status": "success",
+                    "recommendations": recommendations,
+                    "total": len(recommendations),
+                    "message": f"Found {len(recommendations)} recommended papers.",
+                }
+
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
-                raise ToolException("Rate limit exceeded. Please try again later.")
 
-            # Handle various error cases
-            if response.status_code == 404:
-                raise ToolException(f"Paper with ID {paper_id} not found.")
-            elif response.status_code == 400:
-                raise ToolException(f"Invalid paper ID format: {paper_id}")
-
-            response.raise_for_status()
-            data = response.json()
-            recommendations = data.get("recommendations", [])
-
-            # Validate recommendations
-            if not recommendations:
                 return {
-                    "status": "success",
+                    "status": "error",
+                    "error": f"Error getting recommendations: {last_error}",
                     "recommendations": [],
-                    "total": 0,
-                    "message": f"No recommendations found for paper {paper_id}.",
+                    "message": f"Error getting recommendations: {last_error}",
                 }
 
-            # Update shared state
-            shared_state.add_papers(recommendations)
+        return {
+            "status": "error",
+            "error": f"Failed after {max_retries} attempts. Last error: {last_error}",
+            "recommendations": [],
+            "message": f"Failed after {max_retries} attempts. Last error: {last_error}",
+        }
 
-            return {
-                "status": "success",
-                "recommendations": recommendations,
-                "total": len(recommendations),
-                "message": f"Found {len(recommendations)} recommended papers.",
-            }
-
-        except requests.exceptions.RequestException as e:
-            last_error = str(e)
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-                retry_delay *= 2
-                continue
-
-            error_msg = f"Error getting recommendations: {last_error}"
-            raise ToolException(error_msg)
-
-    raise ToolException(
-        f"Failed after {max_retries} attempts. Last error: {last_error}"
-    )
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "recommendations": [],
+            "message": f"Error during recommendation process: {str(e)}",
+        }

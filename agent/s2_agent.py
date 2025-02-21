@@ -138,26 +138,34 @@ class SemanticScholarAgent:
                 # Handle tool call formats
                 tool_call = None
                 if hasattr(response, "tool_calls") and response.tool_calls:
-                    tool_call = response.tool_calls[0]
-                    tool_name = tool_call.name
-                    tool_args = tool_call.args
+                    # Extract tool call from response
+                    tool_dict = response.tool_calls[0]
+                    # Handle direct dictionary access
+                    tool_name = tool_dict.get("name") or tool_dict.get(
+                        "function", {}
+                    ).get("name")
+                    tool_args = tool_dict.get("args") or tool_dict.get(
+                        "function", {}
+                    ).get("arguments", {})
+                    if isinstance(tool_args, str):
+                        try:
+                            tool_args = json.loads(tool_args)
+                        except json.JSONDecodeError:
+                            tool_args = {"query": message}
                 elif hasattr(response, "content") and response.content:
                     try:
                         # Parse tool call from content if in JSON format
                         tool_data = json.loads(response.content)
-                        tool_call = {
-                            "name": tool_data.get("name", "search_papers"),
-                            "args": tool_data.get("args", {"query": message}),
-                        }
-                        tool_name = tool_call["name"]
-                        tool_args = tool_call["args"]
+                        tool_name = tool_data.get("name", "search_papers")
+                        tool_args = tool_data.get("args", {"query": message})
                     except json.JSONDecodeError:
                         # Default to search if JSON parsing fails
                         tool_name = "search_papers"
                         tool_args = {"query": message}
-
-                if not tool_name:
-                    raise ValueError("No valid tool call found in LLM response")
+                else:
+                    # Default to search
+                    tool_name = "search_papers"
+                    tool_args = {"query": message}
 
                 print(f"Final tool call: {tool_name} with args: {tool_args}")
                 shared_state.set(config.StateKeys.CURRENT_TOOL, tool_name)
@@ -186,6 +194,7 @@ class SemanticScholarAgent:
                         raise ValueError("Invalid tool execution result")
 
                 except Exception as tool_error:
+                    print(f"Tool execution error: {str(tool_error)}")
                     state["error"] = f"Tool execution error: {str(tool_error)}"
 
             except Exception as e:
@@ -205,22 +214,34 @@ class SemanticScholarAgent:
     def execute_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the selected tool"""
         try:
-            tool_name = tool_call["name"]
-            params = tool_call["parameters"]
+            tool_name = tool_call.get("name")
+            tool_args = tool_call.get("args", {})
+
+            # Clean up args to match tool expectations
+            if "fields" in tool_args:
+                # Handle fields if it's a string representation of a list
+                if isinstance(tool_args["fields"], str):
+                    try:
+                        tool_args["fields"] = eval(tool_args["fields"])
+                    except:
+                        tool_args["fields"] = None
+
+            print(f"Executing tool {tool_name} with args: {tool_args}")
 
             if tool_name == "search_papers":
-                return self.search_tool.invoke(
-                    params["query"],
-                    limit=params.get("limit", 5),
-                    fields=params.get("fields"),
+                return search_papers(
+                    query=tool_args.get("query"),
+                    limit=tool_args.get("limit", 5),
+                    fields=tool_args.get("fields"),
                 )
             elif tool_name == "get_single_paper_recommendations":
-                return self.single_rec_tool.invoke(
-                    params["paper_id"], limit=params.get("limit", 5)
+                return get_single_paper_recommendations(
+                    paper_id=tool_args.get("paper_id"), limit=tool_args.get("limit", 5)
                 )
             elif tool_name == "get_multi_paper_recommendations":
-                return self.multi_rec_tool.invoke(
-                    params["paper_ids"], limit=params.get("limit", 5)
+                return get_multi_paper_recommendations(
+                    paper_ids=tool_args.get("paper_ids", []),
+                    limit=tool_args.get("limit", 5),
                 )
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")

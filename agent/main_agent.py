@@ -3,16 +3,6 @@ import json
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
-
-
-class AgentState(TypedDict):
-    """Type definition for agent state"""
-
-    message: str
-    response: str | None
-    error: str | None
-
-
 from langgraph.graph import END, StateGraph
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -21,6 +11,14 @@ from config.config import config
 from state.shared_state import shared_state
 from agents.s2_agent import s2_agent
 from utils.llm import llm_manager
+
+
+class AgentState(TypedDict):
+    """Type definition for agent state"""
+
+    message: str
+    response: str | None
+    error: str | None
 
 
 class MainAgent:
@@ -100,16 +98,34 @@ Remember to:
             print(f"Processing response: {response}")
 
             try:
-                # Find JSON boundaries
-                first_brace = response.find("{")
-                last_brace = response.find("}", first_brace)  # Find first closing brace
+                # Find JSON boundaries and ensure proper JSON format
+                start_idx = response.find("{")
+                end_idx = response.rfind("}")
 
-                if first_brace != -1 and last_brace != -1:
-                    # Extract just the first complete JSON object
-                    json_str = response[first_brace : last_brace + 1]
+                if start_idx != -1:
+                    # Extract the JSON part
+                    json_str = response[start_idx:]
+                    # Clean up the JSON
+                    json_str = json_str.strip()
+                    # Ensure proper JSON closure
+                    if not json_str.endswith("}"):
+                        json_str += "}"
+                    # Remove any trailing content after the last }
+                    json_str = json_str[: json_str.rfind("}") + 1]
+                    # Clean up whitespace and newlines
+                    json_str = json_str.replace("\n", " ").strip()
+
                     print(f"Attempting to parse JSON: {json_str}")
 
-                    routing = json.loads(json_str)
+                    try:
+                        routing = json.loads(json_str)
+                    except:
+                        # Try more aggressive cleaning if initial parse fails
+                        json_str = re.sub(
+                            r",\s*}", "}", json_str
+                        )  # Remove trailing commas
+                        json_str = re.sub(r"\s+", " ", json_str)  # Normalize whitespace
+                        routing = json.loads(json_str)
 
                     if isinstance(routing, dict):
                         routing_type = routing.get("type", "")
