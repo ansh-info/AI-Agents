@@ -105,6 +105,65 @@ class SemanticScholarAgent:
             traceback.print_exc()
             return {"status": "error", "error": str(e), "papers": []}
 
+    def format_papers_response(self, papers: List[Dict[str, Any]]) -> str:
+        """Format papers list into readable response.
+
+        Args:
+            papers: List of paper dictionaries from Semantic Scholar
+
+        Returns:
+            Formatted string response
+        """
+        if not papers:
+            return "No papers found matching your query."
+
+        response_parts = ["Here are the relevant papers I found:\n"]
+
+        for i, paper in enumerate(papers, 1):
+            # Safely get values with defaults
+            title = paper.get("title", "Untitled")
+            authors = paper.get("authors", [])
+            year = paper.get("year", "N/A")
+            cite_count = paper.get("citationCount", 0)
+            venue = paper.get("venue", "")
+            abstract = paper.get("abstract", "")
+            pdf_link = paper.get("openAccessPdf", {})
+            if pdf_link:  # Check if not None before getting url
+                pdf_url = pdf_link.get("url", "")
+            else:
+                pdf_url = ""
+
+            # Format authors
+            author_names = [a.get("name", "") for a in authors if a]
+            author_str = ", ".join(author_names[:3])
+            if len(author_names) > 3:
+                author_str += " et al."
+
+            # Build paper entry
+            entry = [f"\n{i}. {title}"]
+            entry.append(f"   Authors: {author_str}")
+            entry.append(f"   Year: {year}")
+
+            if cite_count:
+                entry.append(f"   Citations: {cite_count}")
+
+            if venue:
+                entry.append(f"   Venue: {venue}")
+
+            if abstract:
+                # Truncate abstract if too long
+                short_abstract = (
+                    abstract[:300] + "..." if len(abstract) > 300 else abstract
+                )
+                entry.append(f"   Abstract: {short_abstract}")
+
+            if pdf_url:
+                entry.append(f"   PDF: {pdf_url}")
+
+            response_parts.append("\n".join(entry))
+
+        return "\n".join(response_parts)
+
     def handle_message(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Handle incoming messages and route to appropriate tool"""
         try:
