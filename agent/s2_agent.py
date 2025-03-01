@@ -72,32 +72,30 @@ class SemanticScholarAgent:
 
             print(f"Executing tool {tool_name} with args: {raw_args}")
 
-            # Extract tool arguments based on the tool type
             if tool_name == "search_papers":
-                # Parse and validate search paper args
+                # Handle search papers
                 tool_args = {
-                    "query": raw_args.get("query")
-                    or raw_args.get("parameters", {}).get("query"),
+                    "query": raw_args.get("query", ""),
                     "limit": raw_args.get("limit", 5),
                     "fields": raw_args.get("fields"),
                 }
-                return search_papers(**tool_args)
+                return search_papers.invoke(tool_args)
 
             elif tool_name == "get_single_paper_recommendations":
-                # Parse and validate single paper recommendation args
+                # Handle single paper recommendations
                 tool_args = {
                     "paper_id": raw_args.get("paper_id"),
                     "limit": raw_args.get("limit", 5),
                 }
-                return get_single_paper_recommendations(**tool_args)
+                return get_single_paper_recommendations.invoke(tool_args)
 
             elif tool_name == "get_multi_paper_recommendations":
-                # Parse and validate multi paper recommendation args
+                # Handle multi paper recommendations
                 tool_args = {
                     "paper_ids": raw_args.get("paper_ids", []),
                     "limit": raw_args.get("limit", 5),
                 }
-                return get_multi_paper_recommendations(**tool_args)
+                return get_multi_paper_recommendations.invoke(tool_args)
 
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
