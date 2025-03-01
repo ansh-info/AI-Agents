@@ -1,8 +1,8 @@
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import requests
-from langchain_core.tools import tool, ToolException
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from config.config import config
@@ -36,31 +36,22 @@ def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str,
     """
     try:
         endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-        params = {"limit": limit}
+        params = {"limit": min(limit, 100)}  # Respect unauthenticated limit
 
         max_retries = 3
-        retry_delay = 1
+        retry_delay = 2  # Starting delay for unauthenticated access
         last_error = None
 
         for attempt in range(max_retries):
             try:
-                response = requests.get(
-                    endpoint,
-                    params=params,
-                    headers={"x-api-key": config.SEMANTIC_SCHOLAR_API_KEY},
-                )
+                # Make request without API key
+                response = requests.get(endpoint, params=params)
 
                 if response.status_code == 429:  # Rate limit hit
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                    return {
-                        "status": "error",
-                        "error": "Rate limit exceeded. Please try again later.",
-                        "recommendations": [],
-                        "message": "Rate limit exceeded. Please try again later.",
-                    }
+                    wait_time = 2**attempt  # Exponential backoff
+                    print(f"Rate limit hit, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
 
                 # Handle various error cases
                 if response.status_code == 404:
@@ -103,7 +94,12 @@ def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str,
 
             except requests.exceptions.RequestException as e:
                 last_error = str(e)
-                if attempt < max_retries - 1:
+                if response.status_code == 429:  # Rate limit
+                    wait_time = 2**attempt
+                    print(f"Rate limit hit, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                elif attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
@@ -127,5 +123,5 @@ def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str,
             "status": "error",
             "error": str(e),
             "recommendations": [],
-            "message": f"Error during recommendation process: {str(e)}",
+            "message": f"Error getting recommendations: {str(e)}",
         }
