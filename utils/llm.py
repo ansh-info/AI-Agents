@@ -12,15 +12,13 @@ def create_llm() -> ChatOllama:
     """Create and configure Ollama LLM instance with tool calling support"""
     return ChatOllama(
         model=config.LLM_MODEL,
-        temperature=0.1,  # Lower temperature for more deterministic tool calling
-        stop=["},\n", "}\n\n"],  # Stop on JSON boundaries
-        frequency_penalty=0,
-        presence_penalty=0,
-        top_p=0.95,
-        repeat_penalty=1.1,
-        # Tool calling specific parameters
         format="json",  # Enable JSON mode for tool calls
-        num_predict=1024,  # Increased context for complex tool calls
+        options={
+            "temperature": 0.1,  # Lower temperature for more deterministic tool calling
+            "top_p": 0.95,
+            "repeat_penalty": 1.1,
+            "num_predict": 1024,  # Increased context for complex tool calls
+        },
     )
 
 

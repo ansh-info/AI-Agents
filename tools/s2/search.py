@@ -27,7 +27,7 @@ def search_papers(
 
     Args:
         query: Search query string
-        limit: Maximum number of results to return
+        limit: Maximum number of results to return (max 100 for unauthenticated users)
         fields: List of fields to include in results
 
     Returns:
@@ -68,33 +68,24 @@ def search_papers(
         endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/search"
         params = {
             "query": enhanced_query,
-            "limit": limit,
+            "limit": min(limit, 100),  # Respect unauthenticated limit
             "fields": ",".join(fields),
         }
 
         max_retries = 3
-        retry_delay = 1  # Starting delay in seconds
+        retry_delay = 2  # Starting delay in seconds for unauthenticated access
         last_error = None
 
         for attempt in range(max_retries):
             try:
-                response = requests.get(
-                    endpoint,
-                    params=params,
-                    headers={"x-api-key": config.SEMANTIC_SCHOLAR_API_KEY},
-                )
+                # Make request without API key
+                response = requests.get(endpoint, params=params)
 
                 if response.status_code == 429:  # Rate limit hit
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                        continue
-                    return {
-                        "status": "error",
-                        "error": "Rate limit exceeded. Please try again later.",
-                        "papers": [],
-                        "message": "Rate limit exceeded. Please try again later.",
-                    }
+                    wait_time = 2**attempt  # Exponential backoff
+                    print(f"Rate limit hit, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
 
                 response.raise_for_status()
                 data = response.json()
@@ -123,7 +114,12 @@ def search_papers(
 
             except requests.exceptions.RequestException as e:
                 last_error = str(e)
-                if attempt < max_retries - 1:
+                if response.status_code == 429:  # Rate limit
+                    wait_time = 2**attempt
+                    print(f"Rate limit hit, waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                elif attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
