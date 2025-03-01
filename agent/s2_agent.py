@@ -38,9 +38,12 @@ class SemanticScholarAgent:
 
             # Configure LLM with lower temperature for more consistent responses
             self.llm = llm_manager.llm.bind(
-                temperature=0.1,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
+                options={
+                    "temperature": 0.1,
+                    "top_p": 0.95,
+                    "repeat_penalty": 1.1,
+                    "num_ctx": 2048,
+                }
             )
 
             # Create prompt template
