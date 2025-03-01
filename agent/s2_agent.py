@@ -68,24 +68,39 @@ class SemanticScholarAgent:
         """Execute the selected tool"""
         try:
             tool_name = tool_call.get("name")
-            tool_args = tool_call.get("args", {})
+            raw_args = tool_call.get("args", {})
 
-            # Clean up args to match tool expectations
-            if "fields" in tool_args:
-                # Handle fields if it's a string representation of a list
-                if isinstance(tool_args["fields"], str):
-                    try:
-                        tool_args["fields"] = eval(tool_args["fields"])
-                    except:
-                        tool_args["fields"] = None
+            print(f"Executing tool {tool_name} with args: {raw_args}")
 
-            print(f"Executing tool {tool_name} with args: {tool_args}")
+            # Extract tool arguments based on the tool type
+            if tool_name == "search_papers":
+                # Parse and validate search paper args
+                tool_args = {
+                    "query": raw_args.get("query")
+                    or raw_args.get("parameters", {}).get("query"),
+                    "limit": raw_args.get("limit", 5),
+                    "fields": raw_args.get("fields"),
+                }
+                return search_papers(**tool_args)
 
-            if tool_name not in self.tools:
+            elif tool_name == "get_single_paper_recommendations":
+                # Parse and validate single paper recommendation args
+                tool_args = {
+                    "paper_id": raw_args.get("paper_id"),
+                    "limit": raw_args.get("limit", 5),
+                }
+                return get_single_paper_recommendations(**tool_args)
+
+            elif tool_name == "get_multi_paper_recommendations":
+                # Parse and validate multi paper recommendation args
+                tool_args = {
+                    "paper_ids": raw_args.get("paper_ids", []),
+                    "limit": raw_args.get("limit", 5),
+                }
+                return get_multi_paper_recommendations(**tool_args)
+
+            else:
                 raise ValueError(f"Unknown tool: {tool_name}")
-
-            tool_func = self.tools[tool_name]
-            return tool_func(**tool_args)
 
         except Exception as e:
             print(f"Tool execution error: {str(e)}")
@@ -114,44 +129,73 @@ class SemanticScholarAgent:
 
                 print(f"Raw LLM Response: {response}")
 
-                # Handle tool call formats
+                # Extract tool call data
                 tool_call = None
-                if hasattr(response, "tool_calls") and response.tool_calls:
-                    # Extract tool call from response
-                    tool_dict = response.tool_calls[0]
-                    # Handle direct dictionary access
-                    tool_name = tool_dict.get("name") or tool_dict.get(
-                        "function", {}
-                    ).get("name")
-                    tool_args = tool_dict.get("args") or tool_dict.get(
-                        "function", {}
-                    ).get("arguments", {})
-                    if isinstance(tool_args, str):
-                        try:
-                            tool_args = json.loads(tool_args)
-                        except json.JSONDecodeError:
-                            tool_args = {"query": message}
-                elif hasattr(response, "content") and response.content:
-                    try:
-                        # Parse tool call from content if in JSON format
-                        tool_data = json.loads(response.content)
-                        tool_name = tool_data.get("name", "search_papers")
-                        tool_args = tool_data.get("args", {"query": message})
-                    except json.JSONDecodeError:
-                        # Default to search if JSON parsing fails
-                        tool_name = "search_papers"
-                        tool_args = {"query": message}
-                else:
-                    # Default to search
-                    tool_name = "search_papers"
-                    tool_args = {"query": message}
+                try:
+                    if hasattr(response, "tool_calls") and response.tool_calls:
+                        tool_call = {
+                            "name": "search_papers",  # Default to search if unclear
+                            "args": {},
+                        }
+                        # Extract from tool calls
+                        tool_data = response.tool_calls[0]
+                        if isinstance(tool_data, dict):
+                            if "name" in tool_data:
+                                tool_call["name"] = tool_data["name"]
+                            if "function" in tool_data:
+                                func_data = tool_data["function"]
+                                tool_call["name"] = func_data.get(
+                                    "name", tool_call["name"]
+                                )
+                                # Handle arguments
+                                if "arguments" in func_data:
+                                    args = func_data["arguments"]
+                                    if isinstance(args, str):
+                                        try:
+                                            args = json.loads(args)
+                                        except:
+                                            args = {"query": message}
+                                    tool_call["args"] = args
+                            if "args" in tool_data:
+                                tool_call["args"].update(tool_data["args"])
 
-                print(f"Final tool call: {tool_name} with args: {tool_args}")
-                shared_state.set(config.StateKeys.CURRENT_TOOL, tool_name)
+                    elif hasattr(response, "content") and response.content:
+                        # Try parsing from content
+                        content = response.content
+                        try:
+                            data = json.loads(content)
+                            tool_call = {
+                                "name": data.get("name", "search_papers"),
+                                "args": data.get("parameters", {}),
+                            }
+                        except json.JSONDecodeError:
+                            tool_call = {
+                                "name": "search_papers",
+                                "args": {"query": message},
+                            }
+                    else:
+                        tool_call = {
+                            "name": "search_papers",
+                            "args": {"query": message},
+                        }
+
+                    # Ensure we have minimum required arguments
+                    if (
+                        "query" not in tool_call["args"]
+                        and tool_call["name"] == "search_papers"
+                    ):
+                        tool_call["args"]["query"] = message
+
+                except Exception as parse_error:
+                    print(f"Error parsing tool call: {str(parse_error)}")
+                    tool_call = {"name": "search_papers", "args": {"query": message}}
+
+                print(f"Final tool call: {tool_call}")
+                shared_state.set(config.StateKeys.CURRENT_TOOL, tool_call["name"])
 
                 # Execute tool and handle any tool exceptions
                 try:
-                    result = self.execute_tool({"name": tool_name, "args": tool_args})
+                    result = self.execute_tool(tool_call)
                     print(f"Tool execution result: {result}")
 
                     # Process results
@@ -174,6 +218,7 @@ class SemanticScholarAgent:
 
                 except Exception as tool_error:
                     print(f"Tool execution error: {str(tool_error)}")
+                    traceback.print_exc()
                     state["error"] = f"Tool execution error: {str(tool_error)}"
 
             except Exception as e:
