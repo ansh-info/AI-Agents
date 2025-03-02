@@ -15,8 +15,17 @@ def initialize_page():
     st.markdown("---")
 
 
-def display_paper(paper: Dict[str, Any], index: int, show_save: bool = True):
-    """Display a single paper in an expander"""
+def display_paper(
+    paper: Dict[str, Any], index: int, section: str = "main", show_save: bool = True
+):
+    """Display a single paper in an expander
+
+    Args:
+        paper: Paper data dictionary
+        index: Index number for display
+        section: Section identifier to create unique keys
+        show_save: Whether to show save button
+    """
     title = paper.get("title", "Untitled")
     authors = paper.get("authors", [])
     year = paper.get("year", "N/A")
@@ -40,8 +49,10 @@ def display_paper(paper: Dict[str, Any], index: int, show_save: bool = True):
 
         col1, col2, col3 = st.columns(3)
 
-        # Show recommendations button
-        if col1.button(f"Get Similar Papers 🔍", key=f"similar_{paper_id}"):
+        # Show recommendations button with unique key
+        if col1.button(
+            f"Get Similar Papers 🔍", key=f"{section}_similar_{index}_{paper_id}"
+        ):
             # Create a loading spinner
             with st.spinner("Finding similar papers..."):
                 state = {
@@ -61,8 +72,10 @@ def display_paper(paper: Dict[str, Any], index: int, show_save: bool = True):
             if pdf_url:
                 col2.markdown(f"[Open PDF 📄]({pdf_url})")
 
-        # Add save to library button (for future Zotero integration)
-        if show_save and col3.button(f"Save to Library 📚", key=f"save_{paper_id}"):
+        # Add save to library button with unique key
+        if show_save and col3.button(
+            f"Save to Library 📚", key=f"{section}_save_{index}_{paper_id}"
+        ):
             st.info("Zotero integration coming soon!")
 
 
@@ -75,7 +88,7 @@ def display_papers_section():
 
     st.subheader(f"Found Papers ({len(papers)})")
     for i, paper in enumerate(papers, 1):
-        display_paper(paper, i)
+        display_paper(paper, i, section="search")
 
 
 def display_query_section():
@@ -114,7 +127,7 @@ def display_recommendations_section():
     if recommended_papers := shared_state.get(config.StateKeys.SELECTED_PAPERS):
         st.subheader(f"Recommended Papers ({len(recommended_papers)})")
         for i, paper in enumerate(recommended_papers, 1):
-            display_paper(paper, i, show_save=True)
+            display_paper(paper, i, section="recommendations", show_save=True)
 
 
 def main():
