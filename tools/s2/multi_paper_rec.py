@@ -1,11 +1,12 @@
+import time
 from typing import Any, Dict, List
 
+import requests
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 
 from config.config import config
 from state.shared_state import shared_state
-from tools.s2.single_paper_rec import get_single_paper_recommendations
 
 
 class MultiPaperRecInput(BaseModel):
@@ -60,29 +61,71 @@ def get_multi_paper_recommendations(
         recs_per_paper = max(1, limit // len(paper_ids))
 
         for paper_id in paper_ids:
-            result = get_single_paper_recommendations(
-                paper_id=paper_id, limit=recs_per_paper
-            )
-            if result["status"] == "success":
-                all_recommendations.extend(result["recommendations"])
-            else:
-                errors.append(f"Error for paper {paper_id}: {result.get('error')}")
+            try:
+                endpoint = (
+                    f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
+                )
+                params = {
+                    "limit": min(recs_per_paper, 100)
+                }  # Respect unauthenticated limit
+
+                max_retries = 3
+                retry_delay = 2  # Starting delay for unauthenticated access
+
+                for attempt in range(max_retries):
+                    try:
+                        # Make request without API key
+                        response = requests.get(endpoint, params=params)
+
+                        if response.status_code == 429:  # Rate limit hit
+                            wait_time = 2**attempt  # Exponential backoff
+                            print(f"Rate limit hit, waiting {wait_time} seconds...")
+                            time.sleep(wait_time)
+                            continue
+
+                        # Handle various error cases
+                        if response.status_code == 404:
+                            errors.append(f"Paper with ID {paper_id} not found.")
+                            break
+                        elif response.status_code == 400:
+                            errors.append(f"Invalid paper ID format: {paper_id}")
+                            break
+
+                        response.raise_for_status()
+                        data = response.json()
+                        recommendations = data.get("recommendations", [])
+
+                        if recommendations:
+                            all_recommendations.extend(recommendations)
+                        break  # Successful, break retry loop
+
+                    except requests.exceptions.RequestException as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        errors.append(
+                            f"Failed to get recommendations for paper {paper_id}: {str(e)}"
+                        )
+                        break
+
+            except Exception as e:
+                errors.append(f"Error processing paper {paper_id}: {str(e)}")
 
         if not all_recommendations and errors:
-            error_msg = "; ".join(errors)
             return {
                 "status": "error",
-                "error": f"Failed to get any recommendations: {error_msg}",
+                "error": "; ".join(errors),
                 "recommendations": [],
-                "message": f"Failed to get any recommendations: {error_msg}",
+                "message": f"Failed to get any recommendations. Errors: {'; '.join(errors)}",
             }
 
         # Deduplicate recommendations
         seen = set()
         unique_recommendations = []
         for rec in all_recommendations:
-            if rec["paperId"] not in seen:
-                seen.add(rec["paperId"])
+            if rec.get("paperId") not in seen:
+                seen.add(rec.get("paperId"))
                 unique_recommendations.append(rec)
 
         # Take top limit recommendations
