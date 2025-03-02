@@ -46,25 +46,39 @@ def display_paper(
         st.markdown(f"**Citations:** {citations}")
         st.markdown("**Abstract:**")
         st.markdown(abstract)
+        st.markdown(f"**Paper ID:** {paper_id}")  # Debug: show paper ID
 
         col1, col2, col3 = st.columns(3)
 
         # Show recommendations button with unique key
+        button_key = f"{section}_similar_{index}_{paper_id}"
         if col1.button(
-            f"Get Similar Papers 🔍", key=f"{section}_similar_{index}_{paper_id}"
+            f"Get Similar Papers 🔍",
+            key=button_key,
+            help="Find papers similar to this one",
         ):
-            # Create a loading spinner
-            with st.spinner("Finding similar papers..."):
-                state = {
-                    "message": f"Find papers similar to {paper_id}",
-                    "response": None,
-                    "error": None,
-                }
-                graph = main_agent.create_graph()
-                result = graph.invoke(state)
-                if result.get("error"):
-                    st.error(result["error"])
-                # Similar papers will be in shared state
+            if not paper_id:
+                st.error("No paper ID available for recommendations")
+            else:
+                # Create a loading spinner
+                with st.spinner("Finding similar papers..."):
+                    try:
+                        state = {
+                            "message": f"Find papers similar to {paper_id}",
+                            "response": None,
+                            "error": None,
+                        }
+                        graph = main_agent.create_graph()
+                        result = graph.invoke(state)
+
+                        if result.get("error"):
+                            st.error(
+                                f"Error getting recommendations: {result['error']}"
+                            )
+                        elif not result.get("response"):
+                            st.warning("No similar papers found")
+                    except Exception as e:
+                        st.error(f"Error processing request: {str(e)}")
 
         # Show PDF link if available
         if pdf := paper.get("openAccessPdf"):
@@ -74,7 +88,9 @@ def display_paper(
 
         # Add save to library button with unique key
         if show_save and col3.button(
-            f"Save to Library 📚", key=f"{section}_save_{index}_{paper_id}"
+            f"Save to Library 📚",
+            key=f"{section}_save_{index}_{paper_id}",
+            help="Save this paper to your library",
         ):
             st.info("Zotero integration coming soon!")
 
