@@ -1,9 +1,9 @@
 import time
-from typing import Any, Dict
-
+from typing import Any, Dict, Optional
 import requests
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from langchain_core.tools import tool, ToolException
+from pydantic import BaseModel, Field, field_validator
+import re
 
 from config.config import config
 from state.shared_state import shared_state
@@ -13,7 +13,7 @@ class SinglePaperRecInput(BaseModel):
     """Input schema for single paper recommendation tool."""
 
     paper_id: str = Field(
-        description="Semantic Scholar Paper ID to get recommendations for"
+        description="Semantic Scholar Paper ID to get recommendations for (40-character string)"
     )
     limit: int = Field(
         default=5,
@@ -22,14 +22,33 @@ class SinglePaperRecInput(BaseModel):
         le=100,
     )
 
+    @field_validator("paper_id")
+    def validate_paper_id(cls, v: str) -> str:
+        """Validate paper ID format (40-character string)."""
+        if not re.match(r"^[a-f0-9]{40}$", v):
+            raise ValueError("Paper ID must be a 40-character hexadecimal string")
+        return v
 
-@tool(args_schema=SinglePaperRecInput, return_direct=True)
+
+@tool(args_schema=SinglePaperRecInput)
 def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper.
 
+    Best for:
+    - Finding papers similar to a specific paper
+    - Getting research recommendations
+    - Finding related work
+
+    The paper_id must be a 40-character Semantic Scholar ID.
+
+    Examples:
+    - Finding similar papers to a specific paper
+    - Getting recommendations in the same research area
+    - Finding papers that build on a specific paper
+
     Args:
-        paper_id: Semantic Scholar Paper ID to get recommendations for
-        limit: Maximum number of recommendations to return (1-100)
+        paper_id: Semantic Scholar Paper ID
+        limit: Maximum number of recommendations to return
 
     Returns:
         Dict containing recommended papers or error information
@@ -39,89 +58,44 @@ def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str,
         params = {"limit": min(limit, 100)}  # Respect unauthenticated limit
 
         max_retries = 3
-        retry_delay = 2  # Starting delay for unauthenticated access
-        last_error = None
+        retry_delay = 2  # Starting delay
 
         for attempt in range(max_retries):
             try:
-                # Make request without API key
                 response = requests.get(endpoint, params=params)
 
-                if response.status_code == 429:  # Rate limit hit
-                    wait_time = 2**attempt  # Exponential backoff
-                    print(f"Rate limit hit, waiting {wait_time} seconds...")
+                if response.status_code == 429:  # Rate limit
+                    wait_time = 2**attempt
                     time.sleep(wait_time)
                     continue
 
-                # Handle various error cases
                 if response.status_code == 404:
-                    return {
-                        "status": "error",
-                        "error": f"Paper with ID {paper_id} not found.",
-                        "recommendations": [],
-                        "message": f"Paper with ID {paper_id} not found.",
-                    }
-                elif response.status_code == 400:
-                    return {
-                        "status": "error",
-                        "error": f"Invalid paper ID format: {paper_id}",
-                        "recommendations": [],
-                        "message": f"Invalid paper ID format: {paper_id}",
-                    }
+                    raise ToolException(f"Paper with ID {paper_id} not found.")
 
                 response.raise_for_status()
                 data = response.json()
                 recommendations = data.get("recommendations", [])
 
-                # Validate recommendations
-                if not recommendations:
-                    return {
-                        "status": "success",
-                        "recommendations": [],
-                        "total": 0,
-                        "message": f"No recommendations found for paper {paper_id}.",
-                    }
-
                 # Update shared state
-                shared_state.add_papers(recommendations)
+                if recommendations:
+                    shared_state.add_papers(recommendations)
 
                 return {
                     "status": "success",
-                    "recommendations": recommendations,
+                    "papers": recommendations,
                     "total": len(recommendations),
                     "message": f"Found {len(recommendations)} recommended papers.",
                 }
 
             except requests.exceptions.RequestException as e:
-                last_error = str(e)
-                if response.status_code == 429:  # Rate limit
-                    wait_time = 2**attempt
-                    print(f"Rate limit hit, waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
-                    continue
-                elif attempt < max_retries - 1:
+                if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
 
-                return {
-                    "status": "error",
-                    "error": f"Error getting recommendations: {last_error}",
-                    "recommendations": [],
-                    "message": f"Error getting recommendations: {last_error}",
-                }
+                raise ToolException(f"Error getting recommendations: {str(e)}")
 
-        return {
-            "status": "error",
-            "error": f"Failed after {max_retries} attempts. Last error: {last_error}",
-            "recommendations": [],
-            "message": f"Failed after {max_retries} attempts. Last error: {last_error}",
-        }
+        raise ToolException(f"Failed after {max_retries} attempts.")
 
     except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "recommendations": [],
-            "message": f"Error getting recommendations: {str(e)}",
-        }
+        raise ToolException(f"Error getting recommendations: {str(e)}")
