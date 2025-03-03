@@ -1,8 +1,7 @@
 import time
 from typing import Any, Dict, List, Optional
-
 import requests
-from langchain_core.tools import tool
+from langchain_core.tools import tool, ToolException
 from pydantic import BaseModel, Field
 
 from config.config import config
@@ -12,78 +11,55 @@ from state.shared_state import shared_state
 class SearchInput(BaseModel):
     """Input schema for the search papers tool."""
 
-    query: str = Field(description="Search query string to find academic papers")
-    limit: int = Field(default=5, description="Maximum number of results to return")
-    fields: Optional[List[str]] = Field(
-        default=None, description="List of fields to include in results"
+    query: str = Field(
+        description="Search query string to find academic papers. Be specific and include relevant academic terms."
+    )
+    limit: int = Field(
+        default=5, description="Maximum number of results to return", ge=1, le=100
     )
 
 
-@tool(args_schema=SearchInput, return_direct=True)
+@tool(args_schema=SearchInput)
 def search_papers(
-    query: str, limit: int = 5, fields: Optional[List[str]] = None
+    query: str,
+    limit: int = 5,
 ) -> Dict[str, Any]:
     """Search for academic papers on Semantic Scholar.
 
+    Best for:
+    - Finding papers on specific topics
+    - Academic research queries
+    - Finding recent papers in a field
+
+    Examples:
+    - "machine learning applications in healthcare"
+    - "recent advances in transformers 2023"
+    - "quantum computing algorithms review"
+
     Args:
         query: Search query string
-        limit: Maximum number of results to return (max 100 for unauthenticated users)
-        fields: List of fields to include in results
+        limit: Maximum number of results to return (max 100)
 
     Returns:
         Dict containing search results or error information
     """
     try:
-        if fields is None:
-            fields = [
-                "paperId",
-                "title",
-                "abstract",
-                "year",
-                "authors",
-                "citationCount",
-                "openAccessPdf",
-            ]
-
-        # Clean and enhance the query
-        search_terms = query.lower().split()
-        if "in" in search_terms:
-            search_terms.remove("in")
-        if "published" in search_terms:
-            search_terms.remove("published")
-
-        # Extract year if present
-        year = None
-        for i, term in enumerate(search_terms):
-            if term.isdigit() and len(term) == 4:
-                year = int(term)
-                search_terms.pop(i)
-                break
-
-        # Build enhanced query
-        enhanced_query = " ".join(search_terms)
-        if year:
-            enhanced_query = f"year:{year} {enhanced_query}"
-
         endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/search"
         params = {
-            "query": enhanced_query,
+            "query": query,
             "limit": min(limit, 100),  # Respect unauthenticated limit
-            "fields": ",".join(fields),
+            "fields": "paperId,title,abstract,year,authors,citationCount,openAccessPdf",
         }
 
         max_retries = 3
-        retry_delay = 2  # Starting delay in seconds for unauthenticated access
-        last_error = None
+        retry_delay = 2  # Starting delay in seconds
 
         for attempt in range(max_retries):
             try:
-                # Make request without API key
                 response = requests.get(endpoint, params=params)
 
                 if response.status_code == 429:  # Rate limit hit
                     wait_time = 2**attempt  # Exponential backoff
-                    print(f"Rate limit hit, waiting {wait_time} seconds...")
                     time.sleep(wait_time)
                     continue
 
@@ -91,18 +67,14 @@ def search_papers(
                 data = response.json()
                 papers = data.get("data", [])
 
-                # Filter invalid or incomplete papers
+                # Filter and clean results
                 filtered_papers = [
                     paper
                     for paper in papers
-                    if paper.get("title")  # Must have title
-                    and paper.get("authors")  # Must have authors
-                    and (
-                        not year or paper.get("year") == year
-                    )  # Match year if specified
+                    if paper.get("title") and paper.get("authors")
                 ]
 
-                # Update shared state with search results
+                # Update shared state
                 shared_state.add_papers(filtered_papers)
 
                 return {
@@ -113,35 +85,14 @@ def search_papers(
                 }
 
             except requests.exceptions.RequestException as e:
-                last_error = str(e)
-                if response.status_code == 429:  # Rate limit
-                    wait_time = 2**attempt
-                    print(f"Rate limit hit, waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
-                    continue
-                elif attempt < max_retries - 1:
+                if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
 
-                return {
-                    "status": "error",
-                    "error": f"Error searching papers: {last_error}",
-                    "papers": [],
-                    "message": f"Error searching papers: {last_error}",
-                }
+                raise ToolException(f"Error searching papers: {str(e)}")
 
-        return {
-            "status": "error",
-            "error": f"Failed after {max_retries} attempts. Last error: {last_error}",
-            "papers": [],
-            "message": f"Failed after {max_retries} attempts. Last error: {last_error}",
-        }
+        raise ToolException(f"Failed after {max_retries} attempts.")
 
     except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "papers": [],
-            "message": f"Error during search process: {str(e)}",
-        }
+        raise ToolException(f"Error during search process: {str(e)}")
