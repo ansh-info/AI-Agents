@@ -1,19 +1,30 @@
 from typing import Any, Dict, List, Union
 import os
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from config.config import config
 from state.shared_state import shared_state
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Get API key from environment
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise ValueError(
+        "OPENAI_API_KEY not found in environment variables. Please check your .env file."
+    )
+
 
 def create_llm() -> ChatOpenAI:
     """Create and configure OpenAI LLM instance"""
     return ChatOpenAI(
-        model="gpt-4",  # You can change this to gpt-3.5-turbo for lower cost
+        model="gpt-4o-mini",  # Using gpt-4o-mini as requested
         temperature=config.TEMPERATURE,
         timeout=60,  # Timeout in seconds
         max_retries=3,
-        # Adjust these based on your needs
+        api_key=OPENAI_API_KEY,  # Explicitly passing API key
         model_kwargs={
             "top_p": 0.95,
             "presence_penalty": 0,
@@ -63,6 +74,10 @@ class LLMManager:
             print("\nDebug - LLM Response:")
             print(f"Raw response: {response.content}")
 
+            # Log token usage if available
+            if hasattr(response, "usage_metadata"):
+                print(f"Token usage: {response.usage_metadata}")
+
             if response and response.content.strip():
                 return response.content.strip()
 
@@ -72,10 +87,12 @@ class LLMManager:
             print(f"Error in get_response: {str(e)}")
             return ""
 
-    def bind_tools(self, tools: List[Any]) -> None:
-        """Bind tools to the LLM for function/tool calling"""
+    def bind_tools(self, tools: List[Any], strict: bool = True) -> None:
+        """Bind tools to the LLM for function/tool calling with strict mode enabled"""
         self.llm = self.llm.bind_tools(
-            tools, tool_choice="auto"  # Let the model decide which tool to use
+            tools,
+            tool_choice="auto",  # Let the model decide which tool to use
+            strict=strict,  # Enable strict mode for better schema validation
         )
 
 
