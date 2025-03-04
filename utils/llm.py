@@ -25,11 +25,9 @@ def create_llm() -> ChatOpenAI:
         timeout=60,  # Timeout in seconds
         max_retries=3,
         api_key=OPENAI_API_KEY,  # Explicitly passing API key
-        model_kwargs={
-            "top_p": 0.95,
-            "presence_penalty": 0,
-            "frequency_penalty": 0,
-        },
+        top_p=0.95,  # Moved out of model_kwargs
+        presence_penalty=0,  # Moved out of model_kwargs
+        frequency_penalty=0,  # Moved out of model_kwargs
     )
 
 
