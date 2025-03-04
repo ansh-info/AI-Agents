@@ -15,7 +15,7 @@ class SemanticScholarAgent:
             self.agent = create_react_agent(
                 model=llm_manager.llm,
                 tools=s2_tools,
-                messages_modifier=config.S2_AGENT_PROMPT,  # Changed from system_message
+                messages_modifier=config.S2_AGENT_PROMPT,
             )
 
             print("S2 Agent initialized successfully")
@@ -28,7 +28,18 @@ class SemanticScholarAgent:
         """Process the input state through the agent"""
         try:
             shared_state.set(config.StateKeys.CURRENT_AGENT, config.AgentNames.S2)
-            return self.agent.invoke(state)
+
+            # Find paper IDs in the query if they exist
+            result = self.agent.invoke(state)
+
+            # Track the tool usage in shared state
+            if result.get("messages"):
+                last_message = result["messages"][-1]
+                if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                    tool_name = last_message.tool_calls[0]["name"]
+                    shared_state.set(config.StateKeys.CURRENT_TOOL, tool_name)
+
+            return result
         except Exception as e:
             return {"error": str(e), "response": f"Error in S2 agent: {str(e)}"}
 
