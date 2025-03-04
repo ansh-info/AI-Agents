@@ -26,9 +26,9 @@ class MainAgent:
 
             # Create the agent using create_react_agent
             self.agent = create_react_agent(
-                model=llm_manager.llm,  # Changed from llm to model
+                model=llm_manager.llm,
                 tools=self.routing_tools,
-                system_message=config.MAIN_AGENT_PROMPT,
+                messages_modifier=config.MAIN_AGENT_PROMPT,  # Changed from system_message
             )
 
         except Exception as e:
