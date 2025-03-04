@@ -1,5 +1,5 @@
 from typing import Any, Dict
-from langchain_core.tools import BaseTool
+from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
 from config.config import config
 from state.shared_state import shared_state
@@ -10,25 +10,25 @@ from utils.llm import llm_manager
 class MainAgent:
     def __init__(self):
         try:
-            # Define routing tools
+            # Define routing tools using StructuredTool instead of BaseTool
             self.routing_tools = [
-                BaseTool(
+                StructuredTool.from_function(
+                    func=self.route_to_s2_agent,
                     name="semantic_scholar_agent",
                     description="""Use for any academic paper search, finding papers, or getting paper recommendations. 
                     Best for: finding research papers, academic search, paper recommendations""",
-                    func=self.route_to_s2_agent,
                 ),
                 # Add other agent tools as they are implemented
-                # BaseTool(name="zotero_agent", ...),
-                # BaseTool(name="pdf_agent", ...),
-                # BaseTool(name="arxiv_agent", ...),
+                # StructuredTool.from_function(name="zotero_agent", ...),
+                # StructuredTool.from_function(name="pdf_agent", ...),
+                # StructuredTool.from_function(name="arxiv_agent", ...),
             ]
 
             # Create the agent using create_react_agent
             self.agent = create_react_agent(
                 model=llm_manager.llm,
                 tools=self.routing_tools,
-                messages_modifier=config.MAIN_AGENT_PROMPT,  # Changed from system_message
+                messages_modifier=config.MAIN_AGENT_PROMPT,
             )
 
         except Exception as e:
@@ -36,7 +36,14 @@ class MainAgent:
             raise
 
     def route_to_s2_agent(self, query: str) -> Dict[str, Any]:
-        """Route queries to Semantic Scholar agent"""
+        """Route queries to Semantic Scholar agent.
+
+        Args:
+            query: The user's query about academic papers or research.
+
+        Returns:
+            Dict containing the response from the S2 agent.
+        """
         try:
             shared_state.set(config.StateKeys.CURRENT_AGENT, config.AgentNames.S2)
             result = s2_agent.invoke({"messages": [{"role": "user", "content": query}]})
