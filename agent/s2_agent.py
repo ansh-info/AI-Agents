@@ -13,7 +13,7 @@ class SemanticScholarAgent:
 
             # Create the agent using create_react_agent
             self.agent = create_react_agent(
-                llm=llm_manager.llm,
+                model=llm_manager.llm,  # Changed from llm to model
                 tools=s2_tools,
                 system_message=config.S2_AGENT_PROMPT,
             )

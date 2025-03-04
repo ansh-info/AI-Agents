@@ -1,5 +1,5 @@
 from typing import Any, Dict
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
 from langgraph.prebuilt import create_react_agent
 from config.config import config
 from state.shared_state import shared_state
@@ -26,7 +26,7 @@ class MainAgent:
 
             # Create the agent using create_react_agent
             self.agent = create_react_agent(
-                llm=llm_manager.llm,
+                model=llm_manager.llm,  # Changed from llm to model
                 tools=self.routing_tools,
                 system_message=config.MAIN_AGENT_PROMPT,
             )
