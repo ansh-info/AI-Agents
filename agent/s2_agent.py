@@ -1,11 +1,8 @@
 from typing import Any, Dict
-from langchain_core.tools import BaseTool
 from langgraph.prebuilt import create_react_agent
 from config.config import config
 from state.shared_state import shared_state
-from tools.s2.search import search_papers
-from tools.s2.single_paper_rec import get_single_paper_recommendations
-from tools.s2.multi_paper_rec import get_multi_paper_recommendations
+from tools.s2 import s2_tools
 from utils.llm import llm_manager
 
 
@@ -14,16 +11,11 @@ class SemanticScholarAgent:
         try:
             print("Initializing S2 Agent...")
 
-            # Configure tools
-            self.tools = [
-                search_papers,
-                get_single_paper_recommendations,
-                get_multi_paper_recommendations,
-            ]
-
             # Create the agent using create_react_agent
             self.agent = create_react_agent(
-                llm_manager.llm, tools=self.tools, system_message=config.S2_AGENT_PROMPT
+                model=llm_manager.llm,
+                tools=s2_tools,
+                messages_modifier=config.S2_AGENT_PROMPT,
             )
 
             print("S2 Agent initialized successfully")
@@ -36,7 +28,18 @@ class SemanticScholarAgent:
         """Process the input state through the agent"""
         try:
             shared_state.set(config.StateKeys.CURRENT_AGENT, config.AgentNames.S2)
-            return self.agent.invoke(state)
+
+            # Find paper IDs in the query if they exist
+            result = self.agent.invoke(state)
+
+            # Track the tool usage in shared state
+            if result.get("messages"):
+                last_message = result["messages"][-1]
+                if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                    tool_name = last_message.tool_calls[0]["name"]
+                    shared_state.set(config.StateKeys.CURRENT_TOOL, tool_name)
+
+            return result
         except Exception as e:
             return {"error": str(e), "response": f"Error in S2 agent: {str(e)}"}
 

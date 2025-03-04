@@ -1,6 +1,5 @@
-from typing import Any, Dict, Optional, List
 from datetime import datetime
-
+from typing import Any, Dict, List, Optional
 from config.config import config
 
 
@@ -37,7 +36,10 @@ class SharedState:
 
     def add_papers(self, papers: list) -> None:
         """Add papers to the papers list"""
-        self.state[config.StateKeys.PAPERS].extend(papers)
+        # Deduplicate papers based on paperId
+        existing_ids = {p.get("paperId") for p in self.state[config.StateKeys.PAPERS]}
+        new_papers = [p for p in papers if p.get("paperId") not in existing_ids]
+        self.state[config.StateKeys.PAPERS].extend(new_papers)
 
     def select_papers(self, paper_ids: list) -> None:
         """Select papers from the papers list"""
@@ -48,15 +50,18 @@ class SharedState:
         ]
         self.state[config.StateKeys.SELECTED_PAPERS] = selected
 
-    def add_to_chat_history(self, role: str, content: str) -> None:
-        """Add a message to chat history"""
-        self.state[config.StateKeys.CHAT_HISTORY].append(
-            {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
-        )
-
-    def update_user_info(self, info: Dict[str, Any]) -> None:
-        """Update user information"""
-        self.state[config.StateKeys.USER_INFO].update(info)
+    def add_to_chat_history(
+        self, role: str, content: str, tool_used: Optional[str] = None
+    ) -> None:
+        """Add a message to chat history with optional tool information"""
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+        }
+        if tool_used:
+            message["tool_used"] = tool_used
+        self.state[config.StateKeys.CHAT_HISTORY].append(message)
 
     def get_chat_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get recent chat history"""
@@ -65,6 +70,16 @@ class SharedState:
             return history[-limit:]
         return history
 
+    def get_most_recent_papers(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get the most recently added papers"""
+        papers = self.state[config.StateKeys.PAPERS]
+        return papers[-limit:]
+
+    def get_most_recent_paper_ids(self, limit: int = 5) -> List[str]:
+        """Get IDs of most recently added papers"""
+        recent_papers = self.get_most_recent_papers(limit)
+        return [p.get("paperId") for p in recent_papers if p.get("paperId")]
+
     def update_memory(self, key: str, value: Any) -> None:
         """Update memory with key-value pair"""
         self.state[config.StateKeys.MEMORY][key] = value
@@ -72,17 +87,6 @@ class SharedState:
     def get_from_memory(self, key: str) -> Any:
         """Get value from memory"""
         return self.state[config.StateKeys.MEMORY].get(key)
-
-    def get_current_context(self) -> Dict[str, Any]:
-        """Get current context information"""
-        return {
-            "current_agent": self.state[config.StateKeys.CURRENT_AGENT],
-            "current_tool": self.state[config.StateKeys.CURRENT_TOOL],
-            "papers_count": len(self.state[config.StateKeys.PAPERS]),
-            "selected_papers_count": len(self.state[config.StateKeys.SELECTED_PAPERS]),
-            "user_info": self.state[config.StateKeys.USER_INFO],
-            "recent_messages": self.get_chat_history(limit=5),
-        }
 
 
 # Create a global instance

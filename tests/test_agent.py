@@ -26,33 +26,30 @@ def reset_shared_state():
     }
 
 
-def run_test_case(message: str, test_name: str) -> Dict[str, Any]:
+def run_test_case(input_query: str, test_name: str) -> Dict[str, Any]:
     """Run a single test case and return results"""
     print(f"\nTest Case: {test_name}")
     print("=" * 50)
-    print("Input Query:", message)
+    print("Input Query:", input_query)
 
     # Reset state for clean test
     reset_shared_state()
 
-    # Prepare initial state
-    state = {
-        "message": message,
-        "response": None,
-        "error": None,
-    }
+    # Prepare initial state with messages
+    state = {"messages": [{"role": "user", "content": input_query}]}
 
     # Process through main agent
-    graph = main_agent.create_graph()
-    result = graph.invoke(state)
+    result = main_agent.invoke(state)
 
     # Print results
     print("\nResults:")
     print("-" * 50)
-    if result.get("error"):
+    if "error" in result:
         print("Error:", result["error"])
     else:
-        print(result.get("response", "No response"))
+        # Get the last message content
+        last_message = result.get("messages", [])[-1]
+        print("Response:", last_message.content if last_message else "No response")
 
     print("\nFinal State:")
     print("-" * 50)
@@ -87,7 +84,7 @@ def test_single_paper_recommendation():
         "Find a recent paper about transformers in NLP", "Get Paper ID Test"
     )
 
-    # Extract paper ID from search results (assuming first paper)
+    # Get paper ID from the search results
     papers = shared_state.get(config.StateKeys.PAPERS)
     if papers:
         paper_id = papers[0].get("paperId")
@@ -104,7 +101,7 @@ def test_multi_paper_recommendation():
         "Find recent papers about deep learning", "Get Paper IDs Test"
     )
 
-    # Extract two paper IDs from search results
+    # Get multiple paper IDs
     papers = shared_state.get(config.StateKeys.PAPERS)
     if len(papers) >= 2:
         paper_id1 = papers[0].get("paperId")
@@ -125,7 +122,7 @@ def test_domain_specific_search():
 
 
 def test_invalid_query():
-    """Test invalid query handling"""
+    """Test handling of invalid or unclear queries"""
     return run_test_case("Please do something undefined", "Invalid Query Test")
 
 
@@ -136,7 +133,21 @@ def test_invalid_paper_id():
     )
 
 
+def test_chat_context():
+    """Test chat context preservation"""
+    # First query
+    result1 = run_test_case("Find papers about deep learning", "Initial Query Test")
+
+    # Follow-up query
+    result2 = run_test_case(
+        "Find similar papers to the first one you found", "Follow-up Query Test"
+    )
+
+    return result2
+
+
 def main():
+    """Run all tests"""
     print("Starting Agent Tests...")
     print("Project root:", project_root)
 
@@ -152,6 +163,9 @@ def main():
     # Error handling tests
     test_invalid_query()
     test_invalid_paper_id()
+
+    # Context tests
+    test_chat_context()
 
     print("\nTest suite completed.")
 
