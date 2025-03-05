@@ -1,70 +1,57 @@
-from typing import Any, Dict
-from langchain_core.tools import StructuredTool
+"""
+This is the agent file for the Talk2Papers graph.
+"""
+
+from typing import Literal
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
-from config.config import config
-from state.shared_state import shared_state
+from langchain_core.messages import HumanMessage
+
+from state.shared_state import Talk2Papers
+from tools.s2 import s2_tools
 from agents.s2_agent import s2_agent
-from utils.llm import llm_manager
 
 
-class MainAgent:
-    def __init__(self):
-        try:
-            # Define routing tools using StructuredTool instead of BaseTool
-            self.routing_tools = [
-                StructuredTool.from_function(
-                    func=self.route_to_s2_agent,
-                    name="semantic_scholar_agent",
-                    description="""Use for any academic paper search, finding papers, or getting paper recommendations. 
-                    Best for: finding research papers, academic search, paper recommendations""",
-                ),
-                # Add other agent tools as they are implemented
-                # StructuredTool.from_function(name="zotero_agent", ...),
-                # StructuredTool.from_function(name="pdf_agent", ...),
-                # StructuredTool.from_function(name="arxiv_agent", ...),
-            ]
+def get_app(uniq_id):
+    """
+    This function returns the langraph app.
+    """
 
-            # Create the agent using create_react_agent
-            self.agent = create_react_agent(
-                model=llm_manager.llm,
-                tools=self.routing_tools,
-                messages_modifier=config.MAIN_AGENT_PROMPT,
-            )
+    def call_s2_agent(state: Talk2Papers) -> Command[Literal["supervisor"]]:
+        response = s2_agent.invoke({"messages": state["messages"][-1]})
+        return Command(
+            update={
+                "messages": [
+                    HumanMessage(
+                        content=response["messages"][-1].content, name="s2_agent"
+                    )
+                ]
+            },
+            goto="supervisor",
+        )
 
-        except Exception as e:
-            print(f"Initialization error: {str(e)}")
-            raise
+    # Create the LLM
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    def route_to_s2_agent(self, query: str) -> Dict[str, Any]:
-        """Route queries to Semantic Scholar agent.
+    # Create supervisor node
+    supervisor_node = make_supervisor_node(llm, ["s2_agent"])
 
-        Args:
-            query: The user's query about academic papers or research.
+    # Define the graph
+    workflow = StateGraph(Talk2Papers)
 
-        Returns:
-            Dict containing the response from the S2 agent.
-        """
-        try:
-            shared_state.set(config.StateKeys.CURRENT_AGENT, config.AgentNames.S2)
-            result = s2_agent.invoke({"messages": [{"role": "user", "content": query}]})
-            return {
-                "status": "success",
-                "response": (
-                    result["messages"][-1].content
-                    if result.get("messages")
-                    else "No response from S2 agent"
-                ),
-            }
-        except Exception as e:
-            return {"status": "error", "response": f"Error in S2 agent: {str(e)}"}
+    # Add nodes
+    workflow.add_node("supervisor", supervisor_node)
+    workflow.add_node("s2_agent", call_s2_agent)
 
-    def invoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process the input state through the agent"""
-        try:
-            return self.agent.invoke(state)
-        except Exception as e:
-            return {"error": str(e), "response": f"Error in main agent: {str(e)}"}
+    # Set the entrypoint
+    workflow.add_edge(START, "supervisor")
 
+    # Initialize memory
+    checkpointer = MemorySaver()
 
-# Create a global instance
-main_agent = MainAgent()
+    # Compile the workflow
+    app = workflow.compile(checkpointer=checkpointer)
+
+    return app
