@@ -1,70 +1,59 @@
-from typing import Any, Dict
-from langchain_core.tools import StructuredTool
+"""
+This is the agent file for the Talk2Papers graph.
+"""
+
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
-from config.config import config
-from state.shared_state import shared_state
-from agents.s2_agent import s2_agent
-from utils.llm import llm_manager
+
+from state.shared_state import Talk2Papers
+from tools.s2 import s2_tools
 
 
-class MainAgent:
-    def __init__(self):
-        try:
-            # Define routing tools using StructuredTool instead of BaseTool
-            self.routing_tools = [
-                StructuredTool.from_function(
-                    func=self.route_to_s2_agent,
-                    name="semantic_scholar_agent",
-                    description="""Use for any academic paper search, finding papers, or getting paper recommendations. 
-                    Best for: finding research papers, academic search, paper recommendations""",
-                ),
-                # Add other agent tools as they are implemented
-                # StructuredTool.from_function(name="zotero_agent", ...),
-                # StructuredTool.from_function(name="pdf_agent", ...),
-                # StructuredTool.from_function(name="arxiv_agent", ...),
-            ]
+def get_app(uniq_id):
+    """
+    This function returns the langraph app.
+    """
 
-            # Create the agent using create_react_agent
-            self.agent = create_react_agent(
-                model=llm_manager.llm,
-                tools=self.routing_tools,
-                messages_modifier=config.MAIN_AGENT_PROMPT,
-            )
-
-        except Exception as e:
-            print(f"Initialization error: {str(e)}")
-            raise
-
-    def route_to_s2_agent(self, query: str) -> Dict[str, Any]:
-        """Route queries to Semantic Scholar agent.
-
-        Args:
-            query: The user's query about academic papers or research.
-
-        Returns:
-            Dict containing the response from the S2 agent.
+    def agent_test_node(state: Talk2Papers):
         """
-        try:
-            shared_state.set(config.StateKeys.CURRENT_AGENT, config.AgentNames.S2)
-            result = s2_agent.invoke({"messages": [{"role": "user", "content": query}]})
-            return {
-                "status": "success",
-                "response": (
-                    result["messages"][-1].content
-                    if result.get("messages")
-                    else "No response from S2 agent"
-                ),
-            }
-        except Exception as e:
-            return {"status": "error", "response": f"Error in S2 agent: {str(e)}"}
+        This function calls the model.
+        """
+        # Get the messages from the state
+        messages = state["messages"]
+        # Call the model
+        inputs = {"messages": messages}
+        response = model.invoke(inputs, {"configurable": {"thread_id": uniq_id}})
+        # Return response
+        return response
 
-    def invoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process the input state through the agent"""
-        try:
-            return self.agent.invoke(state)
-        except Exception as e:
-            return {"error": str(e), "response": f"Error in main agent: {str(e)}"}
+    # Define the tools
+    tools = [s2_tools[0], s2_tools[1]]
 
+    # Create the LLM
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    model = create_react_agent(
+        llm,
+        tools=tools,
+        state_schema=Talk2Papers,
+        state_modifier=("You are Talk2Papers agent."),
+        checkpointer=MemorySaver(),
+    )
 
-# Create a global instance
-main_agent = MainAgent()
+    # Define a new graph
+    workflow = StateGraph(Talk2Papers)
+
+    # Define the two nodes we will cycle between
+    workflow.add_node("agent_test", agent_test_node)
+
+    # Set the entrypoint as `agent`
+    workflow.add_edge(START, "agent_test")
+
+    # Initialize memory to persist state between graph runs
+    checkpointer = MemorySaver()
+
+    # Compile the workflow
+    app = workflow.compile(checkpointer=checkpointer)
+
+    return app
