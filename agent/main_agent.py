@@ -2,13 +2,16 @@
 This is the agent file for the Talk2Papers graph.
 """
 
+from typing import Literal
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage
 
 from state.shared_state import Talk2Papers
 from tools.s2 import s2_tools
+from agents.s2_agent import s2_agent
 
 
 def get_app(uniq_id):
@@ -16,41 +19,36 @@ def get_app(uniq_id):
     This function returns the langraph app.
     """
 
-    def agent_test_node(state: Talk2Papers):
-        """
-        This function calls the model.
-        """
-        # Get the messages from the state
-        messages = state["messages"]
-        # Call the model
-        inputs = {"messages": messages}
-        response = model.invoke(inputs, {"configurable": {"thread_id": uniq_id}})
-        # Return response
-        return response
-
-    # Define the tools
-    tools = [s2_tools[0], s2_tools[1]]
+    def call_s2_agent(state: Talk2Papers) -> Command[Literal["supervisor"]]:
+        response = s2_agent.invoke({"messages": state["messages"][-1]})
+        return Command(
+            update={
+                "messages": [
+                    HumanMessage(
+                        content=response["messages"][-1].content, name="s2_agent"
+                    )
+                ]
+            },
+            goto="supervisor",
+        )
 
     # Create the LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    model = create_react_agent(
-        llm,
-        tools=tools,
-        state_schema=Talk2Papers,
-        state_modifier=("You are Talk2Papers agent."),
-        checkpointer=MemorySaver(),
-    )
 
-    # Define a new graph
+    # Create supervisor node
+    supervisor_node = make_supervisor_node(llm, ["s2_agent"])
+
+    # Define the graph
     workflow = StateGraph(Talk2Papers)
 
-    # Define the two nodes we will cycle between
-    workflow.add_node("agent_test", agent_test_node)
+    # Add nodes
+    workflow.add_node("supervisor", supervisor_node)
+    workflow.add_node("s2_agent", call_s2_agent)
 
-    # Set the entrypoint as `agent`
-    workflow.add_edge(START, "agent_test")
+    # Set the entrypoint
+    workflow.add_edge(START, "supervisor")
 
-    # Initialize memory to persist state between graph runs
+    # Initialize memory
     checkpointer = MemorySaver()
 
     # Compile the workflow
