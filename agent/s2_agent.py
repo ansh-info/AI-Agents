@@ -1,9 +1,11 @@
-from typing import Any, Dict
+from typing import Literal
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from config.config import config
-from state.shared_state import shared_state
+from langgraph.graph import StateGraph, START
+from state.shared_state import Talk2Papers
 from tools.s2 import s2_tools
-from utils.llm import llm_manager
+from langgraph.checkpoint.memory import MemorySaver
 
 
 class SemanticScholarAgent:
@@ -11,12 +13,35 @@ class SemanticScholarAgent:
         try:
             print("Initializing S2 Agent...")
 
-            # Create the agent using create_react_agent
+            self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
             self.agent = create_react_agent(
-                model=llm_manager.llm,
+                self.llm,
                 tools=s2_tools,
-                messages_modifier=config.S2_AGENT_PROMPT,
+                state_schema=Talk2Papers,
+                state_modifier=("You are Talk2Papers agent."),
+                checkpointer=MemorySaver(),
             )
+
+            def s2_node(state: Talk2Papers):
+                result = self.agent.invoke(state)
+                return Command(
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content=result["messages"][-1].content, name="s2_agent"
+                            )
+                        ]
+                    },
+                    goto="supervisor",
+                )
+
+            # Create graph for S2 agent
+            workflow = StateGraph(Talk2Papers)
+            workflow.add_node("s2_agent", s2_node)
+            workflow.add_edge(START, "s2_agent")
+
+            # Compile with memory persistence
+            self.graph = workflow.compile(checkpointer=MemorySaver())
 
             print("S2 Agent initialized successfully")
 
@@ -24,22 +49,9 @@ class SemanticScholarAgent:
             print(f"Initialization error: {str(e)}")
             raise
 
-    def invoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process the input state through the agent"""
+    def invoke(self, state):
         try:
-            shared_state.set(config.StateKeys.CURRENT_AGENT, config.AgentNames.S2)
-
-            # Find paper IDs in the query if they exist
-            result = self.agent.invoke(state)
-
-            # Track the tool usage in shared state
-            if result.get("messages"):
-                last_message = result["messages"][-1]
-                if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-                    tool_name = last_message.tool_calls[0]["name"]
-                    shared_state.set(config.StateKeys.CURRENT_TOOL, tool_name)
-
-            return result
+            return self.graph.invoke(state)
         except Exception as e:
             return {"error": str(e), "response": f"Error in S2 agent: {str(e)}"}
 
