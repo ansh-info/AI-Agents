@@ -9,9 +9,8 @@ from langchain_core.tools.base import InjectedToolCallId
 from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
 import re
-
+from state.shared_state import Talk2Papers
 from config.config import config
-from state.shared_state import shared_state
 
 
 class MultiPaperRecInput(BaseModel):
