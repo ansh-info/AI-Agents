@@ -1,12 +1,16 @@
 import time
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
+
+import pandas as pd
 import requests
-from langchain_core.tools import tool, ToolException
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import ToolException, tool
+from langchain_core.tools.base import InjectedToolCallId
+from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
 import re
-
+from state.shared_state import Talk2Papers
 from config.config import config
-from state.shared_state import shared_state
 
 
 class SinglePaperRecInput(BaseModel):
@@ -16,11 +20,12 @@ class SinglePaperRecInput(BaseModel):
         description="Semantic Scholar Paper ID to get recommendations for (40-character string)"
     )
     limit: int = Field(
-        default=5,
+        default=2,
         description="Maximum number of recommendations to return",
         ge=1,
         le=100,
     )
+    tool_call_id: Annotated[str, InjectedToolCallId]
 
     @field_validator("paper_id")
     def validate_paper_id(cls, v: str) -> str:
@@ -31,7 +36,11 @@ class SinglePaperRecInput(BaseModel):
 
 
 @tool(args_schema=SinglePaperRecInput)
-def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str, Any]:
+def get_single_paper_recommendations(
+    paper_id: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    limit: int = 2,
+) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper.
 
     Best for:
@@ -53,49 +62,70 @@ def get_single_paper_recommendations(paper_id: str, limit: int = 5) -> Dict[str,
     Returns:
         Dict containing recommended papers or error information
     """
-    try:
-        endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-        params = {"limit": min(limit, 100)}  # Respect unauthenticated limit
+    print("Starting single paper recommendations search...")
+    endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
+    params = {"limit": min(limit, 100)}
 
-        max_retries = 3
-        retry_delay = 2  # Starting delay
+    max_retries = 3
+    retry_count = 0
+    retry_delay = 2
 
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(endpoint, params=params)
+    while retry_count < max_retries:
+        try:
+            print(f"Attempt {retry_count + 1} of {max_retries}")
+            response = requests.get(endpoint, params=params, timeout=10)
 
-                if response.status_code == 429:  # Rate limit
-                    wait_time = 2**attempt
-                    time.sleep(wait_time)
-                    continue
+            if response.status_code == 429:  # Rate limit hit
+                retry_count += 1
+                wait_time = retry_delay * (2**retry_count)  # Exponential backoff
+                print(f"Rate limit hit. Waiting {wait_time} seconds...")
+                time.sleep(wait_time)
+                continue
 
-                if response.status_code == 404:
-                    raise ToolException(f"Paper with ID {paper_id} not found.")
+            if response.status_code == 404:
+                raise ToolException(f"Paper with ID {paper_id} not found.")
 
-                response.raise_for_status()
-                data = response.json()
-                recommendations = data.get("recommendations", [])
+            # Break immediately if we get a successful response
+            if response.status_code == 200:
+                print("Successful response received")
+                break
 
-                # Update shared state
-                if recommendations:
-                    shared_state.add_papers(recommendations)
+            response.raise_for_status()
 
-                return {
-                    "status": "success",
-                    "papers": recommendations,
-                    "total": len(recommendations),
-                    "message": f"Found {len(recommendations)} recommended papers.",
-                }
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {str(e)}")
+            retry_count += 1
+            if retry_count == max_retries:
+                raise ToolException(
+                    f"Error getting recommendations after {max_retries} attempts: {str(e)}"
+                )
+            time.sleep(retry_delay * (2**retry_count))
+            continue
 
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
+    print("Processing response...")
+    data = response.json()
+    recommendations = data.get("recommendations", [])
 
-                raise ToolException(f"Error getting recommendations: {str(e)}")
+    # Create DataFrame
+    filtered_papers = [
+        (paper["paperId"], paper["title"])
+        for paper in recommendations
+        if paper.get("title")
+    ]
 
-        raise ToolException(f"Failed after {max_retries} attempts.")
+    df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
+    print("Created DataFrame with results")
+    print(df)
 
-    except Exception as e:
-        raise ToolException(f"Error getting recommendations: {str(e)}")
+    print("Single paper recommendations tool execution completed")
+    return Command(
+        update={
+            "papers": df.to_markdown(tablefmt="grid"),
+            "messages": [
+                ToolMessage(
+                    content=df.to_markdown(tablefmt="grid"),
+                    tool_call_id=tool_call_id,
+                )
+            ],
+        }
+    )

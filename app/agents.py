@@ -1,177 +1,141 @@
+#!/usr/bin/env python3
+
+"""
+Talk2Papers: A Streamlit app for academic paper search and recommendations
+"""
+
+import os
+import random
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../")
 import streamlit as st
-from typing import Any, Dict, List
+from langchain_core.messages import AIMessage, ChatMessage, HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from agents.main_agent import main_agent
-from config.config import config
-from state.shared_state import shared_state
+from agents.main_agent import get_app
 
+# Page configuration
+st.set_page_config(page_title="Talk2Papers", page_icon="📚", layout="wide")
 
-def initialize_page():
-    """Initialize the Streamlit page with basic settings"""
-    st.set_page_config(
-        page_title="Research Paper Assistant", page_icon="📚", layout="wide"
-    )
-    st.title("Research Paper Assistant")
-    st.markdown("---")
+# Create chat prompt template
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "Welcome to Talk2Papers!"),
+        MessagesPlaceholder(variable_name="chat_history", optional=True),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}"),
+    ]
+)
 
+# Initialize session states
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-def display_paper(
-    paper: Dict[str, Any], index: int, section: str = "main", show_save: bool = True
-):
-    """Display a single paper in an expander
+if "unique_id" not in st.session_state:
+    st.session_state.unique_id = random.randint(1, 1000)
 
-    Args:
-        paper: Paper data dictionary
-        index: Index number for display
-        section: Section identifier to create unique keys
-        show_save: Whether to show save button
-    """
-    title = paper.get("title", "Untitled")
-    authors = paper.get("authors", [])
-    year = paper.get("year", "N/A")
-    abstract = paper.get("abstract", "No abstract available.")
-    citations = paper.get("citationCount", 0)
-    paper_id = paper.get("paperId", "")
+if "app" not in st.session_state:
+    st.session_state.app = get_app(st.session_state.unique_id)
 
-    # Format authors
-    author_names = [a.get("name", "") for a in authors if a]
-    author_str = ", ".join(author_names[:3])
-    if len(author_names) > 3:
-        author_str += " et al."
+# Get the app
+app = st.session_state.app
 
-    # Create expander for each paper
-    with st.expander(f"{index}. {title} ({year})", expanded=False):
-        st.markdown(f"**Authors:** {author_str}")
-        st.markdown(f"**Year:** {year}")
-        st.markdown(f"**Citations:** {citations}")
-        st.markdown("**Abstract:**")
-        st.markdown(abstract)
-        st.markdown(f"**Paper ID:** {paper_id}")  # Debug: show paper ID
+# Check OpenAI API key
+if "OPENAI_API_KEY" not in os.environ:
+    st.error("Please set the OPENAI_API_KEY environment variable.")
+    st.stop()
 
-        col1, col2, col3 = st.columns(3)
+# Main layout with two columns
+main_col1, main_col2 = st.columns([2, 8])
 
-        # Show recommendations button with unique key
-        button_key = f"{section}_similar_{index}_{paper_id}"
-        if col1.button(
-            f"Get Similar Papers 🔍",
-            key=button_key,
-            help="Find papers similar to this one",
-        ):
-            if not paper_id:
-                st.error("No paper ID available for recommendations")
-            else:
-                # Create a loading spinner
-                with st.spinner("Finding similar papers..."):
-                    try:
-                        state = {
-                            "message": f"Find papers similar to {paper_id}",
-                            "response": None,
-                            "error": None,
-                        }
-                        graph = main_agent.create_graph()
-                        result = graph.invoke(state)
-
-                        if result.get("error"):
-                            st.error(
-                                f"Error getting recommendations: {result['error']}"
-                            )
-                        elif not result.get("response"):
-                            st.warning("No similar papers found")
-                    except Exception as e:
-                        st.error(f"Error processing request: {str(e)}")
-
-        # Show PDF link if available
-        if pdf := paper.get("openAccessPdf"):
-            pdf_url = pdf.get("url")
-            if pdf_url:
-                col2.markdown(f"[Open PDF 📄]({pdf_url})")
-
-        # Add save to library button with unique key
-        if show_save and col3.button(
-            f"Save to Library 📚",
-            key=f"{section}_save_{index}_{paper_id}",
-            help="Save this paper to your library",
-        ):
-            st.info("Zotero integration coming soon!")
-
-
-def display_papers_section():
-    """Display the papers section with results from state"""
-    papers = shared_state.get(config.StateKeys.PAPERS)
-    if not papers:
-        st.info("Search for papers to see results here.")
-        return
-
-    st.subheader(f"Found Papers ({len(papers)})")
-    for i, paper in enumerate(papers, 1):
-        display_paper(paper, i, section="search")
-
-
-def display_query_section():
-    """Display the query input section"""
-    st.subheader("Search Papers")
-    with st.form(key="search_form"):
-        query = st.text_input(
-            "Enter your search query:",
-            placeholder="e.g., recent papers about machine learning",
+# First column (Settings)
+with main_col1:
+    with st.container(border=True):
+        st.write(
+            """
+            <h3 style='margin: 0px; padding-bottom: 10px; font-weight: bold;'>
+            📚 Talk2Papers
+            </h3>
+            """,
+            unsafe_allow_html=True,
         )
-        col1, col2, col3 = st.columns([2, 1, 1])
-        submit_button = col1.form_submit_button("Search 🔍")
 
-        if submit_button and query:
-            # Create a loading spinner
-            with st.spinner("Searching for papers..."):
-                # Create initial state
-                state = {
-                    "message": query,
-                    "response": None,
-                    "error": None,
-                }
+        # LLM Selection
+        llms = ["gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        llm_option = st.selectbox(
+            "Select LLM Model", llms, index=0, key="st_selectbox_llm"
+        )
 
-                # Create and invoke graph
-                graph = main_agent.create_graph()
-                result = graph.invoke(state)
+# Second column (Chat Interface)
+with main_col2:
+    # Chat history container
+    chat_container = st.container(border=True)
+    with chat_container:
+        st.write("#### 💬 Chat History")
 
-                if result.get("error"):
-                    st.error(result["error"])
-                else:
-                    st.success("Search completed! View results below.")
+        # Display messages
+        for message in st.session_state.messages:
+            with st.chat_message(
+                message["content"].role,
+                avatar="🤖" if message["content"].role != "user" else "👤",
+            ):
+                st.markdown(message["content"].content)
+                st.empty()
 
+    # Input at the bottom
+    prompt = st.chat_input("Search for papers or ask questions...", key="st_chat_input")
 
-def display_recommendations_section():
-    """Display paper recommendations section"""
-    if recommended_papers := shared_state.get(config.StateKeys.SELECTED_PAPERS):
-        st.subheader(f"Recommended Papers ({len(recommended_papers)})")
-        for i, paper in enumerate(recommended_papers, 1):
-            display_paper(paper, i, section="recommendations", show_save=True)
+    if prompt:
+        # Display user message
+        prompt_msg = ChatMessage(prompt, role="user")
+        st.session_state.messages.append({"type": "message", "content": prompt_msg})
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(prompt)
 
+        # Get and display assistant response
+        with st.chat_message("assistant", avatar="🤖"):
+            with st.spinner("Processing your request..."):
+                # Get chat history
+                history = [
+                    (m["content"].role, m["content"].content)
+                    for m in st.session_state.messages
+                    if m["type"] == "message"
+                ]
 
-def main():
-    initialize_page()
+                # Convert to ChatMessage objects
+                chat_history = [
+                    (
+                        SystemMessage(content=m[1])
+                        if m[0] == "system"
+                        else (
+                            HumanMessage(content=m[1])
+                            if m[0] == "human"
+                            else AIMessage(content=m[1])
+                        )
+                    )
+                    for m in history
+                ]
 
-    # Create main layout
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Search", "History", "Settings"])
+                # Create config
+                config = {"configurable": {"thread_id": st.session_state.unique_id}}
 
-    if page == "Search":
-        display_query_section()
-        st.markdown("---")
-        display_papers_section()
-        st.markdown("---")
-        display_recommendations_section()
+                # Set LLM model
+                os.environ["AIAGENTS4PHARMA_LLM_MODEL"] = llm_option
 
-    elif page == "History":
-        st.subheader("Search History")
-        if history := shared_state.get(config.StateKeys.CHAT_HISTORY):
-            for entry in history:
-                st.text(f"{entry.get('timestamp')}: {entry.get('content')}")
-        else:
-            st.info("No search history yet.")
+                # Get response from agent
+                response = app.invoke(
+                    {"messages": [HumanMessage(content=prompt)]}, config=config
+                )
 
-    elif page == "Settings":
-        st.subheader("Settings")
-        st.info("Settings panel coming soon!")
+                # Add response to chat history
+                assistant_msg = ChatMessage(
+                    response["messages"][-1].content, role="assistant"
+                )
+                st.session_state.messages.append(
+                    {"type": "message", "content": assistant_msg}
+                )
 
-
-if __name__ == "__main__":
-    main()
+                # Display response
+                st.markdown(response["messages"][-1].content)
+                st.empty()

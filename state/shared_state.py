@@ -1,5 +1,5 @@
 """
-This is the state file for the Talk2Cells agent.
+This is the state file for the Talk2Papers agent.
 """
 
 from datetime import datetime
