@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, START
 from state.shared_state import Talk2Papers
 from tools.s2 import s2_tools
 from langgraph.checkpoint.memory import MemorySaver
+from config.config import config
 
 
 class SemanticScholarAgent:
@@ -18,7 +19,7 @@ class SemanticScholarAgent:
                 self.llm,
                 tools=s2_tools,
                 state_schema=Talk2Papers,
-                state_modifier=("You are Talk2Papers agent."),
+                state_modifier=config.S2_AGENT_PROMPT,  # Using our S2 agent prompt
                 checkpointer=MemorySaver(),
             )
 
