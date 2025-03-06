@@ -1,7 +1,12 @@
 import time
-from typing import Any, Dict, List
+from typing import Annotated, Any, Dict, List
+
+import pandas as pd
 import requests
-from langchain_core.tools import tool, ToolException
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import ToolException, tool
+from langchain_core.tools.base import InjectedToolCallId
+from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
 import re
 
@@ -16,11 +21,12 @@ class MultiPaperRecInput(BaseModel):
         description="List of Semantic Scholar Paper IDs to get recommendations for"
     )
     limit: int = Field(
-        default=5,
+        default=2,
         description="Maximum total number of recommendations to return",
         ge=1,
         le=100,
     )
+    tool_call_id: Annotated[str, InjectedToolCallId]
 
     @field_validator("paper_ids")
     def validate_paper_ids(cls, v: List[str]) -> List[str]:
@@ -37,7 +43,9 @@ class MultiPaperRecInput(BaseModel):
 
 @tool(args_schema=MultiPaperRecInput)
 def get_multi_paper_recommendations(
-    paper_ids: List[str], limit: int = 5
+    paper_ids: List[str],
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    limit: int = 2,
 ) -> Dict[str, Any]:
     """Get paper recommendations based on multiple papers.
 
@@ -60,90 +68,100 @@ def get_multi_paper_recommendations(
     Returns:
         Dict containing aggregated recommendations or error information
     """
-    try:
-        if not paper_ids:
-            raise ToolException("At least one paper ID must be provided")
+    print("Starting multi-paper recommendations search...")
 
-        all_recommendations = []
-        errors = []
+    if not paper_ids:
+        raise ToolException("At least one paper ID must be provided")
 
-        # Calculate recommendations per paper
-        recs_per_paper = max(1, limit // len(paper_ids))
+    all_recommendations = []
+    errors = []
 
-        for paper_id in paper_ids:
+    # Calculate recommendations per paper
+    recs_per_paper = max(1, limit // len(paper_ids))
+
+    for paper_id in paper_ids:
+        print(f"Processing paper ID: {paper_id}")
+        endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
+        params = {"limit": min(recs_per_paper, 100)}
+
+        max_retries = 3
+        retry_count = 0
+        retry_delay = 2
+
+        while retry_count < max_retries:
             try:
-                endpoint = (
-                    f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-                )
-                params = {"limit": min(recs_per_paper, 100)}
+                print(f"Attempt {retry_count + 1} of {max_retries}")
+                response = requests.get(endpoint, params=params, timeout=10)
 
-                max_retries = 3
-                retry_delay = 2
+                if response.status_code == 429:  # Rate limit hit
+                    retry_count += 1
+                    wait_time = retry_delay * (2**retry_count)
+                    print(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
 
-                for attempt in range(max_retries):
-                    try:
-                        response = requests.get(endpoint, params=params)
+                if response.status_code == 404:
+                    errors.append(f"Paper with ID {paper_id} not found.")
+                    break
 
-                        if response.status_code == 429:  # Rate limit
-                            wait_time = 2**attempt
-                            time.sleep(wait_time)
-                            continue
+                # Break immediately if we get a successful response
+                if response.status_code == 200:
+                    print(f"Successful response received for paper {paper_id}")
+                    data = response.json()
+                    recommendations = data.get("recommendations", [])
+                    if recommendations:
+                        all_recommendations.extend(recommendations)
+                    break
 
-                        if response.status_code == 404:
-                            errors.append(f"Paper with ID {paper_id} not found.")
-                            break
+                response.raise_for_status()
 
-                        response.raise_for_status()
-                        data = response.json()
-                        recommendations = data.get("recommendations", [])
+            except requests.exceptions.RequestException as e:
+                print(f"Request failed for paper {paper_id}: {str(e)}")
+                retry_count += 1
+                if retry_count == max_retries:
+                    errors.append(f"Error processing paper {paper_id}: {str(e)}")
+                    break
+                time.sleep(retry_delay * (2**retry_count))
+                continue
 
-                        if recommendations:
-                            all_recommendations.extend(recommendations)
-                        break  # Success
-
-                    except requests.exceptions.RequestException as e:
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                            retry_delay *= 2
-                            continue
-                        errors.append(f"Error processing paper {paper_id}: {str(e)}")
-                        break
-
-            except Exception as e:
-                errors.append(f"Error processing paper {paper_id}: {str(e)}")
-
-        if not all_recommendations and errors:
-            raise ToolException(
-                f"Failed to get any recommendations. Errors: {'; '.join(errors)}"
-            )
-
-        # Deduplicate recommendations
-        seen = set()
-        unique_recommendations = []
-        for rec in all_recommendations:
-            if rec.get("paperId") not in seen:
-                seen.add(rec.get("paperId"))
-                unique_recommendations.append(rec)
-
-        # Take top limit recommendations
-        final_recommendations = unique_recommendations[:limit]
-
-        # Update shared state
-        shared_state.add_papers(final_recommendations)
-
-        return {
-            "status": "success",
-            "papers": final_recommendations,
-            "total": len(final_recommendations),
-            "errors": errors if errors else None,
-            "message": (
-                f"Found {len(final_recommendations)} unique recommendations "
-                f"across {len(paper_ids)} papers."
-                + (f" Some errors occurred: {'; '.join(errors)}" if errors else "")
-            ),
-        }
-
-    except Exception as e:
+    if not all_recommendations and errors:
         raise ToolException(
-            f"Error during multi-paper recommendation process: {str(e)}"
+            f"Failed to get any recommendations. Errors: {'; '.join(errors)}"
         )
+
+    print("Processing aggregated recommendations...")
+
+    # Deduplicate recommendations
+    seen = set()
+    unique_recommendations = []
+    for rec in all_recommendations:
+        if rec.get("paperId") not in seen:
+            seen.add(rec.get("paperId"))
+            unique_recommendations.append(rec)
+
+    # Take top limit recommendations
+    final_recommendations = unique_recommendations[:limit]
+
+    # Create DataFrame
+    filtered_papers = [
+        (paper["paperId"], paper["title"])
+        for paper in final_recommendations
+        if paper.get("title")
+    ]
+
+    df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
+    print("Created DataFrame with results")
+    print(df)
+
+    print("Multi-paper recommendations tool execution completed")
+    return Command(
+        update={
+            "papers": df.to_markdown(tablefmt="grid"),
+            "messages": [
+                ToolMessage(
+                    content=df.to_markdown(tablefmt="grid"),
+                    tool_call_id=tool_call_id,
+                )
+            ],
+        }
+    )
