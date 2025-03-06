@@ -2,40 +2,39 @@
 This is the agent file for the Talk2Papers graph.
 """
 
-from typing import Literal
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
-from langchain.prebuilt.llm_functions import (
-    make_supervisor_node,
-)
+from typing import Literal
 
 from state.shared_state import Talk2Papers
 from tools.s2 import s2_tools
-from config.config import config
 from agents.s2_agent import s2_agent
+from config.config import config
 
 
-def get_app(uniq_id):  # Change parameter name to match what we use inside
+def get_app(uniq_id):
     """
     This function returns the langraph app.
     """
 
-    def call_s2_agent(state: Talk2Papers) -> Command[Literal["supervisor"]]:
-        response = s2_agent.invoke({"messages": state["messages"][-1]})
-        return Command(
-            update={
-                "messages": [
-                    HumanMessage(
-                        content=response["messages"][-1].content, name="s2_agent"
-                    )
-                ]
-            },
-            goto="supervisor",
-        )
+    def agent_test_node(state: Talk2Papers):
+        """
+        This function calls the model.
+        """
+        # Get the messages from the state
+        messages = state["messages"]
+        # Call the model
+        inputs = {"messages": messages}
+        response = model.invoke(inputs, {"configurable": {"thread_id": uniq_id}})
+        # Return response
+        return response
+
+    # Define the tools
+    tools = [s2_tools[0], s2_tools[1]]
 
     # Create the LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -47,18 +46,14 @@ def get_app(uniq_id):  # Change parameter name to match what we use inside
         checkpointer=MemorySaver(),
     )
 
-    # Create supervisor node
-    supervisor_node = make_supervisor_node(llm, ["s2_agent"])
-
-    # Define the graph
+    # Define a new graph
     workflow = StateGraph(Talk2Papers)
 
-    # Add nodes
-    workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("s2_agent", call_s2_agent)
+    # Define the node
+    workflow.add_node("agent_test", agent_test_node)
 
     # Set the entrypoint
-    workflow.add_edge(START, "supervisor")
+    workflow.add_edge(START, "agent_test")
 
     # Initialize memory
     checkpointer = MemorySaver()
