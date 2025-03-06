@@ -1,11 +1,17 @@
 import unittest
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
+
 from agents.main_agent import get_app
 from langchain_core.messages import HumanMessage
 
 
 class TestTalk2Papers(unittest.TestCase):
     def setUp(self):
-        self.app = get_app(unique_id=1234)
+        self.app = get_app(uniq_id=1234)  # Changed 'unique_id' to 'uniq_id'
 
     def test_search_query(self):
         """Test basic paper search"""
@@ -18,7 +24,6 @@ class TestTalk2Papers(unittest.TestCase):
 
     def test_paper_recommendations(self):
         """Test paper recommendations"""
-        # First search for a paper
         query = "machine learning in healthcare"
         response = self.app.invoke(
             {"messages": [HumanMessage(content=query)]},
@@ -26,7 +31,7 @@ class TestTalk2Papers(unittest.TestCase):
         )
 
         # Get recommendations for first paper
-        paper_id = "SAMPLE_PAPER_ID"  # Get this from first response
+        paper_id = "SAMPLE_PAPER_ID"  # We should extract this from the first response
         query = f"Find similar papers to {paper_id}"
         response = self.app.invoke(
             {"messages": [HumanMessage(content=query)]},
