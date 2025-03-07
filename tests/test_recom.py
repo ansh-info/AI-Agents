@@ -1,4 +1,5 @@
 import unittest
+import uuid
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from agents.main_agent import get_app
@@ -15,6 +16,14 @@ class TestPaperRecommendations(unittest.TestCase):
     def setUp(self):
         """Set up before each test"""
         self.base_state = Talk2Papers(messages=[], papers=[], search_table="")
+        # Generate unique IDs for each test
+        self.config = {
+            "configurable": {
+                "thread_id": str(uuid.uuid4()),
+                "checkpoint_ns": "test",
+                "checkpoint_id": str(uuid.uuid4()),
+            }
+        }
 
     def test_search_and_single_recommendation(self):
         """Test workflow: search -> single paper recommendation"""
@@ -26,7 +35,7 @@ class TestPaperRecommendations(unittest.TestCase):
             messages=[search_message], papers=[], search_table=""
         )
 
-        search_result = self.app.invoke(search_state)
+        search_result = self.app.invoke(search_state, self.config)
 
         # Verify search results
         self.assertIn("papers", search_result, "Search should return papers")
@@ -45,7 +54,7 @@ class TestPaperRecommendations(unittest.TestCase):
             )
             rec_state = Talk2Papers(messages=[rec_message], papers=[], search_table="")
 
-            rec_result = self.app.invoke(rec_state)
+            rec_result = self.app.invoke(rec_state, self.config)
             self.assertIn("papers", rec_result, "Should return paper recommendations")
             print("Single Paper Recommendations:", rec_result.get("papers"))
 
@@ -57,7 +66,7 @@ class TestPaperRecommendations(unittest.TestCase):
             messages=[search_message], papers=[], search_table=""
         )
 
-        search_result = self.app.invoke(search_state)
+        search_result = self.app.invoke(search_state, self.config)
 
         # Verify search results
         self.assertIn("papers", search_result, "Search should return papers")
@@ -76,7 +85,7 @@ class TestPaperRecommendations(unittest.TestCase):
             )
             rec_state = Talk2Papers(messages=[rec_message], papers=[], search_table="")
 
-            rec_result = self.app.invoke(rec_state)
+            rec_result = self.app.invoke(rec_state, self.config)
             self.assertIn("papers", rec_result, "Should return paper recommendations")
             print("Multi Paper Recommendations:", rec_result.get("papers"))
 
@@ -89,7 +98,7 @@ class TestPaperRecommendations(unittest.TestCase):
             messages=[invalid_message], papers=[], search_table=""
         )
 
-        result = self.app.invoke(invalid_state)
+        result = self.app.invoke(invalid_state, self.config)
         # Check if error message is in the response
         messages = result.get("messages", [])
         response_text = " ".join([str(m.content) for m in messages])
