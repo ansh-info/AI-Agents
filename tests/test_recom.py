@@ -16,7 +16,6 @@ class TestPaperRecommendations(unittest.TestCase):
     def setUp(self):
         """Set up before each test"""
         self.base_state = Talk2Papers(messages=[], papers=[], search_table="")
-        # Generate unique IDs for each test
         self.config = {
             "configurable": {
                 "thread_id": str(uuid.uuid4()),
@@ -24,6 +23,25 @@ class TestPaperRecommendations(unittest.TestCase):
                 "checkpoint_id": str(uuid.uuid4()),
             }
         }
+
+    def extract_paper_id_from_table(self, table_str):
+        """Helper method to extract paper ID from markdown table"""
+        lines = table_str.split("\n")
+        # Find the first data row (after header and separator)
+        for line in lines:
+            if (
+                "|" in line
+                and not "===" in line
+                and not "---" in line
+                and not "Paper ID" in line
+            ):
+                # Split by | and get the Paper ID column
+                cols = line.split("|")
+                if len(cols) >= 3:  # Make sure we have enough columns
+                    return cols[
+                        2
+                    ].strip()  # Paper ID is in the second column (index 2 due to empty first split)
+        return None
 
     def test_search_and_single_recommendation(self):
         """Test workflow: search -> single paper recommendation"""
@@ -42,26 +60,23 @@ class TestPaperRecommendations(unittest.TestCase):
         papers = search_result.get("papers")
         print("Search Results:", papers)
 
-        # Extract first paper ID
-        # Assuming papers is a markdown table, parse to get paper ID
-        paper_lines = papers.split("\n")
-        if len(paper_lines) > 2:  # Header + separator + at least one paper
-            paper_id = paper_lines[2].split("|")[1].strip()
+        # Extract paper ID using helper method
+        paper_id = self.extract_paper_id_from_table(papers)
+        self.assertIsNotNone(paper_id, "Failed to extract paper ID from search results")
+        print(f"Extracted Paper ID: {paper_id}")
 
-            # Step 2: Get recommendations for first paper
-            rec_message = HumanMessage(
-                content=f"Get recommendations for paper {paper_id}"
-            )
-            rec_state = Talk2Papers(messages=[rec_message], papers=[], search_table="")
+        # Step 2: Get recommendations for the paper
+        rec_message = HumanMessage(content=f"Get recommendations for paper {paper_id}")
+        rec_state = Talk2Papers(messages=[rec_message], papers=[], search_table="")
 
-            rec_result = self.app.invoke(rec_state, self.config)
-            self.assertIn("papers", rec_result, "Should return paper recommendations")
-            print("Single Paper Recommendations:", rec_result.get("papers"))
+        rec_result = self.app.invoke(rec_state, self.config)
+        self.assertIn("papers", rec_result, "Should return paper recommendations")
+        print("Single Paper Recommendations:", rec_result.get("papers"))
 
     def test_search_and_multi_recommendation(self):
         """Test workflow: search -> multi paper recommendations"""
-        # Step 1: Search for papers
-        search_message = HumanMessage(content="Search for papers about deep learning")
+        # Step 1: Search for papers with higher limit
+        search_message = HumanMessage(content="Search for 3 papers about deep learning")
         search_state = Talk2Papers(
             messages=[search_message], papers=[], search_table=""
         )
@@ -73,21 +88,33 @@ class TestPaperRecommendations(unittest.TestCase):
         papers = search_result.get("papers")
         print("Search Results:", papers)
 
-        # Extract first two paper IDs
-        paper_lines = papers.split("\n")
-        if len(paper_lines) > 3:  # Header + separator + at least two papers
-            paper_id1 = paper_lines[2].split("|")[1].strip()
-            paper_id2 = paper_lines[3].split("|")[1].strip()
+        # Extract first paper ID
+        paper_id1 = self.extract_paper_id_from_table(papers)
+        self.assertIsNotNone(paper_id1, "Failed to extract first paper ID")
 
-            # Step 2: Get recommendations for both papers
-            rec_message = HumanMessage(
-                content=f"Get recommendations for papers {paper_id1} and {paper_id2}"
-            )
-            rec_state = Talk2Papers(messages=[rec_message], papers=[], search_table="")
+        # Search for another paper to get second ID
+        search_message2 = HumanMessage(
+            content="Search for papers about neural networks"
+        )
+        search_state2 = Talk2Papers(
+            messages=[search_message2], papers=[], search_table=""
+        )
 
-            rec_result = self.app.invoke(rec_state, self.config)
-            self.assertIn("papers", rec_result, "Should return paper recommendations")
-            print("Multi Paper Recommendations:", rec_result.get("papers"))
+        search_result2 = self.app.invoke(search_state2, self.config)
+        paper_id2 = self.extract_paper_id_from_table(search_result2.get("papers"))
+        self.assertIsNotNone(paper_id2, "Failed to extract second paper ID")
+
+        print(f"Using paper IDs: {paper_id1} and {paper_id2}")
+
+        # Step 2: Get recommendations for both papers
+        rec_message = HumanMessage(
+            content=f"Get recommendations for papers {paper_id1} and {paper_id2}"
+        )
+        rec_state = Talk2Papers(messages=[rec_message], papers=[], search_table="")
+
+        rec_result = self.app.invoke(rec_state, self.config)
+        self.assertIn("papers", rec_result, "Should return paper recommendations")
+        print("Multi Paper Recommendations:", rec_result.get("papers"))
 
     def test_invalid_paper_id(self):
         """Test handling of invalid paper ID"""
