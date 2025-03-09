@@ -7,7 +7,6 @@ from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
 from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
-from config.config import config
 
 
 class SinglePaperRecInput(BaseModel):
@@ -20,7 +19,7 @@ class SinglePaperRecInput(BaseModel):
         default=2,
         description="Maximum number of recommendations to return",
         ge=1,
-        le=100,
+        le=500,
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -39,16 +38,25 @@ def get_single_paper_recommendations(
 ) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper."""
     print("Starting single paper recommendations search...")
-    endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-    params = {"limit": min(limit, 100)}
 
-    response = requests.get(endpoint, params=params, timeout=10)
+    # Correct recommendations API endpoint
+    endpoint = (
+        f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
+    )
+    params = {
+        "limit": min(limit, 500),
+        "fields": "title,paperId",
+        "from": "recent",  # Use recent papers for recommendations
+    }
+
+    print(f"Calling endpoint: {endpoint}")
+    response = requests.get(endpoint, params=params)
     print(f"API Response Status: {response.status_code}")
 
     if response.status_code == 200:
         data = response.json()
         print(f"Raw API Response: {data}")
-        recommendations = data.get("recommendations", [])
+        recommendations = data.get("recommendedPapers", [])
 
         if not recommendations:
             print("No recommendations found")
@@ -99,6 +107,9 @@ def get_single_paper_recommendations(
                 ],
             }
         )
+    elif response.status_code == 404:
+        error_msg = f"Paper with ID {paper_id} not found"
+        raise ToolException(error_msg)
     else:
         error_msg = (
             f"Error getting recommendations. Status code: {response.status_code}"

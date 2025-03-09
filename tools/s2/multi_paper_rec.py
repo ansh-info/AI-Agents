@@ -7,7 +7,6 @@ from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
 from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
-from config.config import config
 
 
 class MultiPaperRecInput(BaseModel):
@@ -20,7 +19,7 @@ class MultiPaperRecInput(BaseModel):
         default=2,
         description="Maximum total number of recommendations to return",
         ge=1,
-        le=100,
+        le=500,
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -45,92 +44,76 @@ def get_multi_paper_recommendations(
     """Get paper recommendations based on multiple papers."""
     print("Starting multi-paper recommendations search...")
 
-    if not paper_ids:
-        raise ToolException("At least one paper ID must be provided")
+    # Correct recommendations API endpoint for multiple papers
+    endpoint = "https://api.semanticscholar.org/recommendations/v1/papers"
+    headers = {"Content-Type": "application/json"}
+    data = {"positivePaperIds": paper_ids, "negativePaperIds": []}
+    params = {"limit": min(limit, 500), "fields": "title,paperId"}
 
-    all_recommendations = []
-    errors = []
+    print(f"Calling endpoint: {endpoint}")
+    response = requests.post(endpoint, json=data, headers=headers, params=params)
+    print(f"API Response Status: {response.status_code}")
+    print(f"Request data: {data}")
 
-    # Calculate recommendations per paper
-    recs_per_paper = max(1, limit // len(paper_ids))
+    if response.status_code == 200:
+        data = response.json()
+        print(f"Raw API Response: {data}")
+        recommendations = data.get("recommendedPapers", [])
 
-    for paper_id in paper_ids:
-        print(f"Processing paper ID: {paper_id}")
-        endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-        params = {"limit": recs_per_paper}
+        if not recommendations:
+            print("No recommendations found")
+            return Command(
+                update={
+                    "papers": "No recommendations found for the provided papers",
+                    "messages": [
+                        ToolMessage(
+                            content="No recommendations found for the provided papers",
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
 
-        response = requests.get(endpoint, params=params, timeout=10)
-        print(f"API Response Status for {paper_id}: {response.status_code}")
+        # Create DataFrame
+        filtered_papers = [
+            (paper["paperId"], paper["title"])
+            for paper in recommendations
+            if paper.get("title") and paper.get("paperId")
+        ]
 
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Raw API Response for {paper_id}: {data}")
-            recommendations = data.get("recommendations", [])
-            if recommendations:
-                all_recommendations.extend(recommendations)
-        else:
-            errors.append(f"Error for paper {paper_id}: Status {response.status_code}")
+        if not filtered_papers:
+            return Command(
+                update={
+                    "papers": "No valid recommendations found",
+                    "messages": [
+                        ToolMessage(
+                            content="No valid recommendations found",
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
 
-    if not all_recommendations and errors:
-        error_msg = "; ".join(errors)
-        raise ToolException(f"Failed to get any recommendations. Errors: {error_msg}")
+        df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
+        print("Created DataFrame with results:")
+        print(df)
 
-    if not all_recommendations:
         return Command(
             update={
-                "papers": "No recommendations found for the provided papers",
+                "papers": df.to_markdown(tablefmt="grid"),
                 "messages": [
                     ToolMessage(
-                        content="No recommendations found for the provided papers",
+                        content=df.to_markdown(tablefmt="grid"),
                         tool_call_id=tool_call_id,
                     )
                 ],
             }
         )
-
-    # Deduplicate recommendations
-    seen = set()
-    unique_recommendations = []
-    for rec in all_recommendations:
-        paper_id = rec.get("paperId")
-        if paper_id and paper_id not in seen:
-            seen.add(paper_id)
-            unique_recommendations.append(rec)
-
-    # Take top limit recommendations
-    final_recommendations = unique_recommendations[:limit]
-
-    # Create DataFrame
-    filtered_papers = [
-        (paper["paperId"], paper["title"])
-        for paper in final_recommendations
-        if paper.get("title") and paper.get("paperId")
-    ]
-
-    if not filtered_papers:
-        return Command(
-            update={
-                "papers": "No valid recommendations found",
-                "messages": [
-                    ToolMessage(
-                        content="No valid recommendations found",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
+    elif response.status_code == 404:
+        error_msg = "One or more papers not found"
+        raise ToolException(error_msg)
+    else:
+        error_msg = (
+            f"Error getting recommendations. Status code: {response.status_code}"
         )
-
-    df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
-    print("Created DataFrame with results:")
-    print(df)
-
-    return Command(
-        update={
-            "papers": df.to_markdown(tablefmt="grid"),
-            "messages": [
-                ToolMessage(
-                    content=df.to_markdown(tablefmt="grid"), tool_call_id=tool_call_id
-                )
-            ],
-        }
-    )
+        raise ToolException(error_msg)
