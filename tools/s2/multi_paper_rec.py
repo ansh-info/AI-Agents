@@ -2,12 +2,12 @@ import re
 from typing import Annotated, Any, Dict, List
 import pandas as pd
 import requests
+import time
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
 from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
-from config.config import config
 
 
 class MultiPaperRecInput(BaseModel):
@@ -20,7 +20,7 @@ class MultiPaperRecInput(BaseModel):
         default=2,
         description="Maximum total number of recommendations to return",
         ge=1,
-        le=100,
+        le=500,
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -45,37 +45,43 @@ def get_multi_paper_recommendations(
     """Get paper recommendations based on multiple papers."""
     print("Starting multi-paper recommendations search...")
 
-    if not paper_ids:
-        raise ToolException("At least one paper ID must be provided")
+    endpoint = "https://api.semanticscholar.org/recommendations/v1/papers"
+    headers = {"Content-Type": "application/json"}
+    data = {"positivePaperIds": paper_ids, "negativePaperIds": []}
+    params = {"limit": min(limit, 500), "fields": "title,paperId"}
 
-    all_recommendations = []
-    errors = []
+    max_retries = 3
+    retry_count = 0
+    retry_delay = 2
 
-    # Calculate recommendations per paper
-    recs_per_paper = max(1, limit // len(paper_ids))
-
-    for paper_id in paper_ids:
-        print(f"Processing paper ID: {paper_id}")
-        endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/{paper_id}/recommendations"
-        params = {"limit": recs_per_paper}
-
-        response = requests.get(endpoint, params=params, timeout=10)
-        print(f"API Response Status for {paper_id}: {response.status_code}")
+    while retry_count < max_retries:
+        print(f"Attempt {retry_count + 1} of {max_retries}")
+        response = requests.post(endpoint, json=data, headers=headers, params=params)
+        print(f"API Response Status: {response.status_code}")
+        print(f"Request data: {data}")
 
         if response.status_code == 200:
-            data = response.json()
-            print(f"Raw API Response for {paper_id}: {data}")
-            recommendations = data.get("recommendations", [])
-            if recommendations:
-                all_recommendations.extend(recommendations)
+            break
+
+        retry_count += 1
+        if retry_count < max_retries:
+            wait_time = retry_delay * (2**retry_count)
+            print(f"Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
         else:
-            errors.append(f"Error for paper {paper_id}: Status {response.status_code}")
+            if response.status_code == 404:
+                raise ToolException("One or more papers not found")
+            else:
+                raise ToolException(
+                    f"Error getting recommendations. Status code: {response.status_code}"
+                )
 
-    if not all_recommendations and errors:
-        error_msg = "; ".join(errors)
-        raise ToolException(f"Failed to get any recommendations. Errors: {error_msg}")
+    data = response.json()
+    print(f"Raw API Response: {data}")
+    recommendations = data.get("recommendedPapers", [])
 
-    if not all_recommendations:
+    if not recommendations:
+        print("No recommendations found")
         return Command(
             update={
                 "papers": "No recommendations found for the provided papers",
@@ -88,22 +94,10 @@ def get_multi_paper_recommendations(
             }
         )
 
-    # Deduplicate recommendations
-    seen = set()
-    unique_recommendations = []
-    for rec in all_recommendations:
-        paper_id = rec.get("paperId")
-        if paper_id and paper_id not in seen:
-            seen.add(paper_id)
-            unique_recommendations.append(rec)
-
-    # Take top limit recommendations
-    final_recommendations = unique_recommendations[:limit]
-
     # Create DataFrame
     filtered_papers = [
         (paper["paperId"], paper["title"])
-        for paper in final_recommendations
+        for paper in recommendations
         if paper.get("title") and paper.get("paperId")
     ]
 
