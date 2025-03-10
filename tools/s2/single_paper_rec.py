@@ -40,10 +40,15 @@ def get_single_paper_recommendations(
     """Get paper recommendations based on a single paper."""
     print("Starting single paper recommendations search...")
 
+    # Use the correct endpoint for single paper recommendations
     endpoint = (
         f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
     )
-    params = {"limit": min(limit, 500), "fields": "title,paperId", "from": "recent"}
+    params = {
+        "limit": min(limit, 500),
+        "fields": "title,paperId",
+        "from": "recent",  # This is specific to single paper recommendations
+    }
 
     max_retries = 3
     retry_count = 0
@@ -53,6 +58,7 @@ def get_single_paper_recommendations(
         print(f"Attempt {retry_count + 1} of {max_retries}")
         response = requests.get(endpoint, params=params)
         print(f"API Response Status: {response.status_code}")
+        print(f"Request params: {params}")
 
         if response.status_code == 200:
             break
