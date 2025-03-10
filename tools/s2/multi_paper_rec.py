@@ -45,43 +45,37 @@ def get_multi_paper_recommendations(
     """Get paper recommendations based on multiple papers."""
     print("Starting multi-paper recommendations search...")
 
-    endpoint = "https://api.semanticscholar.org/recommendations/v1/papers"
-    headers = {"Content-Type": "application/json"}
-    data = {"positivePaperIds": paper_ids, "negativePaperIds": []}
-    params = {"limit": min(limit, 500), "fields": "title,paperId"}
+    all_recommendations = []
 
-    max_retries = 3
-    retry_count = 0
-    retry_delay = 2
+    # Get recommendations for each paper ID
+    for paper_id in paper_ids:
+        endpoint = f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
+        params = {"limit": min(limit, 500), "fields": "title,paperId"}
 
-    while retry_count < max_retries:
-        print(f"Attempt {retry_count + 1} of {max_retries}")
-        response = requests.post(endpoint, json=data, headers=headers, params=params)
-        print(f"API Response Status: {response.status_code}")
-        print(f"Request data: {data}")
+        max_retries = 3
+        retry_count = 0
+        retry_delay = 2
 
-        if response.status_code == 200:
-            break
+        while retry_count < max_retries:
+            print(f"Attempt {retry_count + 1} of {max_retries} for paper {paper_id}")
+            response = requests.get(endpoint, params=params)
+            print(f"API Response Status: {response.status_code}")
 
-        retry_count += 1
-        if retry_count < max_retries:
-            wait_time = retry_delay * (2**retry_count)
-            print(f"Retrying in {wait_time} seconds...")
-            time.sleep(wait_time)
-        else:
-            if response.status_code == 404:
-                raise ToolException("One or more papers not found")
+            if response.status_code == 200:
+                data = response.json()
+                recommendations = data.get("recommendedPapers", [])
+                all_recommendations.extend(recommendations)
+                break
+
+            retry_count += 1
+            if retry_count < max_retries:
+                wait_time = retry_delay * (2**retry_count)
+                print(f"Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
             else:
-                raise ToolException(
-                    f"Error getting recommendations. Status code: {response.status_code}"
-                )
+                print(f"Failed to get recommendations for paper {paper_id}")
 
-    data = response.json()
-    print(f"Raw API Response: {data}")
-    recommendations = data.get("recommendedPapers", [])
-
-    if not recommendations:
-        print("No recommendations found")
+    if not all_recommendations:
         return Command(
             update={
                 "papers": "No recommendations found for the provided papers",
@@ -94,10 +88,10 @@ def get_multi_paper_recommendations(
             }
         )
 
-    # Create DataFrame
+    # Create DataFrame from all recommendations
     filtered_papers = [
         (paper["paperId"], paper["title"])
-        for paper in recommendations
+        for paper in all_recommendations
         if paper.get("title") and paper.get("paperId")
     ]
 
@@ -115,16 +109,16 @@ def get_multi_paper_recommendations(
         )
 
     df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
-    print("Created DataFrame with results:")
+    print("Created DataFrame with all results:")
     print(df)
+
+    markdown_table = df.to_markdown(tablefmt="grid")
 
     return Command(
         update={
-            "papers": df.to_markdown(tablefmt="grid"),
+            "papers": markdown_table,
             "messages": [
-                ToolMessage(
-                    content=df.to_markdown(tablefmt="grid"), tool_call_id=tool_call_id
-                )
+                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
         }
     )
