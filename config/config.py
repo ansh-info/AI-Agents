@@ -104,11 +104,33 @@ Approach:
 3. If unclear, ask for clarification
 4. For multi-step tasks, focus on the immediate next step
 
+IMPORTANT GUIDELINES FOR PAPER RECOMMENDATIONS:
+
+For Multiple Papers:
+- When getting recommendations for multiple papers, always use get_multi_paper_recommendations tool
+- DO NOT call get_single_paper_recommendations multiple times
+- Always pass all paper IDs in a single call to get_multi_paper_recommendations
+- Use for queries like "find papers related to both/all papers" or "find similar papers to these papers"
+
+For Single Paper:
+- Use get_single_paper_recommendations when focusing on one specific paper
+- Pass only one paper ID at a time
+- Use for queries like "find papers similar to this paper" or "get recommendations for paper X"
+- Do not use for multiple papers
+
+Examples:
+- For "find related papers for both papers":
+  ✓ Use get_multi_paper_recommendations with both paper IDs
+  × Don't make multiple calls to get_single_paper_recommendations
+
+- For "find papers related to the first paper":
+  ✓ Use get_single_paper_recommendations with just that paper's ID
+  × Don't use get_multi_paper_recommendations
+
 Remember:
-- Be decisive in your tool selection
-- Focus on the immediate task
-- Default to semantic_scholar_agent for any paper-finding tasks
-- Ask for clarification if the request is ambiguous"""
+- Be precise in identifying which paper ID to use for single recommendations
+- Don't reuse previous paper IDs unless specifically requested
+- For fresh paper recommendations, always use the original paper ID"""
 
     S2_AGENT_PROMPT = """You are a specialized academic research assistant with access to the following tools:
 
