@@ -1,10 +1,11 @@
 import re
+import time
 from typing import Annotated, Any, Dict, List
+
 import pandas as pd
 import requests
-import time
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import tool
 from langchain_core.tools.base import InjectedToolCallId
 from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
@@ -46,6 +47,7 @@ def get_multi_paper_recommendations(
     print("Starting multi-paper recommendations search...")
 
     all_recommendations = []
+    paper_results = []
 
     # Get recommendations for each paper ID
     for paper_id in paper_ids:
@@ -78,7 +80,7 @@ def get_multi_paper_recommendations(
     if not all_recommendations:
         return Command(
             update={
-                "papers": "No recommendations found for the provided papers",
+                "papers": ["No recommendations found for the provided papers"],
                 "messages": [
                     ToolMessage(
                         content="No recommendations found for the provided papers",
@@ -98,7 +100,7 @@ def get_multi_paper_recommendations(
     if not filtered_papers:
         return Command(
             update={
-                "papers": "No valid recommendations found",
+                "papers": ["No valid recommendations found"],
                 "messages": [
                     ToolMessage(
                         content="No valid recommendations found",
@@ -112,11 +114,17 @@ def get_multi_paper_recommendations(
     print("Created DataFrame with all results:")
     print(df)
 
+    # Convert each row to a formatted string
+    paper_results = [
+        f"Paper ID: {row['Paper ID']}\nTitle: {row['Title']}"
+        for _, row in df.iterrows()
+    ]
+
     markdown_table = df.to_markdown(tablefmt="grid")
 
     return Command(
         update={
-            "papers": markdown_table,
+            "papers": paper_results,  # Now returns a list of strings
             "messages": [
                 ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
