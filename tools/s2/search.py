@@ -30,56 +30,31 @@ def search_tool(
     tool_call_id: Annotated[str, InjectedToolCallId],
     limit: int = 2,
 ) -> Dict[str, Any]:
-    """Search for academic papers on Semantic Scholar.
-
-    Best for:
-    - Finding papers on specific topics
-    - Academic research queries
-    - Finding recent papers in a field
-
-    Examples:
-    - "machine learning applications in healthcare"
-    - "recent advances in transformers 2023"
-    - "quantum computing algorithms review"
-
-    Args:
-        query: Search query string
-        limit: Maximum number of results to return (max 100)
-
-    Returns:
-        Dict containing search results or error information
-    """
+    """Search for academic papers on Semantic Scholar."""
     print("Starting paper search...")
     endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/search"
     params = {
         "query": query,
-        "limit": min(limit, 100),  # Respect unauthenticated limit
+        "limit": min(limit, 100),
         "fields": "paperId,title,abstract,year,authors,citationCount,openAccessPdf",
     }
-
     max_retries = 3
     retry_count = 0
     retry_delay = 2
-
     while retry_count < max_retries:
         try:
             print(f"Attempt {retry_count + 1} of {max_retries}")
             response = requests.get(endpoint, params=params, timeout=10)
-
-            if response.status_code == 429:  # Rate limit hit
+            if response.status_code == 429:
                 retry_count += 1
-                wait_time = retry_delay * (2**retry_count)  # Exponential backoff
+                wait_time = retry_delay * (2**retry_count)
                 print(f"Rate limit hit. Waiting {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
-
-            # Break immediately if we get a successful response
             if response.status_code == 200:
                 print("Successful response received")
                 break
-
             response.raise_for_status()
-
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {str(e)}")
             retry_count += 1
@@ -94,7 +69,6 @@ def search_tool(
     data = response.json()
     papers = data.get("data", [])
 
-    # Filter and clean results
     filtered_papers = [
         (paper["paperId"], paper["title"])
         for paper in papers
@@ -105,15 +79,20 @@ def search_tool(
     print("Created DataFrame with results")
     print(df)
 
+    # Convert results to list format
+    paper_results = [
+        f"Paper ID: {row['Paper ID']}\nTitle: {row['Title']}"
+        for _, row in df.iterrows()
+    ]
+
+    markdown_table = df.to_markdown(tablefmt="grid")
     print("Search tool execution completed")
+
     return Command(
         update={
-            "papers": df.to_markdown(tablefmt="grid"),
+            "papers": paper_results,  # Now returns a list of strings
             "messages": [
-                ToolMessage(
-                    content=df.to_markdown(tablefmt="grid"),
-                    tool_call_id=tool_call_id,
-                )
+                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
         }
     )

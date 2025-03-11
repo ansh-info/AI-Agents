@@ -43,12 +43,10 @@ def get_single_paper_recommendations(
     endpoint = (
         f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
     )
-
-    # Update parameters based on API docs
     params = {
         "limit": min(limit, 500),
-        "fields": "title,paperId,abstract,year",  # Added more fields
-        "from": "all-cs",  # Changed from "recent" to "all-cs" to get more results
+        "fields": "title,paperId,abstract,year",
+        "from": "all-cs",
     }
 
     max_retries = 3
@@ -66,7 +64,7 @@ def get_single_paper_recommendations(
             print(f"Raw API Response: {data}")
             recommendations = data.get("recommendedPapers", [])
 
-            if recommendations:  # If we got recommendations
+            if recommendations:
                 filtered_papers = [
                     (paper["paperId"], paper["title"])
                     for paper in recommendations
@@ -75,11 +73,18 @@ def get_single_paper_recommendations(
 
                 if filtered_papers:
                     df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
+
+                    # Convert to list format
+                    paper_results = [
+                        f"Paper ID: {row['Paper ID']}\nTitle: {row['Title']}"
+                        for _, row in df.iterrows()
+                    ]
+
                     markdown_table = df.to_markdown(tablefmt="grid")
 
                     return Command(
                         update={
-                            "papers": markdown_table,
+                            "papers": paper_results,  # Now returns a list of strings
                             "messages": [
                                 ToolMessage(
                                     content=markdown_table, tool_call_id=tool_call_id
@@ -90,7 +95,9 @@ def get_single_paper_recommendations(
 
             return Command(
                 update={
-                    "papers": "No recommendations found for this paper",
+                    "papers": [
+                        "No recommendations found for this paper"
+                    ],  # Return as list
                     "messages": [
                         ToolMessage(
                             content="No recommendations found for this paper",
