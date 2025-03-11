@@ -12,8 +12,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class MultiPaperRecInput(BaseModel):
-    """Input schema for multiple paper recommendations tool."""
-
     paper_ids: List[str] = Field(
         description="List of Semantic Scholar Paper IDs to get recommendations for"
     )
@@ -79,7 +77,7 @@ def get_multi_paper_recommendations(
     if not all_recommendations:
         return Command(
             update={
-                "papers": ["No recommendations found for the provided papers"],
+                "papers": [],  # Empty list instead of error message
                 "messages": [
                     ToolMessage(
                         content="No recommendations found for the provided papers",
@@ -91,7 +89,7 @@ def get_multi_paper_recommendations(
 
     # Create DataFrame from all recommendations
     filtered_papers = [
-        (paper["paperId"], paper["title"])
+        {"Paper ID": paper["paperId"], "Title": paper["title"]}
         for paper in all_recommendations
         if paper.get("title") and paper.get("paperId")
     ]
@@ -99,7 +97,7 @@ def get_multi_paper_recommendations(
     if not filtered_papers:
         return Command(
             update={
-                "papers": ["No valid recommendations found"],
+                "papers": [],  # Empty list instead of error message
                 "messages": [
                     ToolMessage(
                         content="No valid recommendations found",
@@ -109,21 +107,21 @@ def get_multi_paper_recommendations(
             }
         )
 
-    df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
+    df = pd.DataFrame(filtered_papers)
     print("Created DataFrame with all results:")
     print(df)
 
-    # Convert results to list format
+    # Convert results to list for state update
     paper_results = [
-        f"Paper ID: {row['Paper ID']}\nTitle: {row['Title']}"
-        for _, row in df.iterrows()
+        f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
+        for paper in filtered_papers
     ]
 
     markdown_table = df.to_markdown(tablefmt="grid")
 
     return Command(
         update={
-            "papers": paper_results,  # Returns a list of strings
+            "papers": paper_results,
             "messages": [
                 ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
