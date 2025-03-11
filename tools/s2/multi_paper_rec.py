@@ -47,7 +47,6 @@ def get_multi_paper_recommendations(
     print("Starting multi-paper recommendations search...")
 
     all_recommendations = []
-    paper_results = []
 
     # Get recommendations for each paper ID
     for paper_id in paper_ids:
@@ -114,7 +113,7 @@ def get_multi_paper_recommendations(
     print("Created DataFrame with all results:")
     print(df)
 
-    # Convert each row to a formatted string
+    # Convert results to list format
     paper_results = [
         f"Paper ID: {row['Paper ID']}\nTitle: {row['Title']}"
         for _, row in df.iterrows()
@@ -124,7 +123,7 @@ def get_multi_paper_recommendations(
 
     return Command(
         update={
-            "papers": paper_results,  # Now returns a list of strings
+            "papers": paper_results,  # Returns a list of strings
             "messages": [
                 ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
