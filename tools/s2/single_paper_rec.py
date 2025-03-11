@@ -1,8 +1,9 @@
 import re
+import time
 from typing import Annotated, Any, Dict
+
 import pandas as pd
 import requests
-import time
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
@@ -11,8 +12,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class SinglePaperRecInput(BaseModel):
-    """Input schema for single paper recommendation tool."""
-
     paper_id: str = Field(
         description="Semantic Scholar Paper ID to get recommendations for (40-character string)"
     )
@@ -43,12 +42,10 @@ def get_single_paper_recommendations(
     endpoint = (
         f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
     )
-
-    # Update parameters based on API docs
     params = {
         "limit": min(limit, 500),
-        "fields": "title,paperId,abstract,year",  # Added more fields
-        "from": "all-cs",  # Changed from "recent" to "all-cs" to get more results
+        "fields": "title,paperId,abstract,year",
+        "from": "all-cs",
     }
 
     max_retries = 3
@@ -66,20 +63,27 @@ def get_single_paper_recommendations(
             print(f"Raw API Response: {data}")
             recommendations = data.get("recommendedPapers", [])
 
-            if recommendations:  # If we got recommendations
+            if recommendations:
                 filtered_papers = [
-                    (paper["paperId"], paper["title"])
+                    {"Paper ID": paper["paperId"], "Title": paper["title"]}
                     for paper in recommendations
                     if paper.get("title") and paper.get("paperId")
                 ]
 
                 if filtered_papers:
-                    df = pd.DataFrame(filtered_papers, columns=["Paper ID", "Title"])
+                    df = pd.DataFrame(filtered_papers)
+
+                    # Convert results to list for state update
+                    paper_results = [
+                        f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
+                        for paper in filtered_papers
+                    ]
+
                     markdown_table = df.to_markdown(tablefmt="grid")
 
                     return Command(
                         update={
-                            "papers": markdown_table,
+                            "papers": paper_results,
                             "messages": [
                                 ToolMessage(
                                     content=markdown_table, tool_call_id=tool_call_id
@@ -90,7 +94,7 @@ def get_single_paper_recommendations(
 
             return Command(
                 update={
-                    "papers": "No recommendations found for this paper",
+                    "papers": [],  # Empty list instead of error message
                     "messages": [
                         ToolMessage(
                             content="No recommendations found for this paper",
