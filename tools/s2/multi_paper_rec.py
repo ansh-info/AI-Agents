@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class MultiPaperRecInput(BaseModel):
+    """Input schema for multiple paper recommendations tool."""
+
     paper_ids: List[str] = Field(
         description="List of Semantic Scholar Paper IDs to get recommendations for"
     )
@@ -77,7 +79,7 @@ def get_multi_paper_recommendations(
     if not all_recommendations:
         return Command(
             update={
-                "papers": [],  # Empty list instead of error message
+                "papers": [],
                 "messages": [
                     ToolMessage(
                         content="No recommendations found for the provided papers",
@@ -87,7 +89,6 @@ def get_multi_paper_recommendations(
             }
         )
 
-    # Create DataFrame from all recommendations
     filtered_papers = [
         {"Paper ID": paper["paperId"], "Title": paper["title"]}
         for paper in all_recommendations
@@ -97,7 +98,7 @@ def get_multi_paper_recommendations(
     if not filtered_papers:
         return Command(
             update={
-                "papers": [],  # Empty list instead of error message
+                "papers": [],
                 "messages": [
                     ToolMessage(
                         content="No valid recommendations found",
@@ -111,8 +112,7 @@ def get_multi_paper_recommendations(
     print("Created DataFrame with all results:")
     print(df)
 
-    # Convert results to list for state update
-    paper_results = [
+    papers = [
         f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
         for paper in filtered_papers
     ]
@@ -121,7 +121,7 @@ def get_multi_paper_recommendations(
 
     return Command(
         update={
-            "papers": paper_results,
+            "papers": papers,
             "messages": [
                 ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
