@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class SinglePaperRecInput(BaseModel):
+    """Input schema for single paper recommendation tool."""
+
     paper_id: str = Field(
         description="Semantic Scholar Paper ID to get recommendations for (40-character string)"
     )
@@ -73,8 +75,7 @@ def get_single_paper_recommendations(
                 if filtered_papers:
                     df = pd.DataFrame(filtered_papers)
 
-                    # Convert results to list for state update
-                    paper_results = [
+                    papers = [
                         f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
                         for paper in filtered_papers
                     ]
@@ -83,7 +84,7 @@ def get_single_paper_recommendations(
 
                     return Command(
                         update={
-                            "papers": paper_results,
+                            "papers": papers,
                             "messages": [
                                 ToolMessage(
                                     content=markdown_table, tool_call_id=tool_call_id
@@ -94,7 +95,7 @@ def get_single_paper_recommendations(
 
             return Command(
                 update={
-                    "papers": [],  # Empty list instead of error message
+                    "papers": [],
                     "messages": [
                         ToolMessage(
                             content="No recommendations found for this paper",

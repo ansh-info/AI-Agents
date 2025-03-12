@@ -13,6 +13,8 @@ from config.config import config
 
 
 class SearchInput(BaseModel):
+    """Input schema for the search papers tool."""
+
     query: str = Field(
         description="Search query string to find academic papers. Be specific and include relevant academic terms."
     )
@@ -33,7 +35,7 @@ def search_tool(
     endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/search"
     params = {
         "query": query,
-        "limit": min(limit, 100),  # Respect unauthenticated limit
+        "limit": min(limit, 100),
         "fields": "paperId,title,abstract,year,authors,citationCount,openAccessPdf",
     }
 
@@ -44,9 +46,9 @@ def search_tool(
         try:
             print(f"Attempt {retry_count + 1} of {max_retries}")
             response = requests.get(endpoint, params=params, timeout=10)
-            if response.status_code == 429:  # Rate limit hit
+            if response.status_code == 429:
                 retry_count += 1
-                wait_time = retry_delay * (2**retry_count)  # Exponential backoff
+                wait_time = retry_delay * (2**retry_count)
                 print(f"Rate limit hit. Waiting {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
@@ -68,7 +70,6 @@ def search_tool(
     data = response.json()
     papers = data.get("data", [])
 
-    # Filter and clean results
     filtered_papers = [
         {"Paper ID": paper["paperId"], "Title": paper["title"]}
         for paper in papers
@@ -78,10 +79,10 @@ def search_tool(
     if not filtered_papers:
         return Command(
             update={
-                "papers": [],  # Empty list instead of error message
+                "papers": [],
                 "messages": [
                     ToolMessage(
-                        content="No papers found",
+                        content="No papers found for your query",
                         tool_call_id=tool_call_id,
                     )
                 ],
@@ -92,8 +93,7 @@ def search_tool(
     print("Created DataFrame with results")
     print(df)
 
-    # Convert results to list for state update
-    paper_results = [
+    papers = [
         f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
         for paper in filtered_papers
     ]
@@ -103,7 +103,7 @@ def search_tool(
 
     return Command(
         update={
-            "papers": paper_results,
+            "papers": papers,
             "messages": [
                 ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
