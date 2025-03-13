@@ -76,13 +76,16 @@ def search_tool(
         if paper.get("title") and paper.get("authors")
     ]
 
+    # Inside search_tool
     if not filtered_papers:
         return Command(
             update={
-                "papers": [],
+                "papers": [
+                    "No papers found matching your query."
+                ],  # Informative message
                 "messages": [
                     ToolMessage(
-                        content="No papers found for your query",
+                        content="No papers found matching your query",
                         tool_call_id=tool_call_id,
                     )
                 ],

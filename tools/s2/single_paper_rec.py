@@ -45,9 +45,9 @@ def get_single_paper_recommendations(
         f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
     )
     params = {
-        "limit": min(limit, 500),
+        "limit": min(limit, 500),  # Max 500 per API docs
         "fields": "title,paperId,abstract,year",
-        "from": "all-cs",
+        "from": "all-cs",  # Using all-cs pool as specified in docs
     }
 
     max_retries = 3
@@ -82,16 +82,21 @@ def get_single_paper_recommendations(
 
                     markdown_table = df.to_markdown(tablefmt="grid")
 
-                    return Command(
-                        update={
-                            "papers": papers,
-                            "messages": [
-                                ToolMessage(
-                                    content=markdown_table, tool_call_id=tool_call_id
-                                )
-                            ],
-                        }
-                    )
+            # Inside get_single_paper_recommendations
+            if not recommendations:
+                return Command(
+                    update={
+                        "papers": [
+                            "No recommendations found for this paper."
+                        ],  # Informative message
+                        "messages": [
+                            ToolMessage(
+                                content="No recommendations found for this paper",
+                                tool_call_id=tool_call_id,
+                            )
+                        ],
+                    }
+                )
 
             return Command(
                 update={

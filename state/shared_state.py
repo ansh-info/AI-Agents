@@ -2,19 +2,15 @@
 This is the state file for the Talk2Papers agent.
 """
 
-from typing import List
+from typing import Annotated, List
+import operator
 from typing_extensions import TypedDict
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
-class PaperState(TypedDict):
-    """State for managing papers."""
-
-    papers: List[str]  # Current papers list
-    search_table: str  # For display purposes
-
-
-class Talk2Papers(AgentState, PaperState):
+class Talk2Papers(TypedDict, AgentState):
     """The state for the Talk2Papers agent."""
 
-    pass
+    # Make papers append-only using operator.add
+    papers: Annotated[list, operator.add]
+    search_table: str
