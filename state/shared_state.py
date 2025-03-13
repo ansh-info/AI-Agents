@@ -11,6 +11,5 @@ from langgraph.prebuilt.chat_agent_executor import AgentState
 class Talk2Papers(TypedDict, AgentState):
     """The state for the Talk2Papers agent."""
 
-    # Make papers append-only using operator.add
-    papers: Annotated[list, operator.add]
-    search_table: str
+    papers: Annotated[list, operator.add] = []  # Initialize as empty list
+    search_table: str = ""  # Initialize with empty string
