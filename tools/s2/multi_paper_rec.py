@@ -1,7 +1,7 @@
 import re
 import time
 from typing import Annotated, Any, Dict, List
-
+import json
 import pandas as pd
 import requests
 from langchain_core.messages import ToolMessage
@@ -18,7 +18,7 @@ class MultiPaperRecInput(BaseModel):
         description="List of Semantic Scholar Paper IDs to get recommendations for"
     )
     limit: int = Field(
-        default=2,
+        default=100,
         description="Maximum total number of recommendations to return",
         ge=1,
         le=500,
@@ -41,89 +41,135 @@ class MultiPaperRecInput(BaseModel):
 def get_multi_paper_recommendations(
     paper_ids: List[str],
     tool_call_id: Annotated[str, InjectedToolCallId],
-    limit: int = 2,
+    limit: int = 100,
 ) -> Dict[str, Any]:
     """Get paper recommendations based on multiple papers."""
     print("Starting multi-paper recommendations search...")
 
-    all_recommendations = []
+    endpoint = "https://api.semanticscholar.org/recommendations/v1/papers"
+    headers = {"Content-Type": "application/json"}
+    payload = {"positivePaperIds": paper_ids, "negativePaperIds": []}
+    params = {"limit": min(limit, 500), "fields": "title,paperId"}
 
-    # Get recommendations for each paper ID
-    for paper_id in paper_ids:
-        endpoint = f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
-        params = {"limit": min(limit, 500), "fields": "title,paperId"}
+    max_retries = 3
+    retry_count = 0
+    retry_delay = 2
 
-        max_retries = 3
-        retry_count = 0
-        retry_delay = 2
-
-        while retry_count < max_retries:
-            print(f"Attempt {retry_count + 1} of {max_retries} for paper {paper_id}")
-            response = requests.get(endpoint, params=params)
+    while retry_count < max_retries:
+        print(f"Attempt {retry_count + 1} of {max_retries}")
+        try:
+            response = requests.post(
+                endpoint, headers=headers, params=params, data=json.dumps(payload)
+            )
             print(f"API Response Status: {response.status_code}")
 
             if response.status_code == 200:
                 data = response.json()
                 recommendations = data.get("recommendedPapers", [])
-                all_recommendations.extend(recommendations)
-                break
+
+                if not recommendations:
+                    print("No recommendations found")
+                    return Command(
+                        update={
+                            "papers": [
+                                "No recommendations found for the provided papers"
+                            ],
+                            "messages": [
+                                ToolMessage(
+                                    content="No recommendations found for the provided papers",
+                                    tool_call_id=tool_call_id,
+                                )
+                            ],
+                        }
+                    )
+
+                # Create a list to store the papers
+                papers_list = []
+                for paper in recommendations:
+                    if paper.get("title") and paper.get("paperId"):
+                        papers_list.append(
+                            {"Paper ID": paper["paperId"], "Title": paper["title"]}
+                        )
+
+                if not papers_list:
+                    return Command(
+                        update={
+                            "papers": ["No valid recommendations found"],
+                            "messages": [
+                                ToolMessage(
+                                    content="No valid recommendations found",
+                                    tool_call_id=tool_call_id,
+                                )
+                            ],
+                        }
+                    )
+
+                df = pd.DataFrame(papers_list)
+                print("Created DataFrame with results:")
+                print(df)
+
+                # Format papers for state update
+                formatted_papers = [
+                    f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
+                    for paper in papers_list
+                ]
+
+                markdown_table = df.to_markdown(tablefmt="grid")
+                return Command(
+                    update={
+                        "papers": formatted_papers,
+                        "messages": [
+                            ToolMessage(
+                                content=markdown_table, tool_call_id=tool_call_id
+                            )
+                        ],
+                    }
+                )
+
+            elif response.status_code == 404:
+                return Command(
+                    update={
+                        "papers": ["One or more paper IDs not found"],
+                        "messages": [
+                            ToolMessage(
+                                content="One or more paper IDs not found",
+                                tool_call_id=tool_call_id,
+                            )
+                        ],
+                    }
+                )
 
             retry_count += 1
             if retry_count < max_retries:
                 wait_time = retry_delay * (2**retry_count)
                 print(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
-            else:
-                print(f"Failed to get recommendations for paper {paper_id}")
 
-    if not all_recommendations:
-        return Command(
-            update={
-                "papers": [],
-                "messages": [
-                    ToolMessage(
-                        content="No recommendations found for the provided papers",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
-        )
-
-    filtered_papers = [
-        {"Paper ID": paper["paperId"], "Title": paper["title"]}
-        for paper in all_recommendations
-        if paper.get("title") and paper.get("paperId")
-    ]
-
-    if not filtered_papers:
-        return Command(
-            update={
-                "papers": [],
-                "messages": [
-                    ToolMessage(
-                        content="No valid recommendations found",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
-        )
-
-    df = pd.DataFrame(filtered_papers)
-    print("Created DataFrame with all results:")
-    print(df)
-
-    papers = [
-        f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
-        for paper in filtered_papers
-    ]
-
-    markdown_table = df.to_markdown(tablefmt="grid")
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            retry_count += 1
+            if retry_count == max_retries:
+                return Command(
+                    update={
+                        "papers": [f"Error getting recommendations: {str(e)}"],
+                        "messages": [
+                            ToolMessage(
+                                content=f"Error getting recommendations: {str(e)}",
+                                tool_call_id=tool_call_id,
+                            )
+                        ],
+                    }
+                )
+            time.sleep(retry_delay * (2**retry_count))
 
     return Command(
         update={
-            "papers": papers,
+            "papers": ["Failed to get recommendations after maximum retries"],
             "messages": [
-                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
+                ToolMessage(
+                    content="Failed to get recommendations after maximum retries",
+                    tool_call_id=tool_call_id,
+                )
             ],
         }
     )
