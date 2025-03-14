@@ -25,15 +25,32 @@ def get_app(uniq_id):
 
     def supervisor_node(state: Talk2Papers) -> Command[Literal["s2_agent", "__end__"]]:
         """
-        Supervisor node that routes to appropriate sub-agents.
+        Supervisor node that routes to appropriate sub-agents based on the main agent prompt.
         Currently only routes to s2_agent as other agents are not implemented.
         """
         logger.info("Supervisor node called")
         logger.info(f"Current state: {state.get('current_agent')}")
 
+        # Create agent with main supervisor prompt
+        supervisor_agent = create_react_agent(
+            llm,
+            state_schema=Talk2Papers,
+            state_modifier=config.MAIN_AGENT_PROMPT,
+            checkpointer=MemorySaver(),
+        )
+
+        # Get routing decision
+        result = supervisor_agent.invoke(state)
+        logger.info(f"Supervisor decision: {result}")
+
         # For now, we only have s2_agent
         return Command(
-            goto="s2_agent", update={"current_agent": "s2_agent", "next": "s2_agent"}
+            goto="s2_agent",
+            update={
+                "current_agent": "s2_agent",
+                "next": "s2_agent",
+                "messages": result.get("messages", state.get("messages", [])),
+            },
         )
 
     # Create the LLM
