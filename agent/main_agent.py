@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from config.config import config
 from state.shared_state import Talk2Papers
+from agents.s2_agent import s2_agent  # Import the S2 agent instance
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,33 @@ def get_app(uniq_id):
             },
         )
 
+    def s2_agent_node(state: Talk2Papers) -> Command[Literal["supervisor", "__end__"]]:
+        """Node for calling the S2 agent"""
+        logger.info("Calling S2 agent")
+        try:
+            # Call the S2 agent
+            result = s2_agent.invoke(state)
+            logger.info("S2 agent completed")
+
+            # Return to supervisor if more work needed, otherwise end
+            return Command(
+                goto="__end__",
+                update={
+                    "messages": result.get("messages", []),
+                    "papers": result.get("papers", []),
+                    "current_agent": None,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Error in S2 agent node: {str(e)}")
+            return Command(
+                goto="__end__",
+                update={
+                    "messages": [{"role": "assistant", "content": f"Error: {str(e)}"}],
+                    "current_agent": None,
+                },
+            )
+
     # Create the LLM
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
@@ -61,6 +89,7 @@ def get_app(uniq_id):
 
     # Add nodes
     workflow.add_node("supervisor", supervisor_node)
+    workflow.add_node("s2_agent", s2_agent_node)
 
     # Add edges
     workflow.add_edge(START, "supervisor")
