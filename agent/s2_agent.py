@@ -26,22 +26,39 @@ class SemanticScholarAgent:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-            # Create the tools agent
+            # Create the tools agent with S2 specific prompt
             self.tools_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,
                 state_schema=Talk2Papers,
-                state_modifier=config.S2_AGENT_PROMPT,
+                state_modifier=config.S2_AGENT_PROMPT,  # Using S2 specific prompt
+                checkpointer=MemorySaver(),
+            )
+
+            # Create internal supervisor with S2 prompt
+            self.supervisor_agent = create_react_agent(
+                self.llm,
+                state_schema=Talk2Papers,
+                state_modifier=config.S2_AGENT_PROMPT,  # Using same S2 prompt for consistency
                 checkpointer=MemorySaver(),
             )
 
             def s2_supervisor_node(
                 state: Talk2Papers,
             ) -> Command[Literal["tools_executor", "__end__"]]:
-                """Internal supervisor for S2 agent"""
+                """Internal supervisor for S2 agent using S2_AGENT_PROMPT"""
                 logger.info("S2 supervisor node called")
+
+                # Get supervision decision using S2 prompt
+                result = self.supervisor_agent.invoke(state)
+                logger.info(f"S2 supervisor decision: {result}")
+
                 return Command(
-                    goto="tools_executor", update={"current_agent": "s2_tools"}
+                    goto="tools_executor",
+                    update={
+                        "current_agent": "s2_tools",
+                        "messages": result.get("messages", state.get("messages", [])),
+                    },
                 )
 
             def tools_executor_node(state: Talk2Papers) -> Command[Literal["__end__"]]:
