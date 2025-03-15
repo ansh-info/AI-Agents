@@ -11,6 +11,7 @@ from langgraph.types import Command
 from config.config import config
 from state.shared_state import Talk2Papers
 from agents.s2_agent import s2_agent  # Import the S2 agent instance
+from tools.s2 import s2_tools  # Import tools for supervisor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,7 @@ def get_app(uniq_id):
         # Create agent with main supervisor prompt
         supervisor_agent = create_react_agent(
             llm,
+            tools=s2_tools,  # Following documentation - supervisor needs tools
             state_schema=Talk2Papers,
             state_modifier=config.MAIN_AGENT_PROMPT,
             checkpointer=MemorySaver(),
@@ -70,6 +72,7 @@ def get_app(uniq_id):
                     "messages": result.get("messages", []),
                     "papers": result.get("papers", []),
                     "current_agent": None,
+                    "is_last_step": True,
                 },
             )
         except Exception as e:
@@ -79,6 +82,7 @@ def get_app(uniq_id):
                 update={
                     "messages": [{"role": "assistant", "content": f"Error: {str(e)}"}],
                     "current_agent": None,
+                    "is_last_step": True,
                 },
             )
 
