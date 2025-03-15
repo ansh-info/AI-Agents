@@ -46,19 +46,10 @@ class SemanticScholarAgent:
             def s2_supervisor_node(
                 state: Talk2Papers,
             ) -> Command[Literal["tools_executor", "__end__"]]:
-                """Internal supervisor for S2 agent using S2_AGENT_PROMPT"""
+                """Internal supervisor for S2 agent"""
                 logger.info("S2 supervisor node called")
-
-                # Get supervision decision using S2 prompt
-                result = self.supervisor_agent.invoke(state)
-                logger.info(f"S2 supervisor decision: {result}")
-
                 return Command(
-                    goto="tools_executor",
-                    update={
-                        "current_agent": "s2_tools",
-                        "messages": result.get("messages", state.get("messages", [])),
-                    },
+                    goto="tools_executor", update={"current_agent": "s2_tools"}
                 )
 
             def tools_executor_node(state: Talk2Papers) -> Command[Literal["__end__"]]:
@@ -76,6 +67,7 @@ class SemanticScholarAgent:
                         ],
                         "papers": result.get("papers", []),
                         "current_agent": None,
+                        "is_last_step": True,
                     },
                 )
 

@@ -5,7 +5,6 @@ This is the state file for the Talk2Papers agent.
 import logging
 from typing import Annotated, List, Optional
 
-from langgraph.prebuilt import AgentState
 from typing_extensions import TypedDict
 
 # Configure logging
@@ -19,13 +18,15 @@ def replace_list(existing: List[str], new: List[str]) -> List[str]:
     return new
 
 
-class Talk2Papers(TypedDict, AgentState):
+class Talk2Papers(TypedDict):
     """The state for the Talk2Papers agent."""
 
     papers: Annotated[list, replace_list] = []  # Replace instead of append
     search_table: str = ""  # For display
     next: Optional[str] = None  # For routing between agents
     current_agent: Optional[str] = None  # Track current active agent
+    messages: List[dict] = []  # Message history
+    is_last_step: bool = False  # Required by LangGraph for create_react_agent
 
     def log_state_update(self) -> None:
         """Log current state for debugging"""

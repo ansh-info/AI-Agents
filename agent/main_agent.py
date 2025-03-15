@@ -51,6 +51,7 @@ def get_app(uniq_id):
                 "current_agent": "s2_agent",
                 "next": "s2_agent",
                 "messages": result.get("messages", state.get("messages", [])),
+                "is_last_step": False,
             },
         )
 
