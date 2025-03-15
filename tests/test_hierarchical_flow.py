@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import logging
 import sys
+import uuid
 from typing import Dict, List
 
 from dotenv import load_dotenv
@@ -19,7 +20,7 @@ load_dotenv()
 
 
 def run_test_case(
-    app, test_input: str, expected_agent: str, expected_tool: str
+    app, test_input: str, expected_agent: str, expected_tool: str, thread_id: str
 ) -> Dict:
     """
     Run a single test case through the agent workflow.
@@ -29,6 +30,7 @@ def run_test_case(
         test_input (str): The user query to test
         expected_agent (str): Expected agent to handle the query
         expected_tool (str): Expected tool to be used
+        thread_id (str): Thread ID for the MemorySaver
 
     Returns:
         Dict: The result from the workflow
@@ -44,8 +46,17 @@ def run_test_case(
     }
 
     try:
+        # Run through workflow with configuration
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_id": str(uuid.uuid4()),
+                "checkpoint_ns": "test",
+            }
+        }
+
         # Run through workflow
-        result = app.invoke(state)
+        result = app.invoke(state, config=config)
 
         # Log results
         logger.info("Test completed")
@@ -68,8 +79,11 @@ def run_all_tests():
     """Run all test cases"""
     logger.info("Starting hierarchical agent tests")
 
+    # Generate a unique thread ID for this test run
+    thread_id = str(uuid.uuid4())
+
     # Initialize app
-    app = get_app("test")
+    app = get_app(thread_id)
 
     # Test cases
     test_cases = [
@@ -97,6 +111,7 @@ def run_all_tests():
             test_case["input"],
             test_case["expected_agent"],
             test_case["expected_tool"],
+            thread_id,
         )
         results.append(result)
 

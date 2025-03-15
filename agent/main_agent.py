@@ -20,9 +20,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def get_app(uniq_id):
+def get_app(thread_id: str):
     """
     This function returns the langraph app with hierarchical structure.
+
+    Args:
+        thread_id (str): Thread ID for the MemorySaver checkpointer
     """
 
     def supervisor_node(state: Talk2Papers) -> Command[Literal["s2_agent", "__end__"]]:
