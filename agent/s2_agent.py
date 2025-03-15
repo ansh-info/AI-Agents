@@ -36,8 +36,10 @@ class SemanticScholarAgent:
             )
 
             # Create internal supervisor with S2 prompt
+            # Following documentation - supervisor also needs tools
             self.supervisor_agent = create_react_agent(
                 self.llm,
+                tools=s2_tools,  # Same tools as they might be needed for routing decisions
                 state_schema=Talk2Papers,
                 state_modifier=config.S2_AGENT_PROMPT,  # Using same S2 prompt for consistency
                 checkpointer=MemorySaver(),
@@ -58,6 +60,7 @@ class SemanticScholarAgent:
                     update={
                         "current_agent": "s2_tools",
                         "messages": result.get("messages", state.get("messages", [])),
+                        "is_last_step": False,
                     },
                 )
 
@@ -76,6 +79,7 @@ class SemanticScholarAgent:
                         ],
                         "papers": result.get("papers", []),
                         "current_agent": None,
+                        "is_last_step": True,
                     },
                 )
 

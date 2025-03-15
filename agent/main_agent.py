@@ -11,6 +11,7 @@ from langgraph.types import Command
 from config.config import config
 from state.shared_state import Talk2Papers
 from agents.s2_agent import s2_agent  # Import the S2 agent instance
+from tools.s2 import s2_tools  # Import tools for supervisor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,9 +20,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def get_app(uniq_id):
+def get_app(thread_id: str):
     """
     This function returns the langraph app with hierarchical structure.
+
+    Args:
+        thread_id (str): Thread ID for the MemorySaver checkpointer
     """
 
     def supervisor_node(state: Talk2Papers) -> Command[Literal["s2_agent", "__end__"]]:
@@ -35,6 +39,7 @@ def get_app(uniq_id):
         # Create agent with main supervisor prompt
         supervisor_agent = create_react_agent(
             llm,
+            tools=s2_tools,  # Following documentation - supervisor needs tools
             state_schema=Talk2Papers,
             state_modifier=config.MAIN_AGENT_PROMPT,
             checkpointer=MemorySaver(),
@@ -51,6 +56,7 @@ def get_app(uniq_id):
                 "current_agent": "s2_agent",
                 "next": "s2_agent",
                 "messages": result.get("messages", state.get("messages", [])),
+                "is_last_step": False,
             },
         )
 
@@ -69,6 +75,7 @@ def get_app(uniq_id):
                     "messages": result.get("messages", []),
                     "papers": result.get("papers", []),
                     "current_agent": None,
+                    "is_last_step": True,
                 },
             )
         except Exception as e:
@@ -78,6 +85,7 @@ def get_app(uniq_id):
                 update={
                     "messages": [{"role": "assistant", "content": f"Error: {str(e)}"}],
                     "current_agent": None,
+                    "is_last_step": True,
                 },
             )
 
