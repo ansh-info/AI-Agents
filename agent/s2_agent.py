@@ -71,31 +71,23 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    if "tool_calls" not in result or not result["tool_calls"]:
-                        logger.warning("No tool calls in result")
-                        return Command(
-                            goto="__end__",
-                            update={
-                                "messages": state.get("messages", [])
-                                + [AIMessage(content="No tool calls were made.")],
-                                "current_agent": None,
-                                "is_last_step": True,
-                            },
-                        )
+                    tool_call = result.get("tool_calls", [{}])[-1]
+                    tool_call_id = tool_call.get("id", "default_id")
 
-                    # Following the documentation pattern
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": [
+                            "messages": state.get("messages", [])
+                            + [
                                 ToolMessage(
                                     content=result["messages"][-1].content,
-                                    tool_call_id=result["tool_calls"][-1].id,
+                                    tool_call_id=tool_call_id,
                                 )
                             ],
                             "papers": result.get("papers", []),
                             "current_agent": None,
                             "is_last_step": True,
+                            "tool_calls": result.get("tool_calls", []),
                         },
                     )
                 except Exception as e:

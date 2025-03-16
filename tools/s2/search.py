@@ -108,20 +108,21 @@ def search_tool(
     markdown_table = df.to_markdown(tablefmt="grid")
     print("Search tool execution completed")
 
+    # Return with properly formatted tool call
     return Command(
         update={
             "papers": papers,
-            "messages": [
-                ToolMessage(
-                    content=markdown_table,
-                    tool_call_id=tool_call_id,
-                )
-            ],
+            "messages": state.get("messages", [])
+            + [ToolMessage(content=markdown_table, tool_call_id=tool_call_id)],
             "tool_calls": [
                 {
                     "id": tool_call_id,
                     "type": "function",
-                    "function": {"name": "search_tool"},
+                    "name": "search_tool",
+                    "function": {
+                        "name": "search_tool",
+                        "arguments": {"query": query, "limit": limit},
+                    },
                 }
             ],
         }
