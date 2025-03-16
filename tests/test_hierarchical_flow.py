@@ -7,6 +7,7 @@ from typing import Dict, List
 from dotenv import load_dotenv
 
 from agents.main_agent import get_app
+from state.shared_state import Talk2Papers  # Import state class
 
 # Configure logging
 logging.basicConfig(
@@ -40,9 +41,14 @@ def run_test_case(
     logger.info(f"Expected agent: {expected_agent}")
     logger.info(f"Expected tool: {expected_tool}")
 
-    # Prepare input state
-    state = {
+    # Prepare initial state with all required fields
+    initial_state = {
         "messages": [{"role": "user", "content": test_input}],
+        "papers": [],
+        "search_table": "",
+        "next": None,
+        "current_agent": None,
+        "is_last_step": False,  # Initialize is_last_step
     }
 
     try:
@@ -56,7 +62,7 @@ def run_test_case(
         }
 
         # Run through workflow
-        result = app.invoke(state, config=config)
+        result = app.invoke(initial_state, config=config)
 
         # Log results
         logger.info("Test completed")

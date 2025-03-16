@@ -2,7 +2,7 @@ import logging
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
@@ -36,7 +36,6 @@ class SemanticScholarAgent:
             )
 
             # Create internal supervisor with S2 prompt
-            # Following documentation - supervisor also needs tools
             self.supervisor_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,  # Same tools as they might be needed for routing decisions
@@ -67,21 +66,61 @@ class SemanticScholarAgent:
             def tools_executor_node(state: Talk2Papers) -> Command[Literal["__end__"]]:
                 """Execute tools based on request"""
                 logger.info("Tools executor node called")
-                result = self.tools_agent.invoke(state)
+                try:
+                    # Get tool execution result
+                    result = self.tools_agent.invoke(state)
+                    logger.info("Tool execution completed")
 
-                return Command(
-                    goto="__end__",
-                    update={
-                        "messages": [
-                            HumanMessage(
-                                content=result["messages"][-1].content, name="s2_agent"
-                            )
-                        ],
-                        "papers": result.get("papers", []),
-                        "current_agent": None,
-                        "is_last_step": True,
-                    },
-                )
+                    # Get the tool call information
+                    tool_calls = result.get("tool_calls", [])
+                    if tool_calls:
+                        tool_call = tool_calls[-1]
+
+                        # Construct messages array with both tool call and response
+                        messages = state.get("messages", [])
+                        messages.extend(
+                            [
+                                # First add the message containing tool_calls
+                                AIMessage(content="", tool_calls=[tool_call]),
+                                # Then add the tool response
+                                ToolMessage(
+                                    content=result["messages"][-1].content,
+                                    tool_call_id=tool_call["id"],
+                                ),
+                            ]
+                        )
+
+                        return Command(
+                            goto="__end__",
+                            update={
+                                "messages": messages,
+                                "papers": result.get("papers", []),
+                                "current_agent": None,
+                                "is_last_step": True,
+                                "tool_calls": result.get("tool_calls", []),
+                            },
+                        )
+                    else:
+                        return Command(
+                            goto="__end__",
+                            update={
+                                "messages": state.get("messages", [])
+                                + [AIMessage(content="No tool calls were made.")],
+                                "current_agent": None,
+                                "is_last_step": True,
+                            },
+                        )
+                except Exception as e:
+                    logger.error(f"Error in tools executor: {str(e)}")
+                    return Command(
+                        goto="__end__",
+                        update={
+                            "messages": state.get("messages", [])
+                            + [AIMessage(content=f"Error executing tool: {str(e)}")],
+                            "current_agent": None,
+                            "is_last_step": True,
+                        },
+                    )
 
             # Create graph for S2 agent
             workflow = StateGraph(Talk2Papers)
