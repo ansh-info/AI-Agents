@@ -76,12 +76,23 @@ def search_tool(
         if paper.get("title") and paper.get("authors")
     ]
 
-    # Inside search_tool
     if not filtered_papers:
         return Command(
             update={
-                "papers": papers,
-                "messages": [AIMessage(content=markdown_table)],
+                "papers": ["No papers found matching your query."],
+                "messages": [
+                    ToolMessage(
+                        content="No papers found matching your query",
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+                "tool_calls": [
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {"name": "search_tool"},
+                    }
+                ],
             }
         )
 
@@ -101,7 +112,17 @@ def search_tool(
         update={
             "papers": papers,
             "messages": [
-                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
+                ToolMessage(
+                    content=markdown_table,
+                    tool_call_id=tool_call_id,
+                )
+            ],
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {"name": "search_tool"},
+                }
             ],
         }
     )
