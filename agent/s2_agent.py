@@ -71,25 +71,45 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    tool_call = result.get("tool_calls", [{}])[-1]
-                    tool_call_id = tool_call.get("id", "default_id")
+                    # Get the tool call information
+                    tool_calls = result.get("tool_calls", [])
+                    if tool_calls:
+                        tool_call = tool_calls[-1]
 
-                    return Command(
-                        goto="__end__",
-                        update={
-                            "messages": state.get("messages", [])
-                            + [
+                        # Construct messages array with both tool call and response
+                        messages = state.get("messages", [])
+                        messages.extend(
+                            [
+                                # First add the message containing tool_calls
+                                AIMessage(content="", tool_calls=[tool_call]),
+                                # Then add the tool response
                                 ToolMessage(
                                     content=result["messages"][-1].content,
-                                    tool_call_id=tool_call_id,
-                                )
-                            ],
-                            "papers": result.get("papers", []),
-                            "current_agent": None,
-                            "is_last_step": True,
-                            "tool_calls": result.get("tool_calls", []),
-                        },
-                    )
+                                    tool_call_id=tool_call["id"],
+                                ),
+                            ]
+                        )
+
+                        return Command(
+                            goto="__end__",
+                            update={
+                                "messages": messages,
+                                "papers": result.get("papers", []),
+                                "current_agent": None,
+                                "is_last_step": True,
+                                "tool_calls": result.get("tool_calls", []),
+                            },
+                        )
+                    else:
+                        return Command(
+                            goto="__end__",
+                            update={
+                                "messages": state.get("messages", [])
+                                + [AIMessage(content="No tool calls were made.")],
+                                "current_agent": None,
+                                "is_last_step": True,
+                            },
+                        )
                 except Exception as e:
                     logger.error(f"Error in tools executor: {str(e)}")
                     return Command(
