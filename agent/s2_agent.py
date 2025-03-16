@@ -71,20 +71,28 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    # Convert the result to a proper message format
-                    if result and "messages" in result and result["messages"]:
-                        last_message = result["messages"][-1]
-                        # Create an AI message instead of tool message
-                        message = AIMessage(content=last_message.content)
-                        messages = state.get("messages", []) + [message]
-                    else:
-                        messages = state.get("messages", [])
+                    if "tool_calls" not in result or not result["tool_calls"]:
+                        logger.warning("No tool calls in result")
+                        return Command(
+                            goto="__end__",
+                            update={
+                                "messages": state.get("messages", [])
+                                + [AIMessage(content="No tool calls were made.")],
+                                "current_agent": None,
+                                "is_last_step": True,
+                            },
+                        )
 
-                    # Return command with updates
+                    # Following the documentation pattern
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": messages,
+                            "messages": [
+                                ToolMessage(
+                                    content=result["messages"][-1].content,
+                                    tool_call_id=result["tool_calls"][-1].id,
+                                )
+                            ],
                             "papers": result.get("papers", []),
                             "current_agent": None,
                             "is_last_step": True,
