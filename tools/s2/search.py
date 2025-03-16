@@ -80,15 +80,8 @@ def search_tool(
     if not filtered_papers:
         return Command(
             update={
-                "papers": [
-                    "No papers found matching your query."
-                ],  # Informative message
-                "messages": [
-                    ToolMessage(
-                        content="No papers found matching your query",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
+                "papers": papers,
+                "messages": [AIMessage(content=markdown_table)],
             }
         )
 
