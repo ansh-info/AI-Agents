@@ -3,10 +3,9 @@ from typing import Annotated, Any, Dict
 
 import pandas as pd
 import requests
-from langchain_core.messages import ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
-from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from config.config import config
@@ -80,23 +79,7 @@ def search_tool(
         return {
             "papers": ["No papers found matching your query."],
             "messages": [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "id": tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": "search_tool",
-                                "arguments": {"query": query, "limit": limit},
-                            },
-                        }
-                    ],
-                ),
-                ToolMessage(
-                    content="No papers found matching your query",
-                    tool_call_id=tool_call_id,
-                ),
+                {"role": "assistant", "content": "No papers found matching your query"}
             ],
         }
 
@@ -112,19 +95,7 @@ def search_tool(
     markdown_table = df.to_markdown(tablefmt="grid")
     print("Search tool execution completed")
 
-    tool_call = {
-        "id": tool_call_id,
-        "type": "function",
-        "function": {
-            "name": "search_tool",
-            "arguments": {"query": query, "limit": limit},
-        },
-    }
-
     return {
         "papers": papers,
-        "messages": [
-            AIMessage(content="", tool_calls=[tool_call]),
-            ToolMessage(content=markdown_table, tool_call_id=tool_call_id),
-        ],
+        "messages": [{"role": "assistant", "content": markdown_table}],
     }
