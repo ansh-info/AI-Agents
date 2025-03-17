@@ -74,7 +74,7 @@ class SemanticScholarAgent:
                     latest_tool_call = tool_calls[-1]
 
                     # Create messages array with both tool call and response
-                    messages = state.get("messages", [])
+                    messages = state.get("messages", []) + result.get("messages", [])
                     # Add the tool call message
                     messages.append(
                         AIMessage(content="", tool_calls=[latest_tool_call])
