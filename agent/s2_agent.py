@@ -26,39 +26,25 @@ class SemanticScholarAgent:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-            # Create the tools agent with S2 specific prompt
+            # Create single tools agent
             self.tools_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,
                 state_schema=Talk2Papers,
-                state_modifier=config.S2_AGENT_PROMPT,  # Using S2 specific prompt
-                checkpointer=MemorySaver(),
-            )
-
-            # Create internal supervisor with S2 prompt
-            self.supervisor_agent = create_react_agent(
-                self.llm,
-                tools=s2_tools,  # Same tools as they might be needed for routing decisions
-                state_schema=Talk2Papers,
-                state_modifier=config.S2_AGENT_PROMPT,  # Using same S2 prompt for consistency
+                state_modifier=config.S2_AGENT_PROMPT,
                 checkpointer=MemorySaver(),
             )
 
             def s2_supervisor_node(
                 state: Talk2Papers,
             ) -> Command[Literal["tools_executor", "__end__"]]:
-                """Internal supervisor for S2 agent using S2_AGENT_PROMPT"""
+                """Internal supervisor for S2 agent"""
                 logger.info("S2 supervisor node called")
-
-                # Get supervision decision using S2 prompt
-                result = self.supervisor_agent.invoke(state)
-                logger.info(f"S2 supervisor decision: {result}")
-
                 return Command(
                     goto="tools_executor",
                     update={
                         "current_agent": "s2_tools",
-                        "messages": result.get("messages", state.get("messages", [])),
+                        "messages": state.get("messages", []),
                         "is_last_step": False,
                     },
                 )
@@ -71,52 +57,31 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    # Get the tool call information
-                    tool_calls = result.get("tool_calls", [])
-                    if tool_calls:
-                        tool_call = tool_calls[-1]
-
-                        # Construct messages array with both tool call and response
-                        messages = state.get("messages", [])
-                        messages.extend(
-                            [
-                                # First add the message containing tool_calls
-                                AIMessage(content="", tool_calls=[tool_call]),
-                                # Then add the tool response
-                                ToolMessage(
+                    # Following documentation pattern exactly
+                    return Command(
+                        goto="__end__",
+                        update={
+                            "messages": [
+                                HumanMessage(
                                     content=result["messages"][-1].content,
-                                    tool_call_id=tool_call["id"],
-                                ),
-                            ]
-                        )
-
-                        return Command(
-                            goto="__end__",
-                            update={
-                                "messages": messages,
-                                "papers": result.get("papers", []),
-                                "current_agent": None,
-                                "is_last_step": True,
-                                "tool_calls": result.get("tool_calls", []),
-                            },
-                        )
-                    else:
-                        return Command(
-                            goto="__end__",
-                            update={
-                                "messages": state.get("messages", [])
-                                + [AIMessage(content="No tool calls were made.")],
-                                "current_agent": None,
-                                "is_last_step": True,
-                            },
-                        )
+                                    name="s2_agent",
+                                )
+                            ],
+                            "papers": result.get("papers", []),
+                            "current_agent": None,
+                            "is_last_step": True,
+                        },
+                    )
                 except Exception as e:
                     logger.error(f"Error in tools executor: {str(e)}")
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": state.get("messages", [])
-                            + [AIMessage(content=f"Error executing tool: {str(e)}")],
+                            "messages": [
+                                HumanMessage(
+                                    content=f"Error: {str(e)}", name="s2_agent"
+                                )
+                            ],
                             "current_agent": None,
                             "is_last_step": True,
                         },

@@ -3,10 +3,9 @@ from typing import Annotated, Any, Dict
 
 import pandas as pd
 import requests
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
-from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from config.config import config
@@ -77,24 +76,12 @@ def search_tool(
     ]
 
     if not filtered_papers:
-        return Command(
-            update={
-                "papers": ["No papers found matching your query."],
-                "messages": [
-                    ToolMessage(
-                        content="No papers found matching your query",
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-                "tool_calls": [
-                    {
-                        "id": tool_call_id,
-                        "type": "function",
-                        "function": {"name": "search_tool"},
-                    }
-                ],
-            }
-        )
+        return {
+            "papers": ["No papers found matching your query."],
+            "messages": [
+                {"role": "assistant", "content": "No papers found matching your query"}
+            ],
+        }
 
     df = pd.DataFrame(filtered_papers)
     print("Created DataFrame with results")
@@ -108,22 +95,7 @@ def search_tool(
     markdown_table = df.to_markdown(tablefmt="grid")
     print("Search tool execution completed")
 
-    # Return with properly formatted tool call
-    return Command(
-        update={
-            "papers": papers,
-            "messages": state.get("messages", [])
-            + [ToolMessage(content=markdown_table, tool_call_id=tool_call_id)],
-            "tool_calls": [
-                {
-                    "id": tool_call_id,
-                    "type": "function",
-                    "name": "search_tool",
-                    "function": {
-                        "name": "search_tool",
-                        "arguments": {"query": query, "limit": limit},
-                    },
-                }
-            ],
-        }
-    )
+    return {
+        "papers": papers,
+        "messages": [{"role": "assistant", "content": markdown_table}],
+    }
