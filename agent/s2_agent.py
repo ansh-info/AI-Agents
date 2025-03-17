@@ -57,35 +57,16 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    # Get tool calls
-                    tool_calls = result.get("tool_calls", [])
-                    if not tool_calls:
-                        return Command(
-                            goto="__end__",
-                            update={
-                                "messages": state.get("messages", [])
-                                + [AIMessage(content="No tool calls were made.")],
-                                "current_agent": None,
-                                "is_last_step": True,
-                            },
-                        )
-
-                    # Get last tool call
-                    latest_tool_call = tool_calls[-1]
-
-                    # Create messages array with both tool call and response
-                    messages = state.get("messages", []) + result.get("messages", [])
-                    # Add the tool call message
-                    messages.append(
-                        AIMessage(content="", tool_calls=[latest_tool_call])
-                    )
-                    # Add the tool response
-                    messages.append(AIMessage(content=result["messages"][-1].content))
-
+                    # Following documentation pattern exactly
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": messages,
+                            "messages": [
+                                HumanMessage(
+                                    content=result["messages"][-1].content,
+                                    name="s2_agent",
+                                )
+                            ],
                             "papers": result.get("papers", []),
                             "current_agent": None,
                             "is_last_step": True,
@@ -96,8 +77,11 @@ class SemanticScholarAgent:
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": state.get("messages", [])
-                            + [AIMessage(content=f"Error executing tool: {str(e)}")],
+                            "messages": [
+                                HumanMessage(
+                                    content=f"Error: {str(e)}", name="s2_agent"
+                                )
+                            ],
                             "current_agent": None,
                             "is_last_step": True,
                         },
