@@ -3,9 +3,10 @@ This is the state file for the Talk2Papers agent.
 """
 
 import logging
-from typing import Annotated, List, Optional, NotRequired, TypedDict
-
+from typing import Annotated, List, NotRequired, Optional
 from typing_extensions import Required
+
+from langgraph.graph import MessagesState
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,14 +19,13 @@ def replace_list(existing: List[str], new: List[str]) -> List[str]:
     return new
 
 
-class Talk2Papers(TypedDict, total=False):
+class Talk2Papers(MessagesState):
     """The state for the Talk2Papers agent."""
 
     papers: Annotated[list, replace_list]
     search_table: NotRequired[str]
-    next: NotRequired[Optional[str]]
+    next: str  # Following LangGraph docs - required for routing
     current_agent: NotRequired[Optional[str]]
-    messages: Required[List[dict]]
     is_last_step: Required[bool]  # Required field for LangGraph
 
     def log_state_update(self) -> None:

@@ -2,7 +2,7 @@ import logging
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
@@ -26,7 +26,7 @@ class SemanticScholarAgent:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-            # Create single tools agent
+            # Create single react agent for tools
             self.tools_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,
@@ -57,16 +57,41 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    # Following documentation pattern exactly
+                    # Get the tool calls from the result
+                    messages = result.get("messages", [])
+                    tool_calls = result.get("tool_calls", [])
+
+                    if not tool_calls:
+                        return Command(
+                            goto="__end__",
+                            update={
+                                "messages": [
+                                    AIMessage(content="No tool calls executed")
+                                ],
+                                "current_agent": None,
+                                "is_last_step": True,
+                            },
+                        )
+
+                    # Get the last tool call and message
+                    latest_tool_call = tool_calls[-1]
+                    latest_message = messages[-1]
+
+                    # Create the response messages
+                    response_messages = [
+                        # Tool call message
+                        AIMessage(content="", tool_calls=[latest_tool_call]),
+                        # Tool response
+                        ToolMessage(
+                            content=latest_message.content,
+                            tool_call_id=latest_tool_call["id"],
+                        ),
+                    ]
+
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": [
-                                HumanMessage(
-                                    content=result["messages"][-1].content,
-                                    name="s2_agent",
-                                )
-                            ],
+                            "messages": state.get("messages", []) + response_messages,
                             "papers": result.get("papers", []),
                             "current_agent": None,
                             "is_last_step": True,
@@ -77,11 +102,7 @@ class SemanticScholarAgent:
                     return Command(
                         goto="__end__",
                         update={
-                            "messages": [
-                                HumanMessage(
-                                    content=f"Error: {str(e)}", name="s2_agent"
-                                )
-                            ],
+                            "messages": [AIMessage(content=f"Error: {str(e)}")],
                             "current_agent": None,
                             "is_last_step": True,
                         },
