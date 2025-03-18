@@ -3,7 +3,7 @@ from typing import Annotated, Any, Dict
 
 import pandas as pd
 import requests
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
 from pydantic import BaseModel, Field
@@ -78,8 +78,16 @@ def search_tool(
     if not filtered_papers:
         return {
             "papers": ["No papers found matching your query."],
-            "messages": [
-                {"role": "assistant", "content": "No papers found matching your query"}
+            "messages": [AIMessage(content="No papers found matching your query")],
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "search_tool",
+                        "arguments": {"query": query, "limit": limit},
+                    },
+                }
             ],
         }
 
@@ -97,5 +105,15 @@ def search_tool(
 
     return {
         "papers": papers,
-        "messages": [{"role": "assistant", "content": markdown_table}],
+        "messages": [AIMessage(content=markdown_table)],
+        "tool_calls": [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": "search_tool",
+                    "arguments": {"query": query, "limit": limit},
+                },
+            }
+        ],
     }
