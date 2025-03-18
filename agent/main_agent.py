@@ -4,7 +4,7 @@ from typing import Literal
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, StateGraph
+from langgraph.graph import START, END, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
@@ -50,41 +50,41 @@ def get_app(thread_id: str):
         logger.info(f"Supervisor decision: {result}")
 
         # For now, we only have s2_agent
+        goto = "s2_agent"
         return Command(
-            goto="s2_agent",
+            goto=goto,
             update={
-                "current_agent": "s2_agent",
-                "next": "s2_agent",
+                "next": goto,
                 "messages": result.get("messages", state.get("messages", [])),
                 "is_last_step": False,
             },
         )
 
-    def s2_agent_node(state: Talk2Papers) -> Command[Literal["supervisor", "__end__"]]:
+    def call_s2_agent(state: Talk2Papers) -> Command[Literal["supervisor", "__end__"]]:
         """Node for calling the S2 agent"""
         logger.info("Calling S2 agent")
         try:
             # Call the S2 agent
-            result = s2_agent.invoke(state)
+            response = s2_agent.invoke(state)
             logger.info("S2 agent completed")
 
-            # Return to supervisor if more work needed, otherwise end
+            # Following documentation pattern
             return Command(
-                goto="__end__",
+                goto=END,
                 update={
-                    "messages": result.get("messages", []),
-                    "papers": result.get("papers", []),
-                    "current_agent": None,
+                    "next": END,
+                    "messages": response.get("messages", []),
+                    "papers": response.get("papers", []),
                     "is_last_step": True,
                 },
             )
         except Exception as e:
             logger.error(f"Error in S2 agent node: {str(e)}")
             return Command(
-                goto="__end__",
+                goto=END,
                 update={
+                    "next": END,
                     "messages": [{"role": "assistant", "content": f"Error: {str(e)}"}],
-                    "current_agent": None,
                     "is_last_step": True,
                 },
             )
@@ -97,7 +97,7 @@ def get_app(thread_id: str):
 
     # Add nodes
     workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("s2_agent", s2_agent_node)
+    workflow.add_node("s2_agent", call_s2_agent)
 
     # Add edges
     workflow.add_edge(START, "supervisor")
