@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 import logging
+import os
 import sys
 import uuid
-from typing import Dict, List
+from typing import Dict
 
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
 
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 from agents.main_agent import get_app
-from state.shared_state import Talk2Papers  # Import state class
 
 # Configure logging
 logging.basicConfig(
@@ -36,19 +39,19 @@ def run_test_case(
     Returns:
         Dict: The result from the workflow
     """
-    logger.info(f"\n{'='*50}")
+    logger.info(f"\n{'=' * 50}")
     logger.info(f"Testing input: {test_input}")
     logger.info(f"Expected agent: {expected_agent}")
     logger.info(f"Expected tool: {expected_tool}")
 
     # Prepare initial state with all required fields
     initial_state = {
-        "messages": [{"role": "user", "content": test_input}],
+        "messages": [HumanMessage(content=test_input)],
         "papers": [],
         "search_table": "",
         "next": None,
         "current_agent": None,
-        "is_last_step": False,  # Initialize is_last_step
+        "is_last_step": False,
     }
 
     try:
@@ -68,6 +71,23 @@ def run_test_case(
         logger.info("Test completed")
         logger.info(f"Result: {result}")
 
+        # Validate routing
+        if result.get("current_agent") == expected_agent:
+            logger.info(f"✓ Correctly routed to {expected_agent}")
+        else:
+            logger.info(
+                f"✗ Expected {expected_agent}, but got {result.get('current_agent')}"
+            )
+
+        # Validate response content
+        messages = result.get("messages", [])
+        if messages:
+            last_message = messages[-1]
+            if expected_tool.lower() in str(last_message).lower():
+                logger.info(f"✓ Used expected tool: {expected_tool}")
+            else:
+                logger.info(f"✗ Expected tool {expected_tool} not found in response")
+
         # Basic validation
         if result.get("messages"):
             logger.info("✓ Messages present in result")
@@ -81,6 +101,36 @@ def run_test_case(
         return {"error": str(e)}
 
 
+def validate_test_result(result: Dict, test_case: Dict) -> bool:
+    """
+    Validate test results against expectations.
+
+    Args:
+        result: The test result
+        test_case: The original test case with expectations
+
+    Returns:
+        bool: Whether the test passed
+    """
+    if result.get("error"):
+        return False
+
+    # Check if we got any response
+    if not result.get("messages"):
+        return False
+
+    # Validate agent routing
+    if result.get("current_agent") != test_case["expected_agent"]:
+        return False
+
+    # Validate tool usage (basic check in message content)
+    last_message = result["messages"][-1]
+    if test_case["expected_tool"].lower() not in str(last_message).lower():
+        return False
+
+    return True
+
+
 def run_all_tests():
     """Run all test cases"""
     logger.info("Starting hierarchical agent tests")
@@ -91,7 +141,7 @@ def run_all_tests():
     # Initialize app
     app = get_app(thread_id)
 
-    # Test cases
+    # Test cases - only for s2_agent as it's currently implemented
     test_cases = [
         {
             "input": "Find me papers on machine learning",
@@ -111,7 +161,8 @@ def run_all_tests():
     ]
 
     results = []
-    for test_case in test_cases:
+    for i, test_case in enumerate(test_cases, 1):
+        logger.info(f"\nRunning test case {i}")
         result = run_test_case(
             app,
             test_case["input"],
@@ -119,14 +170,23 @@ def run_all_tests():
             test_case["expected_tool"],
             thread_id,
         )
-        results.append(result)
+        test_passed = validate_test_result(result, test_case)
+        results.append({"case": test_case, "result": result, "passed": test_passed})
 
+    # Print summary
     logger.info("\nTest Summary:")
-    for i, result in enumerate(results):
-        status = (
-            "✓ Passed" if not result.get("error") else f"✗ Failed: {result['error']}"
-        )
-        logger.info(f"Test {i+1}: {status}")
+    total_passed = sum(1 for r in results if r["passed"])
+    logger.info(f"Total Tests: {len(results)}")
+    logger.info(f"Passed: {total_passed}")
+    logger.info(f"Failed: {len(results) - total_passed}")
+
+    for i, result in enumerate(results, 1):
+        status = "✓ Passed" if result["passed"] else "✗ Failed"
+        logger.info(f"Test {i}: {status}")
+        if not result["passed"]:
+            logger.info(f"  Input: {result['case']['input']}")
+            if result["result"].get("error"):
+                logger.info(f"  Error: {result['result']['error']}")
 
 
 if __name__ == "__main__":
