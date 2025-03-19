@@ -2,7 +2,7 @@ import logging
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
@@ -26,12 +26,15 @@ class SemanticScholarAgent:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
+            # Get system prompt from config
+            system_prompt = config.S2_AGENT_PROMPT
+
             # Create single react agent for tools
             self.tools_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,
                 state_schema=Talk2Papers,
-                state_modifier=config.S2_AGENT_PROMPT,
+                state_modifier=system_prompt,
                 checkpointer=MemorySaver(),
             )
 
@@ -40,6 +43,12 @@ class SemanticScholarAgent:
             ) -> Command[Literal["tools_executor", "__end__"]]:
                 """Internal supervisor for S2 agent"""
                 logger.info("S2 supervisor node called")
+
+                # Use config prompt for routing
+                messages = [{"role": "system", "content": system_prompt}] + state[
+                    "messages"
+                ]
+
                 return Command(
                     goto="tools_executor",
                     update={
@@ -49,7 +58,9 @@ class SemanticScholarAgent:
                     },
                 )
 
-            def tools_executor_node(state: Talk2Papers) -> Command[Literal["__end__"]]:
+            def tools_executor_node(
+                state: Talk2Papers,
+            ) -> Command[Literal["supervisor"]]:
                 """Execute tools based on request"""
                 logger.info("Tools executor node called")
                 try:
@@ -57,54 +68,32 @@ class SemanticScholarAgent:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
-                    # Get the tool calls from the result
-                    messages = result.get("messages", [])
-                    tool_calls = result.get("tool_calls", [])
-
-                    if not tool_calls:
-                        return Command(
-                            goto="__end__",
-                            update={
-                                "messages": [
-                                    AIMessage(content="No tool calls executed")
-                                ],
-                                "current_agent": None,
-                                "is_last_step": True,
-                            },
-                        )
-
-                    # Get the last tool call and message
-                    latest_tool_call = tool_calls[-1]
-                    latest_message = messages[-1]
-
-                    # Create the response messages
-                    response_messages = [
-                        # Tool call message
-                        AIMessage(content="", tool_calls=[latest_tool_call]),
-                        # Tool response
-                        ToolMessage(
-                            content=latest_message.content,
-                            tool_call_id=latest_tool_call["id"],
-                        ),
-                    ]
-
                     return Command(
-                        goto="__end__",
+                        goto="supervisor",
                         update={
-                            "messages": state.get("messages", []) + response_messages,
+                            "messages": [
+                                HumanMessage(
+                                    content=result["messages"][-1].content,
+                                    name="s2_tools",
+                                )
+                            ],
                             "papers": result.get("papers", []),
                             "current_agent": None,
-                            "is_last_step": True,
+                            "is_last_step": False,
                         },
                     )
                 except Exception as e:
                     logger.error(f"Error in tools executor: {str(e)}")
                     return Command(
-                        goto="__end__",
+                        goto="supervisor",
                         update={
-                            "messages": [AIMessage(content=f"Error: {str(e)}")],
+                            "messages": [
+                                HumanMessage(
+                                    content=f"Error: {str(e)}", name="s2_tools"
+                                )
+                            ],
                             "current_agent": None,
-                            "is_last_step": True,
+                            "is_last_step": False,
                         },
                     )
 
@@ -115,8 +104,9 @@ class SemanticScholarAgent:
             workflow.add_node("supervisor", s2_supervisor_node)
             workflow.add_node("tools_executor", tools_executor_node)
 
-            # Add edges
+            # Add edges following LangGraph patterns
             workflow.add_edge(START, "supervisor")
+            workflow.add_edge("tools_executor", "supervisor")
 
             # Compile with memory persistence
             self.graph = workflow.compile(checkpointer=MemorySaver())
@@ -133,7 +123,13 @@ class SemanticScholarAgent:
             return self.graph.invoke(state)
         except Exception as e:
             logger.error(f"Error in S2 agent: {str(e)}")
-            return {"error": str(e), "response": f"Error in S2 agent: {str(e)}"}
+            return {
+                "messages": [
+                    HumanMessage(
+                        content=f"Error in S2 agent: {str(e)}", name="s2_agent"
+                    )
+                ]
+            }
 
 
 # Create a global instance
