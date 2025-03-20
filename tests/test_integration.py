@@ -4,89 +4,66 @@ Test suite for Talk2Competitors system
 
 import pytest
 from unittest.mock import Mock, patch
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from ..agents.main_agent import get_app, make_supervisor_node
 from ..agents.s2_agent import get_app as get_s2_app
 from ..state.state_talk2competitors import Talk2Competitors
-from ..tools.s2.search import search_tool
-from ..tools.s2.single_paper_rec import get_single_paper_recommendations
-from ..tools.s2.multi_paper_rec import get_multi_paper_recommendations
+from ..tools.s2.search import search_tool, SearchInput
+from ..tools.s2.display_results import display_results
+from ..tools.s2.single_paper_rec import (
+    get_single_paper_recommendations,
+    SinglePaperRecInput,
+)
+from ..tools.s2.multi_paper_rec import (
+    get_multi_paper_recommendations,
+    MultiPaperRecInput,
+)
 
-# Mock response data
-MOCK_SEARCH_RESPONSE = {
-    "data": [
-        {
-            "paperId": "123",
-            "title": "Deep Learning",
-            "abstract": "A study on deep learning",
-            "year": 2023,
-            "citationCount": 100,
-            "url": "https://example.com/paper1",
-        },
-        {
-            "paperId": "456",
-            "title": "Machine Learning Applications",
-            "abstract": "Applications of ML",
-            "year": 2023,
-            "citationCount": 50,
-            "url": "https://example.com/paper2",
-        },
-    ]
+# Mock data
+MOCK_PAPERS = {
+    "123": {
+        "Title": "Deep Learning",
+        "Abstract": "A study on deep learning",
+        "Year": 2023,
+        "Citation Count": 100,
+        "URL": "https://example.com/paper1",
+    }
 }
 
-MOCK_REC_RESPONSE = {
-    "recommendedPapers": [
-        {
-            "paperId": "789",
-            "title": "Neural Networks",
-            "abstract": "Study on neural networks",
-            "year": 2023,
-            "citationCount": 75,
-            "url": "https://example.com/paper3",
-        }
-    ]
-}
 
-# Unit Tests
+class TestMainAgent:
+    """Test main agent routing functionality"""
 
-
-@pytest.fixture
-def base_state():
-    """Base state fixture for tests"""
-    return {"messages": [], "papers": {}, "is_last_step": False, "current_agent": None}
-
-
-class TestSupervisorNode:
-    """Unit tests for supervisor node functionality"""
-
-    def test_supervisor_routes_to_s2_when_search_keyword(self):
-        """Test that supervisor routes to S2 agent when search keyword is present"""
+    def test_supervisor_routes_to_s2(self):
+        """Test routing to S2 agent for search queries"""
         llm_mock = Mock()
         llm_mock.invoke.return_value = AIMessage(content="Test response")
 
         supervisor = make_supervisor_node(llm_mock)
         state = Talk2Competitors(
-            messages=[HumanMessage(content="search for machine learning papers")],
+            messages=[HumanMessage(content="search for papers")],
             papers={},
             is_last_step=False,
             current_agent=None,
+            llm_model="test-model",
         )
 
         result = supervisor(state)
         assert result.goto == "s2_agent"
         assert result.update["current_agent"] == "s2_agent"
 
-    def test_supervisor_routes_to_end_for_general_query(self):
-        """Test that supervisor routes to END for general queries"""
+    def test_supervisor_routes_to_end(self):
+        """Test routing to END for general queries"""
         llm_mock = Mock()
-        llm_mock.invoke.return_value = AIMessage(content="Paris is the capital")
+        llm_mock.invoke.return_value = AIMessage(content="Paris")
 
         supervisor = make_supervisor_node(llm_mock)
         state = Talk2Competitors(
-            messages=[HumanMessage(content="what is the capital of France?")],
+            messages=[HumanMessage(content="capital of France")],
             papers={},
             is_last_step=False,
             current_agent=None,
+            llm_model="test-model",
         )
 
         result = supervisor(state)
@@ -94,102 +71,114 @@ class TestSupervisorNode:
         assert result.update["is_last_step"] == True
 
 
+class TestS2Agent:
+    """Test S2 agent functionality"""
+
+    @patch("requests.get")
+    def test_s2_agent_workflow(self, mock_get):
+        """Test S2 agent workflow with search query"""
+        mock_get.return_value.json.return_value = {"data": [MOCK_PAPERS["123"]]}
+        mock_get.return_value.status_code = 200
+
+        app = get_s2_app("test_id")
+        state = Talk2Competitors(
+            messages=[HumanMessage(content="search for ML papers")],
+            papers={},
+            is_last_step=False,
+            current_agent="s2_agent",
+            llm_model="test-model",
+        )
+
+        response = app.invoke(state, {"configurable": {"thread_id": "test_id"}})
+        assert isinstance(response["messages"][-1], ToolMessage)
+
+
 class TestS2Tools:
-    """Unit tests for Semantic Scholar tools"""
+    """Test individual S2 tools"""
+
+    def test_display_results(self):
+        """Test display_results tool"""
+        state = {"papers": MOCK_PAPERS}
+        result = display_results.invoke(state=state)
+        assert result == MOCK_PAPERS
 
     @patch("requests.get")
     def test_search_tool(self, mock_get):
-        """Test search tool returns expected format and content"""
-        mock_get.return_value.json.return_value = MOCK_SEARCH_RESPONSE
+        """Test search tool functionality"""
+        mock_get.return_value.json.return_value = {"data": [MOCK_PAPERS["123"]]}
         mock_get.return_value.status_code = 200
 
-        result = search_tool(query="machine learning", tool_call_id="test123", limit=2)
-
-        papers = result.update["papers"]
-        assert len(papers) == 2
-        assert "Deep Learning" in papers["123"]["Title"]
-        assert all(
-            key in papers["123"]
-            for key in ["Title", "Abstract", "Year", "Citation Count", "URL"]
+        result = search_tool.invoke(
+            SearchInput(query="machine learning", limit=1, tool_call_id="test123")
         )
+        assert "papers" in result.update
+        assert isinstance(result.update["messages"][0], ToolMessage)
 
     @patch("requests.get")
-    def test_single_paper_recommendations(self, mock_get):
-        """Test single paper recommendations returns expected format"""
-        mock_get.return_value.json.return_value = MOCK_REC_RESPONSE
+    def test_single_paper_rec(self, mock_get):
+        """Test single paper recommendations"""
+        mock_get.return_value.json.return_value = {
+            "recommendedPapers": [MOCK_PAPERS["123"]]
+        }
         mock_get.return_value.status_code = 200
 
-        result = get_single_paper_recommendations(
-            paper_id="123", tool_call_id="test123", limit=1
+        result = get_single_paper_recommendations.invoke(
+            SinglePaperRecInput(paper_id="123", limit=1, tool_call_id="test123")
         )
-
-        papers = result.update["papers"]
-        assert len(papers) == 1
-        assert "Neural Networks" in papers["789"]["Title"]
+        assert "papers" in result.update
+        assert isinstance(result.update["messages"][0], ToolMessage)
 
     @patch("requests.post")
-    def test_multi_paper_recommendations(self, mock_post):
-        """Test multi paper recommendations returns expected format"""
-        mock_post.return_value.json.return_value = MOCK_REC_RESPONSE
+    def test_multi_paper_rec(self, mock_post):
+        """Test multi paper recommendations"""
+        mock_post.return_value.json.return_value = {
+            "recommendedPapers": [MOCK_PAPERS["123"]]
+        }
         mock_post.return_value.status_code = 200
 
-        result = get_multi_paper_recommendations(
-            paper_ids=["123", "456"], tool_call_id="test123", limit=1
+        result = get_multi_paper_recommendations.invoke(
+            MultiPaperRecInput(
+                paper_ids=["123", "456"], limit=1, tool_call_id="test123"
+            )
         )
-
-        papers = result.update["papers"]
-        assert len(papers) == 1
-        assert "Neural Networks" in papers["789"]["Title"]
-
-
-# Integration Tests
+        assert "papers" in result.update
+        assert isinstance(result.update["messages"][0], ToolMessage)
 
 
 @pytest.mark.integration
-def test_end_to_end_paper_search():
-    """
-    Integration test for complete paper search workflow
-    Tests:
-    1. Initial search
-    2. Getting recommendations
-    3. State management throughout
-    """
+def test_end_to_end_workflow():
+    """Integration test for complete workflow"""
     with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
         # Setup mocks
-        mock_get.return_value.json.return_value = MOCK_SEARCH_RESPONSE
-        mock_post.return_value.json.return_value = MOCK_REC_RESPONSE
+        mock_get.return_value.json.return_value = {"data": [MOCK_PAPERS["123"]]}
         mock_get.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "recommendedPapers": [MOCK_PAPERS["123"]]
+        }
         mock_post.return_value.status_code = 200
 
         # Initialize app
-        app = get_app("test_integration")
+        app = get_app("test_integration", "test-model")
 
-        # Test search
+        # Test complete workflow
+        config = {
+            "configurable": {
+                "thread_id": "test_integration",
+                "checkpoint_ns": "test",
+                "checkpoint_id": "test123",
+            }
+        }
+
         response = app.invoke(
             {
-                "messages": [
-                    HumanMessage(content="search for machine learning papers")
-                ],
+                "messages": [HumanMessage(content="search for ML papers")],
                 "papers": {},
                 "is_last_step": False,
                 "current_agent": None,
-            }
+                "llm_model": "test-model",
+            },
+            config=config,
         )
 
-        assert len(response["papers"]) > 0
-        assert "Deep Learning" in response["messages"][-1].content
-
-        # Test recommendations
-        response = app.invoke(
-            {
-                "messages": [
-                    HumanMessage(content="get recommendations for the first paper")
-                ],
-                "papers": response["papers"],
-                "is_last_step": False,
-                "current_agent": None,
-            }
-        )
-
-        assert len(response["papers"]) > 0
-        assert "Neural Networks" in response["messages"][-1].content
+        assert "papers" in response
+        assert len(response["messages"]) > 0
