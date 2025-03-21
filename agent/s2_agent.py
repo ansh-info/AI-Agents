@@ -13,7 +13,6 @@ from config.config import config
 from state.shared_state import Talk2Papers
 from tools.s2 import s2_tools
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -25,8 +24,6 @@ class SemanticScholarAgent:
         try:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
-            # Get system prompt from config
             system_prompt = config.S2_AGENT_PROMPT
 
             # Create single react agent for tools
@@ -35,7 +32,6 @@ class SemanticScholarAgent:
                 tools=s2_tools,
                 state_schema=Talk2Papers,
                 state_modifier=system_prompt,
-                checkpointer=MemorySaver(),
             )
 
             def s2_supervisor_node(
@@ -43,20 +39,7 @@ class SemanticScholarAgent:
             ) -> Command[Literal["tools_executor", "__end__"]]:
                 """Internal supervisor for S2 agent"""
                 logger.info("S2 supervisor node called")
-
-                # Use config prompt for routing
-                messages = [{"role": "system", "content": system_prompt}] + state[
-                    "messages"
-                ]
-
-                return Command(
-                    goto="tools_executor",
-                    update={
-                        "current_agent": "s2_tools",
-                        "messages": state.get("messages", []),
-                        "is_last_step": False,
-                    },
-                )
+                return Command(goto="tools_executor", update=state)
 
             def tools_executor_node(
                 state: Talk2Papers,
@@ -64,7 +47,6 @@ class SemanticScholarAgent:
                 """Execute tools based on request"""
                 logger.info("Tools executor node called")
                 try:
-                    # Get tool execution result
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
@@ -72,44 +54,26 @@ class SemanticScholarAgent:
                         goto="supervisor",
                         update={
                             "messages": [
-                                HumanMessage(
-                                    content=result["messages"][-1].content,
-                                    name="s2_tools",
-                                )
+                                HumanMessage(content=result["messages"][-1].content)
                             ],
                             "papers": result.get("papers", []),
-                            "current_agent": None,
-                            "is_last_step": False,
                         },
                     )
                 except Exception as e:
                     logger.error(f"Error in tools executor: {str(e)}")
                     return Command(
                         goto="supervisor",
-                        update={
-                            "messages": [
-                                HumanMessage(
-                                    content=f"Error: {str(e)}", name="s2_tools"
-                                )
-                            ],
-                            "current_agent": None,
-                            "is_last_step": False,
-                        },
+                        update={"messages": [HumanMessage(content=f"Error: {str(e)}")]},
                     )
 
-            # Create graph for S2 agent
+            # Create graph
             workflow = StateGraph(Talk2Papers)
-
-            # Add nodes
             workflow.add_node("supervisor", s2_supervisor_node)
             workflow.add_node("tools_executor", tools_executor_node)
-
-            # Add edges following LangGraph patterns
             workflow.add_edge(START, "supervisor")
             workflow.add_edge("tools_executor", "supervisor")
 
-            # Compile with memory persistence
-            self.graph = workflow.compile(checkpointer=MemorySaver())
+            self.graph = workflow.compile()
 
             logger.info("S2 Agent initialized successfully")
 
@@ -123,14 +87,7 @@ class SemanticScholarAgent:
             return self.graph.invoke(state)
         except Exception as e:
             logger.error(f"Error in S2 agent: {str(e)}")
-            return {
-                "messages": [
-                    HumanMessage(
-                        content=f"Error in S2 agent: {str(e)}", name="s2_agent"
-                    )
-                ]
-            }
+            return {"messages": [HumanMessage(content=f"Error: {str(e)}")]}
 
 
-# Create a global instance
 s2_agent = SemanticScholarAgent()
