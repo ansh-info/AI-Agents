@@ -2,10 +2,10 @@ import logging
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, StateGraph
+from langgraph.graph import START, END, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
@@ -24,57 +24,46 @@ class SemanticScholarAgent:
         try:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-            system_prompt = config.S2_AGENT_PROMPT
 
-            # Create single react agent for tools
+            # Create the tools agent using config prompt
             self.tools_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,
                 state_schema=Talk2Papers,
-                state_modifier=system_prompt,
+                state_modifier=config.S2_AGENT_PROMPT,
             )
 
-            def s2_supervisor_node(
-                state: Talk2Papers,
-            ) -> Command[Literal["tools_executor", "__end__"]]:
-                """Internal supervisor for S2 agent"""
-                logger.info("S2 supervisor node called")
-                return Command(goto="tools_executor", update=state)
-
-            def tools_executor_node(
-                state: Talk2Papers,
-            ) -> Command[Literal["supervisor"]]:
-                """Execute tools based on request"""
-                logger.info("Tools executor node called")
+            def execute_tools(state: Talk2Papers) -> Command[Literal["__end__"]]:
+                """Execute tools and return results"""
+                logger.info("Executing tools")
                 try:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
 
                     return Command(
-                        goto="supervisor",
+                        goto=END,
                         update={
-                            "messages": [
-                                HumanMessage(content=result["messages"][-1].content)
-                            ],
+                            "messages": result["messages"],
                             "papers": result.get("papers", []),
+                            "is_last_step": True,
                         },
                     )
                 except Exception as e:
-                    logger.error(f"Error in tools executor: {str(e)}")
+                    logger.error(f"Error executing tools: {str(e)}")
                     return Command(
-                        goto="supervisor",
-                        update={"messages": [HumanMessage(content=f"Error: {str(e)}")]},
+                        goto=END,
+                        update={
+                            "messages": [AIMessage(content=f"Error: {str(e)}")],
+                            "is_last_step": True,
+                        },
                     )
 
             # Create graph
             workflow = StateGraph(Talk2Papers)
-            workflow.add_node("supervisor", s2_supervisor_node)
-            workflow.add_node("tools_executor", tools_executor_node)
-            workflow.add_edge(START, "supervisor")
-            workflow.add_edge("tools_executor", "supervisor")
+            workflow.add_node("tools", execute_tools)
+            workflow.add_edge(START, "tools")
 
             self.graph = workflow.compile()
-
             logger.info("S2 Agent initialized successfully")
 
         except Exception as e:
@@ -87,7 +76,8 @@ class SemanticScholarAgent:
             return self.graph.invoke(state)
         except Exception as e:
             logger.error(f"Error in S2 agent: {str(e)}")
-            return {"messages": [HumanMessage(content=f"Error: {str(e)}")]}
+            return {"messages": [AIMessage(content=f"Error: {str(e)}")], "papers": []}
 
 
+# Create a global instance
 s2_agent = SemanticScholarAgent()

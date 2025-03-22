@@ -23,6 +23,21 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
+def check_tool_usage(messages, expected_tool: str) -> bool:
+    """Helper function to check tool usage in messages."""
+    for message in messages:
+        if hasattr(message, "additional_kwargs") and message.additional_kwargs.get(
+            "tool_calls"
+        ):
+            for tool_call in message.additional_kwargs["tool_calls"]:
+                if (
+                    "function" in tool_call
+                    and tool_call["function"]["name"] == expected_tool
+                ):
+                    return True
+    return False
+
+
 def run_test_case(
     app, test_input: str, expected_agent: str, expected_tool: str, thread_id: str
 ) -> Dict:
@@ -44,7 +59,6 @@ def run_test_case(
     logger.info(f"Expected agent: {expected_agent}")
     logger.info(f"Expected tool: {expected_tool}")
 
-    # Prepare initial state with all required fields
     initial_state = {
         "messages": [HumanMessage(content=test_input)],
         "papers": [],
@@ -55,7 +69,6 @@ def run_test_case(
     }
 
     try:
-        # Run through workflow with configuration
         config = {
             "configurable": {
                 "thread_id": thread_id,
@@ -64,10 +77,8 @@ def run_test_case(
             }
         }
 
-        # Run through workflow
         result = app.invoke(initial_state, config=config)
 
-        # Log results
         logger.info("Test completed")
         logger.info(f"Result: {result}")
 
@@ -79,14 +90,12 @@ def run_test_case(
                 f"✗ Expected {expected_agent}, but got {result.get('current_agent')}"
             )
 
-        # Validate response content
+        # Validate tool usage
         messages = result.get("messages", [])
-        if messages:
-            last_message = messages[-1]
-            if expected_tool.lower() in str(last_message).lower():
-                logger.info(f"✓ Used expected tool: {expected_tool}")
-            else:
-                logger.info(f"✗ Expected tool {expected_tool} not found in response")
+        if check_tool_usage(messages, expected_tool):
+            logger.info(f"✓ Used expected tool: {expected_tool}")
+        else:
+            logger.info(f"✗ Expected tool {expected_tool} not found in tool calls")
 
         # Basic validation
         if result.get("messages"):
@@ -123,9 +132,8 @@ def validate_test_result(result: Dict, test_case: Dict) -> bool:
     if result.get("current_agent") != test_case["expected_agent"]:
         return False
 
-    # Validate tool usage (basic check in message content)
-    last_message = result["messages"][-1]
-    if test_case["expected_tool"].lower() not in str(last_message).lower():
+    # Validate tool usage using the helper function
+    if not check_tool_usage(result["messages"], test_case["expected_tool"]):
         return False
 
     return True
@@ -135,13 +143,9 @@ def run_all_tests():
     """Run all test cases"""
     logger.info("Starting hierarchical agent tests")
 
-    # Generate a unique thread ID for this test run
     thread_id = str(uuid.uuid4())
-
-    # Initialize app
     app = get_app(thread_id)
 
-    # Test cases - only for s2_agent as it's currently implemented
     test_cases = [
         {
             "input": "Find me papers on machine learning",
@@ -151,12 +155,12 @@ def run_all_tests():
         {
             "input": "Find papers similar to paper ID: 649def34f8be52c8b66281af98ae884c09aef38b",
             "expected_agent": "s2_agent",
-            "expected_tool": "single_paper_recommendations",
+            "expected_tool": "get_single_paper_recommendations",
         },
         {
             "input": "Find papers related to both papers: 649def34f8be52c8b66281af98ae884c09aef38b and 7d7935bce46753c5e2868d8c268f1e6ff3d45396",
             "expected_agent": "s2_agent",
-            "expected_tool": "multi_paper_recommendations",
+            "expected_tool": "get_multi_paper_recommendations",
         },
     ]
 
