@@ -114,32 +114,33 @@ if prompt:
         print("Agent response:", response)
 
         # Add response to chat history and display
-        if "messages" in response:
-            # Get the last AI message
-            ai_messages = [msg for msg in response["messages"] if msg.type == "ai"]
-            if ai_messages:
-                last_ai_message = ai_messages[-1]
+        if "messages" in response and response["messages"]:
+            last_message = response["messages"][-1]
 
-                # Format paper results if present
-                if "papers" in response and response["papers"]:
-                    papers_content = response["papers"]
-                    formatted_message = "Here are the papers I found:\n\n"
+            # Format paper results if present
+            if "papers" in response and response["papers"]:
+                papers_content = response["papers"]
+                formatted_message = "Here are the papers I found:\n\n"
 
-                    for idx, paper in enumerate(papers_content, start=1):
-                        if isinstance(paper, str):
-                            parts = paper.split("\n")
-                            paper_id = parts[0].replace("Paper ID: ", "").strip()
-                            title = parts[1].replace("Title: ", "").strip()
-                            formatted_message += f"{idx}. **{title}**\n"
-                            formatted_message += f"    - Paper ID: {paper_id}\n\n"
-                else:
-                    # Use the AI message content
-                    formatted_message = last_ai_message.content
-
-                assistant_msg = ChatMessage(formatted_message, role="assistant")
-                st.session_state.messages.append(
-                    {"type": "message", "content": assistant_msg}
+                for idx, paper in enumerate(papers_content, start=1):
+                    if isinstance(paper, str):
+                        parts = paper.split("\n")
+                        paper_id = parts[0].replace("Paper ID: ", "").strip()
+                        title = parts[1].replace("Title: ", "").strip()
+                        formatted_message += f"{idx}. **{title}**\n"
+                        formatted_message += f"    - Paper ID: {paper_id}\n\n"
+            else:
+                # Use the last message content directly if no papers
+                formatted_message = (
+                    last_message.content
+                    if hasattr(last_message, "content")
+                    else str(last_message)
                 )
+
+            assistant_msg = ChatMessage(formatted_message, role="assistant")
+            st.session_state.messages.append(
+                {"type": "message", "content": assistant_msg}
+            )
 
         # Rerun to update display
         st.rerun()
