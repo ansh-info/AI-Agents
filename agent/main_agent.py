@@ -13,7 +13,6 @@ from config.config import config
 from state.shared_state import Talk2Papers
 from agents.s2_agent import s2_agent
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -22,37 +21,38 @@ load_dotenv()
 
 def make_supervisor_node(llm: BaseChatModel) -> str:
     """Creates a supervisor node following LangGraph patterns."""
-    # Define available options
     options = ["FINISH", "s2_agent"]
 
     def supervisor_node(state: Talk2Papers) -> Command[Literal["s2_agent", "__end__"]]:
-        """Supervisor node that routes to appropriate sub-agents"""
+        """A supervisor node that routes between agents"""
         logger.info("Supervisor node called")
 
-        # Create messages list with system prompt from config
         messages = [{"role": "system", "content": config.MAIN_AGENT_PROMPT}] + state[
             "messages"
         ]
-
-        # Get routing decision from LLM
         response = llm.invoke(messages)
-        logger.info(f"LLM routing response: {response.content}")
+        goto = (
+            "FINISH"
+            if not any(
+                kw in response.content.lower() for kw in ["search", "paper", "find"]
+            )
+            else "s2_agent"
+        )
 
-        # Parse decision
-        goto = response.content.strip().lower()
-
-        # Convert FINISH to END
-        if goto == "finish":
+        if goto == "FINISH":
             return Command(
-                goto=END, update={"messages": state["messages"], "is_last_step": True}
+                goto=END,
+                update={
+                    "messages": state["messages"]
+                    + [AIMessage(content=response.content)],
+                    "is_last_step": True,
+                },
             )
 
-        # Route to S2 agent
         return Command(
             goto="s2_agent",
             update={
-                "messages": state["messages"],
-                "current_agent": "s2_agent",
+                "messages": state["messages"] + [AIMessage(content=response.content)],
                 "is_last_step": False,
             },
         )
@@ -60,30 +60,28 @@ def make_supervisor_node(llm: BaseChatModel) -> str:
     return supervisor_node
 
 
-def call_s2_agent(state: Talk2Papers) -> Command[Literal["supervisor"]]:
+def call_s2_agent(state: Talk2Papers) -> Command[Literal["__end__"]]:
     """Node for calling the S2 agent"""
     logger.info("Calling S2 agent")
     try:
-        # Call the S2 agent
         response = s2_agent.invoke(state)
         logger.info("S2 agent completed")
 
-        # Return to supervisor for next decision
         return Command(
-            goto="supervisor",
+            goto=END,
             update={
-                "messages": state["messages"]
-                + [AIMessage(content=response["messages"][-1].content)],
+                "messages": response["messages"],
                 "papers": response.get("papers", []),
-                "current_agent": "s2_agent",
+                "is_last_step": True,
             },
         )
     except Exception as e:
-        logger.error(f"Error in S2 agent node: {str(e)}")
+        logger.error(f"Error in S2 agent: {str(e)}")
         return Command(
-            goto="supervisor",
+            goto=END,
             update={
-                "messages": state["messages"] + [AIMessage(content=f"Error: {str(e)}")]
+                "messages": state["messages"] + [AIMessage(content=f"Error: {str(e)}")],
+                "is_last_step": True,
             },
         )
 
@@ -97,8 +95,9 @@ def get_app(thread_id: str):
     workflow.add_node("supervisor", supervisor)
     workflow.add_node("s2_agent", call_s2_agent)
 
+    # Define edges
     workflow.add_edge(START, "supervisor")
-    workflow.add_edge("s2_agent", "supervisor")
+    workflow.add_edge("s2_agent", END)
 
     app = workflow.compile(checkpointer=MemorySaver())
     logger.info("Main agent workflow compiled")
