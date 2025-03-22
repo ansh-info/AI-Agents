@@ -24,7 +24,7 @@ def make_supervisor_node(llm: BaseChatModel) -> str:
     options = ["FINISH", "s2_agent"]
 
     def supervisor_node(state: Talk2Papers) -> Command[Literal["s2_agent", "__end__"]]:
-        """A supervisor node that routes between agents"""
+        """Supervisor node that routes to appropriate sub-agents"""
         logger.info("Supervisor node called")
 
         messages = [{"role": "system", "content": config.MAIN_AGENT_PROMPT}] + state[
@@ -34,7 +34,8 @@ def make_supervisor_node(llm: BaseChatModel) -> str:
         goto = (
             "FINISH"
             if not any(
-                kw in response.content.lower() for kw in ["search", "paper", "find"]
+                kw in state["messages"][-1].content.lower()
+                for kw in ["search", "paper", "find"]
             )
             else "s2_agent"
         )
@@ -46,14 +47,16 @@ def make_supervisor_node(llm: BaseChatModel) -> str:
                     "messages": state["messages"]
                     + [AIMessage(content=response.content)],
                     "is_last_step": True,
+                    "current_agent": None,
                 },
             )
 
         return Command(
             goto="s2_agent",
             update={
-                "messages": state["messages"] + [AIMessage(content=response.content)],
+                "messages": state["messages"],
                 "is_last_step": False,
+                "current_agent": "s2_agent",
             },
         )
 
@@ -67,12 +70,14 @@ def call_s2_agent(state: Talk2Papers) -> Command[Literal["__end__"]]:
         response = s2_agent.invoke(state)
         logger.info("S2 agent completed")
 
+        # Preserve the current_agent in final state
         return Command(
             goto=END,
             update={
                 "messages": response["messages"],
                 "papers": response.get("papers", []),
                 "is_last_step": True,
+                "current_agent": "s2_agent",  # Maintain agent attribution
             },
         )
     except Exception as e:
@@ -82,6 +87,7 @@ def call_s2_agent(state: Talk2Papers) -> Command[Literal["__end__"]]:
             update={
                 "messages": state["messages"] + [AIMessage(content=f"Error: {str(e)}")],
                 "is_last_step": True,
+                "current_agent": "s2_agent",  # Maintain agent attribution even on error
             },
         )
 
