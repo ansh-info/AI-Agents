@@ -25,7 +25,7 @@ class SemanticScholarAgent:
             logger.info("Initializing S2 Agent...")
             self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-            # Create agent with tools and system prompt from config
+            # Create the tools agent using config prompt
             self.tools_agent = create_react_agent(
                 self.llm,
                 tools=s2_tools,
@@ -33,34 +33,9 @@ class SemanticScholarAgent:
                 state_modifier=config.S2_AGENT_PROMPT,
             )
 
-            def s2_supervisor_node(
-                state: Talk2Papers,
-            ) -> Command[Literal["tools_executor", "__end__"]]:
-                """Internal supervisor for S2 agent"""
-                logger.info("S2 supervisor node called")
-
-                # Get decision from LLM
-                try:
-                    result = self.tools_agent.invoke(state)
-                    if result.get("is_last_step", False):
-                        return Command(
-                            goto=END,
-                            update={
-                                "messages": result.get("messages", []),
-                                "papers": result.get("papers", []),
-                            },
-                        )
-                    return Command(goto="tools_executor", update=state)
-                except Exception as e:
-                    logger.error(f"Error in s2 supervisor: {str(e)}")
-                    return Command(
-                        goto=END,
-                        update={"messages": [AIMessage(content=f"Error: {str(e)}")]},
-                    )
-
-            def tools_executor_node(state: Talk2Papers) -> Command[Literal["__end__"]]:
-                """Execute tools based on request"""
-                logger.info("Tools executor node called")
+            def execute_tools(state: Talk2Papers) -> Command[Literal["__end__"]]:
+                """Execute tools and return results"""
+                logger.info("Executing tools")
                 try:
                     result = self.tools_agent.invoke(state)
                     logger.info("Tool execution completed")
@@ -68,29 +43,27 @@ class SemanticScholarAgent:
                     return Command(
                         goto=END,
                         update={
-                            "messages": result.get(
-                                "messages", state.get("messages", [])
-                            ),
+                            "messages": result["messages"],
                             "papers": result.get("papers", []),
+                            "is_last_step": True,
                         },
                     )
                 except Exception as e:
-                    logger.error(f"Error in tools executor: {str(e)}")
+                    logger.error(f"Error executing tools: {str(e)}")
                     return Command(
                         goto=END,
-                        update={"messages": [AIMessage(content=f"Error: {str(e)}")]},
+                        update={
+                            "messages": [AIMessage(content=f"Error: {str(e)}")],
+                            "is_last_step": True,
+                        },
                     )
 
             # Create graph
             workflow = StateGraph(Talk2Papers)
-            workflow.add_node("supervisor", s2_supervisor_node)
-            workflow.add_node("tools_executor", tools_executor_node)
-
-            workflow.add_edge(START, "supervisor")
-            workflow.add_edge("tools_executor", END)
+            workflow.add_node("tools", execute_tools)
+            workflow.add_edge(START, "tools")
 
             self.graph = workflow.compile()
-
             logger.info("S2 Agent initialized successfully")
 
         except Exception as e:
