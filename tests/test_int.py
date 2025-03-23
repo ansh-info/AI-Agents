@@ -118,12 +118,18 @@ def test_multi_paper_rec():
 
 def test_error_handling():
     """Test error handling in tools"""
-    with pytest.raises(ValueError):
-        get_single_paper_recommendations.func(
-            paper_id="invalid_id", tool_call_id="test_123", limit=2
-        )
+    # Test invalid paper ID format
+    with pytest.raises(ValueError) as exc_info:
+        with patch("requests.get") as mock_get:
+            mock_get.return_value.status_code = 404
+            get_single_paper_recommendations.func(
+                paper_id="invalid_id", tool_call_id="test_123", limit=2
+            )
+    assert "40-character hexadecimal" in str(exc_info.value)
 
-    with pytest.raises(ValueError):
+    # Test empty paper IDs list
+    with pytest.raises(ValueError) as exc_info:
         get_multi_paper_recommendations.func(
             paper_ids=[], tool_call_id="test_123", limit=2
         )
+    assert "At least one paper ID must be provided" in str(exc_info.value)
