@@ -18,32 +18,38 @@ class MultiPaperRecInput(BaseModel):
         description="List of Semantic Scholar Paper IDs to get recommendations for"
     )
     limit: int = Field(
-        default=100,
+        default=2,
         description="Maximum total number of recommendations to return",
         ge=1,
         le=500,
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
-    @field_validator("paper_ids")
+    @validator("paper_ids")
     def validate_paper_ids(cls, v: List[str]) -> List[str]:
+        """Validate paper IDs format"""
         if not v:
             raise ValueError("At least one paper ID must be provided")
         if len(v) > 10:
             raise ValueError("Maximum of 10 paper IDs allowed")
-        for paper_id in v:
-            if not re.match(r"^[a-f0-9]{40}$", paper_id):
-                raise ValueError(f"Invalid paper ID format: {paper_id}")
         return v
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 @tool(args_schema=MultiPaperRecInput)
 def get_multi_paper_recommendations(
     paper_ids: List[str],
     tool_call_id: Annotated[str, InjectedToolCallId],
-    limit: int = 100,
+    limit: int = 2,
 ) -> Dict[str, Any]:
     """Get paper recommendations based on multiple papers."""
+    # Validate inputs
+    if not paper_ids:
+        raise ValueError("At least one paper ID must be provided")
+    if len(paper_ids) > 10:
+        raise ValueError("Maximum of 10 paper IDs allowed")
+
     print("Starting multi-paper recommendations search...")
 
     endpoint = "https://api.semanticscholar.org/recommendations/v1/papers"

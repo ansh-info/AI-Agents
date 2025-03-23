@@ -15,7 +15,7 @@ class SinglePaperRecInput(BaseModel):
     """Input schema for single paper recommendation tool."""
 
     paper_id: str = Field(
-        description="Semantic Scholar Paper ID to get recommendations for (40-character string)"
+        description="Semantic Scholar Paper ID to get recommendations for"
     )
     limit: int = Field(
         default=2,
@@ -25,11 +25,14 @@ class SinglePaperRecInput(BaseModel):
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
-    @field_validator("paper_id")
+    @validator("paper_id")
     def validate_paper_id(cls, v: str) -> str:
+        """Validate paper ID format"""
         if not re.match(r"^[a-f0-9]{40}$", v):
             raise ValueError("Paper ID must be a 40-character hexadecimal string")
         return v
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 @tool(args_schema=SinglePaperRecInput)
@@ -39,6 +42,10 @@ def get_single_paper_recommendations(
     limit: int = 2,
 ) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper."""
+    # Validate paper ID format first
+    if not re.match(r"^[a-f0-9]{40}$", paper_id):
+        raise ValueError("Paper ID must be a 40-character hexadecimal string")
+
     print("Starting single paper recommendations search...")
 
     endpoint = (
