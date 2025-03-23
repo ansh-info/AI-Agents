@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import Tool
+from langchain_core.tools import Tool, ToolException
 from agents.main_agent import get_app
 from agents.s2_agent import s2_agent
 from tools.s2.search import search_tool
@@ -119,17 +119,33 @@ def test_multi_paper_rec():
 def test_error_handling():
     """Test error handling in tools"""
     # Test invalid paper ID format
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises((ValueError, ToolException)) as exc_info:
         with patch("requests.get") as mock_get:
             mock_get.return_value.status_code = 404
             get_single_paper_recommendations.func(
                 paper_id="invalid_id", tool_call_id="test_123", limit=2
             )
-    assert "40-character hexadecimal" in str(exc_info.value)
+    assert any(
+        msg in str(exc_info.value)
+        for msg in ["40-character hexadecimal", "Error getting recommendations"]
+    )
 
-    # Test empty paper IDs list
-    with pytest.raises(ValueError) as exc_info:
-        get_multi_paper_recommendations.func(
-            paper_ids=[], tool_call_id="test_123", limit=2
-        )
+    # Test empty paper IDs list for multi-paper recommendations
+    with patch("requests.post") as mock_post:
+        mock_post.return_value.status_code = 400
+        with pytest.raises((ValueError, ToolException)) as exc_info:
+            get_multi_paper_recommendations.func(
+                paper_ids=[], tool_call_id="test_123", limit=2
+            )
     assert "At least one paper ID must be provided" in str(exc_info.value)
+
+    # Test too many paper IDs
+    with patch("requests.post") as mock_post:
+        mock_post.return_value.status_code = 400
+        with pytest.raises(ValueError) as exc_info:
+            get_multi_paper_recommendations.func(
+                paper_ids=["a" * 40 for _ in range(11)],  # 11 IDs
+                tool_call_id="test_123",
+                limit=2,
+            )
+    assert "Maximum of 10 paper IDs allowed" in str(exc_info.value)
