@@ -21,7 +21,6 @@ load_dotenv()
 
 def make_supervisor_node(llm: BaseChatModel) -> str:
     """Creates a supervisor node following LangGraph patterns."""
-    options = ["FINISH", "s2_agent"]
 
     def supervisor_node(state: Talk2Papers) -> Command[Literal["s2_agent", "__end__"]]:
         """Supervisor node that routes to appropriate sub-agents"""
@@ -70,24 +69,23 @@ def call_s2_agent(state: Talk2Papers) -> Command[Literal["__end__"]]:
         response = s2_agent.invoke(state)
         logger.info("S2 agent completed")
 
-        # Preserve the current_agent in final state
         return Command(
             goto=END,
             update={
                 "messages": response["messages"],
                 "papers": response.get("papers", []),
                 "is_last_step": True,
-                "current_agent": "s2_agent",  # Maintain agent attribution
+                "current_agent": "s2_agent",
             },
         )
-    except Exception as e:
-        logger.error(f"Error in S2 agent: {str(e)}")
+    except (ValueError, KeyError, TypeError) as e:
+        logger.error("Error in S2 agent: %s", str(e))
         return Command(
             goto=END,
             update={
                 "messages": state["messages"] + [AIMessage(content=f"Error: {str(e)}")],
                 "is_last_step": True,
-                "current_agent": "s2_agent",  # Maintain agent attribution even on error
+                "current_agent": "s2_agent",
             },
         )
 
