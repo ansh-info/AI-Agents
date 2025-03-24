@@ -1,1 +1,91 @@
+name: TESTS Talk2Papers
 
+on:
+  pull_request_target:
+    branches: [main]
+    paths:
+      - "talk2papers/**" # Adjust this to your project's path
+  workflow_dispatch:
+
+env:
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+jobs:
+  pylint-windows-ubuntu-macos:
+    name: pylint-windows-ubuntu-macos
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-13]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+      - name: Install requirements
+        run: |
+          pip3 install --break-system-packages -r requirements.txt
+      - name: Run pylint
+        run: |
+          pylint --disable=R0801,R0902,W0221,W0122 agents/ tools/
+
+  code-cov-ubuntu-macos:
+    name: code-coverage-ubuntu-macos
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-13]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+      - name: Install dependencies
+        run: pip3 install -r requirements.txt
+      - name: Run tests with coverage
+        run: coverage run --include=agents/*,tools/* -m pytest --cache-clear tests/
+      - name: Check coverage
+        run: |
+          coverage report -m
+          TOTAL_COVERAGE=$(coverage report -m | awk 'END {print int($NF)}')
+          if [[ $TOTAL_COVERAGE -ne 100 ]]; then
+            echo "Code coverage is not 100%. Please check the coverage report."
+            exit 1
+          fi
+        env:
+          COVERAGE_FILE: "./.coverage"
+
+  code-cov-windows:
+    name: code-coverage-windows
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+      - name: Install dependencies
+        run: pip3 install -r requirements.txt
+      - name: Run tests with coverage
+        run: coverage run --include=agents/*,tools/* -m pytest --cache-clear tests/
+      - name: Check coverage
+        run: |
+          coverage report -m
+          $TOTAL_COVERAGE=(& coverage report -m | Select-Object -Last 1)
+          $TOTAL_COVERAGE=($TOTAL_COVERAGE -split " ")[-1]
+          $TOTAL_COVERAGE=($TOTAL_COVERAGE -replace "[^\d]")
+          $TOTAL_COVERAGE=[int]$TOTAL_COVERAGE
+          echo "Total coverage: $TOTAL_COVERAGE"
+          if ($TOTAL_COVERAGE -ne 100) {
+            Write-Host "Code coverage is not 100%. Please check the coverage report."
+            exit 1
+          }
+        env:
+          COVERAGE_FILE: "./.coverage"
