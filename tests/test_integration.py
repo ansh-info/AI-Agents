@@ -71,12 +71,16 @@ class TestMainAgentRouting:
 class TestS2Tools:
     """Test individual S2 tools"""
 
-    def test_display_results(self, base_state):
-        """Test display_results tool shows papers from state"""
-        state = base_state.copy()
-        state["papers"] = MOCK_PAPER
-        result = display_results.invoke(state=state)
-        assert result == MOCK_PAPER
+    def test_display_results():
+        """Test display results tool"""
+        state = {"papers": ["Paper 1", "Paper 2"], "messages": []}
+        result = display_results(state)
+        assert result == state["papers"]
+
+        # Test with empty state
+        empty_state = {"papers": []}
+        result = display_results(empty_state)
+        assert result == []
 
     @patch("requests.get")
     def test_search_tool(self, mock_get):
@@ -181,3 +185,56 @@ def test_replace_dict():
     new = {"key3": "value3"}
     result = replace_dict(existing, new)
     assert result == new
+
+
+def test_multi_paper_rec_edge_cases():
+    """Test multi paper recommendations edge cases"""
+    paper_ids = [
+        "1234567890123456789012345678901234567890",
+        "0987654321098765432109876543210987654321",
+    ]
+    tool_call_id = "test_123"
+
+    # Test 404 response
+    with patch("requests.post") as mock_post:
+        mock_post.return_value.status_code = 404
+        response = get_multi_paper_recommendations.func(
+            paper_ids=paper_ids, tool_call_id=tool_call_id
+        )
+        assert "paper IDs not found" in response.update["messages"][0].content
+
+    # Test empty recommendations
+    with patch("requests.post") as mock_post:
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"recommendedPapers": []}
+        response = get_multi_paper_recommendations.func(
+            paper_ids=paper_ids, tool_call_id=tool_call_id
+        )
+        assert "No recommendations found" in response.update["messages"][0].content
+
+
+def test_search_edge_cases():
+    """Test search tool edge cases"""
+    # Test no results
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"data": []}
+        response = search_tool.func(query="nonexistent topic", tool_call_id="test_123")
+        assert "No papers found" in response["messages"][0].content
+
+    # Test retry logic
+    with patch("requests.get") as mock_get:
+        mock_get.side_effect = [
+            type("obj", (object,), {"status_code": 429}),
+            type("obj", (object,), {"status_code": 429}),
+            type(
+                "obj",
+                (object,),
+                {
+                    "status_code": 200,
+                    "json": lambda: {"data": [{"paperId": "123", "title": "Test"}]},
+                },
+            ),
+        ]
+        response = search_tool.func(query="retry test", tool_call_id="test_123")
+        assert len(response["papers"]) > 0

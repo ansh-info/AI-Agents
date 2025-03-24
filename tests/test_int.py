@@ -149,3 +149,44 @@ def test_error_handling():
                 limit=2,
             )
     assert "Maximum of 10 paper IDs allowed" in str(exc_info.value)
+
+
+def test_main_agent_error_handling():
+    """Test main agent error handling"""
+    unique_id = "test_error"
+    app = get_app(unique_id)
+
+    # Test error in s2_agent
+    with patch("agents.s2_agent.s2_agent.invoke", side_effect=Exception("Test error")):
+        response = app.invoke(
+            {
+                "messages": [HumanMessage(content="Find papers about AI")],
+                "papers": [],
+                "is_last_step": False,
+                "current_agent": None,
+            },
+            config={"configurable": {"thread_id": unique_id}},
+        )
+        assert "Error:" in response["messages"][-1].content
+
+
+def test_s2_agent_error_handling():
+    """Test S2 agent error handling"""
+    # Test initialization error
+    with patch("langchain_openai.ChatOpenAI", side_effect=Exception("Init error")):
+        with pytest.raises(Exception) as exc_info:
+            SemanticScholarAgent()
+        assert "Init error" in str(exc_info.value)
+
+    # Test tool execution error
+    state = {
+        "messages": [HumanMessage(content="Find papers")],
+        "papers": [],
+        "is_last_step": False,
+    }
+
+    with patch(
+        "langgraph.prebuilt.create_react_agent", side_effect=Exception("Tool error")
+    ):
+        response = s2_agent.invoke(state)
+        assert "Error:" in response["messages"][0].content
