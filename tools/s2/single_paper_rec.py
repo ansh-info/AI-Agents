@@ -42,87 +42,50 @@ def get_single_paper_recommendations(
     limit: int = 2,
 ) -> Dict[str, Any]:
     """Get paper recommendations based on a single paper."""
-    # Validate paper ID format first
-    if not re.match(r"^[a-f0-9]{40}$", paper_id):
-        raise ValueError("Paper ID must be a 40-character hexadecimal string")
-
-    print("Starting single paper recommendations search...")
+    logger.info("Starting single paper recommendations search.")
 
     endpoint = (
         f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}"
     )
     params = {
-        "limit": min(limit, 500),  # Max 500 per API docs
-        "fields": "title,paperId,abstract,year",
-        "from": "all-cs",  # Using all-cs pool as specified in docs
+        "limit": min(limit, 500),
+        "fields": "title,paperId,abstract,year,url,publicationTypes,openAccessPdf",
     }
 
-    max_retries = 3
-    retry_count = 0
-    retry_delay = 2
+    response = requests.get(endpoint, params=params, timeout=10)
+    data = response.json()
+    recommendations = data.get("recommendedPapers", [])
 
-    while retry_count < max_retries:
-        print(f"Attempt {retry_count + 1} of {max_retries}")
-        response = requests.get(endpoint, params=params)
-        print(f"API Response Status: {response.status_code}")
-        print(f"Request params: {params}")
+    def get_nested_value(obj, key1, key2, default="N/A"):
+        first_level = obj.get(key1)
+        if first_level is not None:
+            return first_level.get(key2, default)
+        return default
 
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Raw API Response: {data}")
-            recommendations = data.get("recommendedPapers", [])
+    filtered_papers = {
+        paper["paperId"]: {
+            "Title": paper.get("title", "N/A"),
+            "Abstract": paper.get("abstract", "N/A"),
+            "Year": paper.get("year", "N/A"),
+            "URL": paper.get("url", "N/A"),
+            "Publication Type": (
+                paper.get("publicationTypes", ["N/A"])[0]
+                if paper.get("publicationTypes")
+                else "N/A"
+            ),
+            "Open Access PDF": get_nested_value(paper, "openAccessPdf", "url"),
+        }
+        for paper in recommendations
+        if paper.get("title")
+    }
 
-            if recommendations:
-                filtered_papers = [
-                    {"Paper ID": paper["paperId"], "Title": paper["title"]}
-                    for paper in recommendations
-                    if paper.get("title") and paper.get("paperId")
-                ]
+    markdown_table = pd.DataFrame(filtered_papers.values()).to_markdown(tablefmt="grid")
 
-                if filtered_papers:
-                    df = pd.DataFrame(filtered_papers)
-
-                    papers = [
-                        f"Paper ID: {paper['Paper ID']}\nTitle: {paper['Title']}"
-                        for paper in filtered_papers
-                    ]
-
-                    markdown_table = df.to_markdown(tablefmt="grid")
-
-            # Inside get_single_paper_recommendations
-            if not recommendations:
-                return Command(
-                    update={
-                        "papers": [
-                            "No recommendations found for this paper."
-                        ],  # Informative message
-                        "messages": [
-                            ToolMessage(
-                                content="No recommendations found for this paper",
-                                tool_call_id=tool_call_id,
-                            )
-                        ],
-                    }
-                )
-
-            return Command(
-                update={
-                    "papers": [],
-                    "messages": [
-                        ToolMessage(
-                            content="No recommendations found for this paper",
-                            tool_call_id=tool_call_id,
-                        )
-                    ],
-                }
-            )
-
-        retry_count += 1
-        if retry_count < max_retries:
-            wait_time = retry_delay * (2**retry_count)
-            print(f"Retrying in {wait_time} seconds...")
-            time.sleep(wait_time)
-
-    raise ToolException(
-        f"Error getting recommendations after {max_retries} attempts. Status code: {response.status_code}"
+    return Command(
+        update={
+            "papers": filtered_papers,
+            "messages": [
+                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
+            ],
+        }
     )
