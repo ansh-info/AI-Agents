@@ -94,10 +94,34 @@ def search_tool(
     data = response.json()
     papers = data.get("data", [])
 
-    filtered_papers = [
-        {"Paper ID": paper["paperId"], "Title": paper["title"]}
+    filtered_papers = {
+        paper["paperId"]: {
+            "Title": paper.get("title", "N/A"),
+            "Abstract": paper.get("abstract", "N/A"),
+            "Year": paper.get("year", "N/A"),
+            "Citation Count": paper.get("citationCount", "N/A"),
+            "URL": paper.get("url", "N/A"),
+            "Publication Type": (
+                paper.get("publicationTypes", ["N/A"])[0]
+                if paper.get("publicationTypes")
+                else "N/A"
+            ),
+            "Open Access PDF": paper.get("openAccessPdf", {}).get("url", "N/A"),
+        }
         for paper in papers
         if paper.get("title") and paper.get("authors")
+    }
+
+    papers = [
+        f"Paper ID: {paper_id}\n"
+        f"Title: {paper_data['Title']}\n"
+        f"Abstract: {paper_data['Abstract']}\n"
+        f"Year: {paper_data['Year']}\n"
+        f"Citations: {paper_data['Citation Count']}\n"
+        f"URL: {paper_data['URL']}\n"
+        f"Publication Type: {paper_data['Publication Type']}\n"
+        f"Open Access PDF: {paper_data['Open Access PDF']}"
+        for paper_id, paper_data in filtered_papers.items()
     ]
 
     if not filtered_papers:
@@ -130,7 +154,7 @@ def search_tool(
 
     return Command(
         update={
-            "papers": papers,
+            "papers": filtered_papers,  # Now sending the dictionary directly
             "messages": [
                 ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
             ],
