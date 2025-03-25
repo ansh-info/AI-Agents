@@ -1,5 +1,5 @@
 import time
-from typing import Annotated, Any, Dict
+from typing import Annotated, Any, Dict, Optional
 
 import pandas as pd
 import requests
@@ -7,6 +7,8 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.tools.base import InjectedToolCallId
 from pydantic import BaseModel, Field
+from langgraph.types import Command
+from langchain_core.messages import ToolMessage
 
 from config.config import config
 
@@ -15,10 +17,15 @@ class SearchInput(BaseModel):
     """Input schema for the search papers tool."""
 
     query: str = Field(
-        description="Search query string to find academic papers. Be specific and include relevant academic terms."
+        description="Search query string to find academic papers."
+        "Be specific and include relevant academic terms."
     )
     limit: int = Field(
         default=2, description="Maximum number of results to return", ge=1, le=100
+    )
+    year: Optional[str] = Field(
+        default=None,
+        description="Year range in format: YYYY for specific year, YYYY- for papers after year, -YYYY for papers before year, or YYYY:YYYY for range",
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -28,15 +35,33 @@ def search_tool(
     query: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
     limit: int = 2,
+    year: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search for academic papers on Semantic Scholar."""
+    """
+    Search for academic papers on Semantic Scholar.
+
+    Args:
+        query (str): The search query string to find academic papers.
+        tool_call_id (Annotated[str, InjectedToolCallId]): The tool call ID.
+        limit (int, optional): The maximum number of results to return. Defaults to 2.
+        year (str, optional): Year range for papers. Supports formats like "2024-", "-2024", "2024:2025". Defaults to None.
+
+    Returns:
+        Dict[str, Any]: The search results and related information.
+    """
     print("Starting paper search...")
-    endpoint = f"{config.SEMANTIC_SCHOLAR_API}/paper/search"
+    endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
     params = {
         "query": query,
         "limit": min(limit, 100),
-        "fields": "paperId,title,abstract,year,authors,citationCount,openAccessPdf",
+        "fields": "paperId,title,abstract,year,authors,citationCount,url,publicationTypes,openAccessPdf",
     }
+
+    # Add year parameter if provided
+    if year:
+        params["year"] = year
+
+    response = requests.get(endpoint, params=params, timeout=10)
 
     max_retries = 3
     retry_count = 0
@@ -103,17 +128,11 @@ def search_tool(
     markdown_table = df.to_markdown(tablefmt="grid")
     print("Search tool execution completed")
 
-    return {
-        "papers": papers,
-        "messages": [AIMessage(content=markdown_table)],
-        "tool_calls": [
-            {
-                "id": tool_call_id,
-                "type": "function",
-                "function": {
-                    "name": "search_tool",
-                    "arguments": {"query": query, "limit": limit},
-                },
-            }
-        ],
-    }
+    return Command(
+        update={
+            "papers": papers,
+            "messages": [
+                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
+            ],
+        }
+    )
