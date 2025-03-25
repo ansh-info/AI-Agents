@@ -106,7 +106,11 @@ def search_tool(
                 if paper.get("publicationTypes")
                 else "N/A"
             ),
-            "Open Access PDF": paper.get("openAccessPdf", {}).get("url", "N/A"),
+            "Open Access PDF": (
+                paper.get("openAccessPdf", {}).get("url", "N/A")
+                if paper.get("openAccessPdf") is not None
+                else "N/A"
+            ),
         }
         for paper in papers
         if paper.get("title") and paper.get("authors")
