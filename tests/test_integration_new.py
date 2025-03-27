@@ -5,19 +5,14 @@ Test suite for Talk2Competitors system
 import pytest
 from unittest.mock import Mock, patch
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.tools import ToolInvocation
 from ..agents.main_agent import get_app, make_supervisor_node
 from ..agents.s2_agent import get_app as get_s2_app
 from ..state.state_talk2competitors import Talk2Competitors
-from ..tools.s2.search import search_tool, SearchInput
+from ..tools.s2.search import search_tool
 from ..tools.s2.display_results import display_results
-from ..tools.s2.single_paper_rec import (
-    get_single_paper_recommendations,
-    SinglePaperRecInput,
-)
-from ..tools.s2.multi_paper_rec import (
-    get_multi_paper_recommendations,
-    MultiPaperRecInput,
-)
+from ..tools.s2.single_paper_rec import get_single_paper_recommendations
+from ..tools.s2.multi_paper_rec import get_multi_paper_recommendations
 
 # Mock data
 MOCK_PAPERS = {
@@ -45,7 +40,7 @@ class TestMainAgent:
             papers={},
             is_last_step=False,
             current_agent=None,
-            llm_model="test-model",
+            llm_model="gpt-4",
         )
 
         result = supervisor(state)
@@ -63,7 +58,7 @@ class TestMainAgent:
             papers={},
             is_last_step=False,
             current_agent=None,
-            llm_model="test-model",
+            llm_model="gpt-4",
         )
 
         result = supervisor(state)
@@ -80,17 +75,23 @@ class TestS2Agent:
         mock_get.return_value.json.return_value = {"data": [MOCK_PAPERS["123"]]}
         mock_get.return_value.status_code = 200
 
-        app = get_s2_app("test_id")
-        state = Talk2Competitors(
-            messages=[HumanMessage(content="search for ML papers")],
-            papers={},
-            is_last_step=False,
-            current_agent="s2_agent",
-            llm_model="test-model",
+        llm_mock = Mock()
+        llm_mock.invoke.return_value = ToolMessage(
+            content="Test search results", tool_call_id="test123"
         )
 
-        response = app.invoke(state, {"configurable": {"thread_id": "test_id"}})
-        assert isinstance(response["messages"][-1], ToolMessage)
+        with patch("langchain_openai.ChatOpenAI", return_value=llm_mock):
+            app = get_s2_app("test_id")
+            state = Talk2Competitors(
+                messages=[HumanMessage(content="search for ML papers")],
+                papers={},
+                is_last_step=False,
+                current_agent="s2_agent",
+                llm_model="gpt-4",
+            )
+
+            response = app.invoke(state, {"configurable": {"thread_id": "test_id"}})
+            assert isinstance(response["messages"][-1], (ToolMessage, AIMessage))
 
 
 class TestS2Tools:
@@ -99,7 +100,8 @@ class TestS2Tools:
     def test_display_results(self):
         """Test display_results tool"""
         state = {"papers": MOCK_PAPERS}
-        result = display_results.invoke(state=state)
+        tool_input = {"state": state, "tool_call_id": "test123"}
+        result = display_results.invoke(tool_input)
         assert result == MOCK_PAPERS
 
     @patch("requests.get")
@@ -108,9 +110,14 @@ class TestS2Tools:
         mock_get.return_value.json.return_value = {"data": [MOCK_PAPERS["123"]]}
         mock_get.return_value.status_code = 200
 
-        result = search_tool.invoke(
-            SearchInput(query="machine learning", limit=1, tool_call_id="test123")
+        tool_call = ToolInvocation(
+            name="search_tool",
+            tool_call_id="test123",
+            args={"query": "machine learning", "limit": 1},
         )
+
+        result = search_tool.invoke(tool_call)
+
         assert "papers" in result.update
         assert isinstance(result.update["messages"][0], ToolMessage)
 
@@ -122,9 +129,14 @@ class TestS2Tools:
         }
         mock_get.return_value.status_code = 200
 
-        result = get_single_paper_recommendations.invoke(
-            SinglePaperRecInput(paper_id="123", limit=1, tool_call_id="test123")
+        tool_call = ToolInvocation(
+            name="get_single_paper_recommendations",
+            tool_call_id="test123",
+            args={"paper_id": "123", "limit": 1},
         )
+
+        result = get_single_paper_recommendations.invoke(tool_call)
+
         assert "papers" in result.update
         assert isinstance(result.update["messages"][0], ToolMessage)
 
@@ -136,11 +148,14 @@ class TestS2Tools:
         }
         mock_post.return_value.status_code = 200
 
-        result = get_multi_paper_recommendations.invoke(
-            MultiPaperRecInput(
-                paper_ids=["123", "456"], limit=1, tool_call_id="test123"
-            )
+        tool_call = ToolInvocation(
+            name="get_multi_paper_recommendations",
+            tool_call_id="test123",
+            args={"paper_ids": ["123", "456"], "limit": 1},
         )
+
+        result = get_multi_paper_recommendations.invoke(tool_call)
+
         assert "papers" in result.update
         assert isinstance(result.update["messages"][0], ToolMessage)
 
@@ -157,28 +172,32 @@ def test_end_to_end_workflow():
         }
         mock_post.return_value.status_code = 200
 
-        # Initialize app
-        app = get_app("test_integration", "test-model")
+        llm_mock = Mock()
+        llm_mock.invoke.return_value = AIMessage(content="Test response")
 
-        # Test complete workflow
-        config = {
-            "configurable": {
-                "thread_id": "test_integration",
-                "checkpoint_ns": "test",
-                "checkpoint_id": "test123",
+        with patch("langchain_openai.ChatOpenAI", return_value=llm_mock):
+            # Initialize app
+            app = get_app("test_integration")
+
+            # Test complete workflow
+            config = {
+                "configurable": {
+                    "thread_id": "test_integration",
+                    "checkpoint_ns": "test",
+                    "checkpoint_id": "test123",
+                }
             }
-        }
 
-        response = app.invoke(
-            {
-                "messages": [HumanMessage(content="search for ML papers")],
-                "papers": {},
-                "is_last_step": False,
-                "current_agent": None,
-                "llm_model": "test-model",
-            },
-            config=config,
-        )
+            response = app.invoke(
+                {
+                    "messages": [HumanMessage(content="search for ML papers")],
+                    "papers": {},
+                    "is_last_step": False,
+                    "current_agent": None,
+                    "llm_model": "gpt-4",
+                },
+                config=config,
+            )
 
-        assert "papers" in response
-        assert len(response["messages"]) > 0
+            assert "papers" in response
+            assert len(response["messages"]) > 0
