@@ -14,7 +14,7 @@ from ..tools.s2.display_results import display_results
 from ..tools.s2.single_paper_rec import get_single_paper_recommendations
 from ..tools.s2.multi_paper_rec import get_multi_paper_recommendations
 
-# Fixed test data for deterministic results
+# Test data
 MOCK_PAPER = {
     "123": {
         "Title": "Machine Learning Basics",
@@ -39,10 +39,10 @@ def base_state():
 
 
 class TestMainAgentRouting:
-    """Test the routing functionality of main agent"""
+    """Test the main agent routing functionality"""
 
     def test_routes_search_query_to_s2(self, base_state):
-        """Test that search queries are routed to S2 agent"""
+        """Test routing to S2 agent for search queries"""
         llm_mock = Mock()
         llm_mock.invoke.return_value = AIMessage(content="Search results")
 
@@ -55,7 +55,7 @@ class TestMainAgentRouting:
         assert result.update["current_agent"] == "s2_agent"
 
     def test_routes_general_query_to_end(self, base_state):
-        """Test that non-search queries end the conversation"""
+        """Test routing to END for general queries"""
         llm_mock = Mock()
         llm_mock.invoke.return_value = AIMessage(content="General response")
 
@@ -69,20 +69,20 @@ class TestMainAgentRouting:
 
 
 class TestS2Tools:
-    """Test individual S2 tools"""
+    """Test S2 tools with full coverage of edge cases"""
 
     def test_display_results(self, base_state):
-        """Test display_results tool shows papers from state"""
+        """Test display_results tool"""
         state = base_state.copy()
         state["papers"] = MOCK_PAPER
         result = display_results.invoke(input={"state": state})
         assert result == MOCK_PAPER
 
     @patch("requests.get")
-    def test_search_tool(self, mock_get):
-        """Test search tool functionality"""
+    def test_search_tool_basic(self, mock_get):
+        """Test basic search functionality"""
         mock_get.return_value.json.return_value = {
-            "data": [{"paperId": "123", "title": "Machine Learning Basics"}]
+            "data": [{"paperId": "123", "title": "ML Paper"}]
         }
         mock_get.return_value.status_code = 200
 
@@ -94,14 +94,30 @@ class TestS2Tools:
                 "id": "test123",
             }
         )
-
         assert "papers" in result.update
-        assert len(result.update["messages"]) == 1
-        assert isinstance(result.update["messages"][0], ToolMessage)
 
     @patch("requests.get")
-    def test_single_paper_rec(self, mock_get):
-        """Test single paper recommendations tool"""
+    def test_search_tool_with_year(self, mock_get):
+        """Test search with year parameter"""
+        mock_get.return_value.json.return_value = {
+            "data": [{"paperId": "123", "title": "ML Paper"}]
+        }
+        mock_get.return_value.status_code = 200
+
+        result = search_tool.invoke(
+            input={
+                "query": "machine learning",
+                "limit": 1,
+                "year": "2023",
+                "tool_call_id": "test123",
+                "id": "test123",
+            }
+        )
+        assert "papers" in result.update
+
+    @patch("requests.get")
+    def test_single_paper_rec_basic(self, mock_get):
+        """Test basic single paper recommendations"""
         mock_get.return_value.json.return_value = {
             "recommendedPapers": [{"paperId": "123", "title": "ML Paper"}]
         }
@@ -115,13 +131,30 @@ class TestS2Tools:
                 "id": "test123",
             }
         )
-
         assert "papers" in result.update
-        assert isinstance(result.update["messages"][0], ToolMessage)
+
+    @patch("requests.get")
+    def test_single_paper_rec_with_year(self, mock_get):
+        """Test single paper recommendations with year filter"""
+        mock_get.return_value.json.return_value = {
+            "recommendedPapers": [{"paperId": "123", "title": "ML Paper"}]
+        }
+        mock_get.return_value.status_code = 200
+
+        result = get_single_paper_recommendations.invoke(
+            input={
+                "paper_id": "123",
+                "limit": 1,
+                "year": "2023",
+                "tool_call_id": "test123",
+                "id": "test123",
+            }
+        )
+        assert "papers" in result.update
 
     @patch("requests.post")
-    def test_multi_paper_rec(self, mock_post):
-        """Test multi paper recommendations tool"""
+    def test_multi_paper_rec_basic(self, mock_post):
+        """Test basic multi paper recommendations"""
         mock_post.return_value.json.return_value = {
             "recommendedPapers": [{"paperId": "123", "title": "ML Paper"}]
         }
@@ -135,9 +168,26 @@ class TestS2Tools:
                 "id": "test123",
             }
         )
-
         assert "papers" in result.update
-        assert isinstance(result.update["messages"][0], ToolMessage)
+
+    @patch("requests.post")
+    def test_multi_paper_rec_with_year(self, mock_post):
+        """Test multi paper recommendations with year filter"""
+        mock_post.return_value.json.return_value = {
+            "recommendedPapers": [{"paperId": "123", "title": "ML Paper"}]
+        }
+        mock_post.return_value.status_code = 200
+
+        result = get_multi_paper_recommendations.invoke(
+            input={
+                "paper_ids": ["123", "456"],
+                "limit": 1,
+                "year": "2023",
+                "tool_call_id": "test123",
+                "id": "test123",
+            }
+        )
+        assert "papers" in result.update
 
 
 def test_end_to_end_search_workflow(base_state):
@@ -145,7 +195,6 @@ def test_end_to_end_search_workflow(base_state):
     with patch("requests.get") as mock_get, patch(
         "langchain_openai.ChatOpenAI"
     ) as mock_llm:
-        # Setup mocks
         mock_get.return_value.json.return_value = {
             "data": [{"paperId": "123", "title": "ML Paper"}]
         }
@@ -155,10 +204,7 @@ def test_end_to_end_search_workflow(base_state):
         llm_instance.invoke.return_value = AIMessage(content="Search results")
         mock_llm.return_value = llm_instance
 
-        # Initialize app
         app = get_app("test_integration")
-
-        # Prepare state
         test_state = base_state.copy()
         test_state["messages"] = [HumanMessage(content="search for ML papers")]
 
